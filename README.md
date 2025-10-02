@@ -2,7 +2,7 @@
 
 ## Dependencies
 
--   A C++17 compliant compiler (e.g., g++ >= 7)
+-   A C++20 compliant compiler
 -   zlib (development libraries)
 
 On Debian/Ubuntu, you can install the dependencies with:
