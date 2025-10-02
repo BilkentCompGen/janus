@@ -1,0 +1,185 @@
+#include <iostream>
+#include <fstream>
+#include <stdexcept>
+#include <chrono>
+#include <algorithm>
+#include <cctype>
+
+#include "utils.h"
+#include "zstr.hpp"
+
+using namespace std;
+
+//////////////////////////////////////////////////////////// Logger ////////////////////////////////////////////////////////////
+Logger::Logger(const string& name) : name(name) {}
+
+void Logger::log_impl(const string& msg, const char* file, int line) const {
+    auto tp_ms = chrono::time_point_cast<chrono::milliseconds>(chrono::system_clock::now());
+    cout << format("{:%H:%M:%S}", tp_ms) << " | " << name << " | " << file << ":" << line << " | " << msg << endl;
+}
+
+/////////////////////////////////////////////////////////// Gzip I/O ///////////////////////////////////////////////////////////
+unique_ptr<istream> open_input_stream(const string& file_path, bool is_gzipped) {
+    if (is_gzipped) return make_unique<gzifstream>(file_path);
+    else return make_unique<ifstream>(file_path);
+}
+
+////////////////////////////////////////////////////////// FASTA Reader ////////////////////////////////////////////////////////
+static inline void ltrim(string &s) {
+    s.erase(s.begin(), find_if(s.begin(), s.end(), [](unsigned char ch) {
+        return !isspace(ch);
+    }));
+}
+
+static inline void rtrim(string &s) {
+    s.erase(find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
+        return !isspace(ch);
+    }).base(), s.end());
+}
+
+static inline void trim(string &s) {
+    ltrim(s);
+    rtrim(s);
+}
+
+FastaStreamer::FastaStreamer(const string& file_path, bool is_gzipped) {
+    input_stream = open_input_stream(file_path, is_gzipped);
+    if (!*input_stream) {
+        throw runtime_error("Could not open file: " + file_path);
+    }
+}
+
+FastaIterator FastaStreamer::begin() {
+    return FastaIterator(input_stream.get());
+}
+
+FastaIterator FastaStreamer::end() {
+    return FastaIterator(nullptr);
+}
+
+FastaIterator::FastaIterator(istream* in) : input(in), at_end(in == nullptr) {
+    if (!at_end) read_next_sequence();
+}
+
+FastaIterator& FastaIterator::operator++() {
+    read_next_sequence();
+    return *this;
+}
+
+const FastaPair& FastaIterator::operator*() const {
+    return current_pair;
+}
+
+bool FastaIterator::operator!=(const FastaIterator& other) const {
+    return at_end != other.at_end;
+}
+
+void FastaIterator::read_next_sequence() {
+    string line;
+    current_pair.first.clear();
+    current_pair.second.clear();
+
+    if (input->peek() == EOF) {
+        at_end = true;
+        return;
+    }
+
+    while (getline(*input, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line[0] == '>') {
+            current_pair.first = line.substr(1);
+            break;
+        }
+    }
+
+    if (current_pair.first.empty()) {
+        at_end = true;
+        return;
+    }
+
+    while (input->peek() != '>' && input->peek() != EOF) {
+        getline(*input, line);
+        trim(line);
+        if(!line.empty()) current_pair.second += line;
+    }
+}
+
+
+vector<FastaPair> read_fasta_file(const string& file_path, bool is_gzipped) {
+    vector<FastaPair> fasta_data;
+    FastaStreamer streamer(file_path, is_gzipped);
+    for (const FastaPair& pair : streamer) fasta_data.push_back(pair);
+    return fasta_data;
+}
+
+//////////////////////////////////////////////////////// Argument Parser /////////////////////////////////////////////////////
+ArgParser::ArgParser(const string& description) : program_description(description) {}
+
+void ArgParser::add(const string& name, const string& flag, const string& short_flag, const string& description, const string& type, bool required) {
+    definitions[name] = {flag, short_flag, description, type, required};
+    flag_to_name[flag] = name;
+    flag_to_name[short_flag] = name;
+}
+
+void ArgParser::print_help() {
+    cerr << "Usage: " << program_name << " [options]" << endl;
+    if (!program_description.empty()) cerr << endl << program_description << endl;
+    cerr << endl << "Options:" << endl;
+    for (const pair<const string, Argument>& pair : definitions) {
+        const Argument& arg = pair.second;
+        cerr << "  " << arg.flag << ", " << arg.short_flag << "\t" << arg.description << " (type: " << arg.type << ")" << (arg.required ? " [required]" : "") << endl;
+    }
+    cerr << "  --help, -h\tShow this help message and exit" << endl;
+    exit(0);
+}
+
+map<string, any> ArgParser::parse(int argc, char** argv) {
+    program_name = argv[0];
+    if (argc == 1) print_help();
+    
+    map<string, any> results;
+    
+    for (int i = 1; i < argc; ++i) {
+        string arg = argv[i];
+        
+        if (arg == "--help" || arg == "-h") print_help();
+        
+        if (!flag_to_name.count(arg)) continue;
+        
+        string name = flag_to_name[arg];
+        const Argument& def = definitions[name];
+        
+        if (def.type == "bool") {
+            results[name] = true;
+        } else {
+            if (i + 1 >= argc) throw runtime_error("Missing value for argument: " + arg);
+            
+            string value_str = argv[++i];
+            
+            if (def.type == "string") {
+                results[name] = value_str;
+            } else if (def.type == "int") {
+                try {
+                    results[name] = stoi(value_str);
+                } catch (const invalid_argument&) {
+                    throw runtime_error("Invalid integer value for argument: " + arg);
+                }
+            } else if (def.type == "float") {
+                try {
+                    results[name] = stof(value_str);
+                } catch (const invalid_argument&) {
+                    throw runtime_error("Invalid float value for argument: " + arg);
+                }
+            }
+        }
+    }
+    
+    for (const auto& [name, def] : definitions) {
+        if (def.required && !results.count(name)) {
+            throw runtime_error("Missing required argument: " + def.flag);
+        }
+    }
+    
+    return results;
+}
