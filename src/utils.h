@@ -12,7 +12,6 @@
 // Logger
 // Usage:
 // Logger logger = get_logger("my_logger");
-// LOG(logger, "This is a message");
 class Logger {
 public:
     Logger(const std::string& name);
@@ -22,7 +21,7 @@ private:
 };
 
 // Use as logger.log("message")
-#define log(msg) log_impl(msg, __FILE__, __LINE__)
+#define debug(msg) log_impl(msg, __FILE__, __LINE__)
 
 // Gzip I/O
 // Returns a unique_ptr to an istream that can read from a plain or gzipped file.

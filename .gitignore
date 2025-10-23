@@ -5,3 +5,5 @@ obj
 svp
 data
 tool
+.venv
+simulation
