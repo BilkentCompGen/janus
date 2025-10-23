@@ -5,34 +5,55 @@
 #include <any>
 
 #include "src/utils.h"
+#include "lps.h"
 
 using namespace std;
 
 Logger logger("main_logger");
 
 int main(int argc, char** argv) {
+    LCP_INIT();
+
     ArgParser parser("A simple program to demonstrate the ArgParser and FastaStreamer classes.");
 
-    parser.add("input", "--input", "-i", "Input FASTA file", "string", true);
-    parser.add("gzip", "--gzip", "-g", "Gzipped input FASTA file", "bool", false);
+    parser.add("str", "--str", "-s", "Input string", "string", true);
+    parser.add("depth", "--depth", "-d", "Depth of LCP", "int", false);
 
     map<string, any> args = parser.parse(argc, argv);
+
+    string str = any_cast<string>(args["str"]);
+    int depth = args.count("depth") ? any_cast<int>(args["depth"]) : 3;
+    logger.debug("Input string: " + str);
+    logger.debug("Input string size: " + to_string(str.size()));
     
-    string input_file = any_cast<string>(args["input"]);
-    bool gzip = args.count("gzip") ? any_cast<bool>(args["gzip"]) : false;
-    
-    logger.log("Input file: " + input_file);
-    logger.log("Gzip: " + to_string(gzip));
-    
-    logger.log("Testing FASTA streamer...");
-    FastaStreamer streamer(input_file, gzip);
-    for (const FastaPair& pair : streamer) {
-        cout << pair.first << ": " << pair.second.size() << endl;
+    logger.debug("Testing LCP...");
+
+    struct lps lcp_string;
+
+    init_lps(&lcp_string, str.c_str(), str.size());
+
+    int isSuccess = lps_deepen(&lcp_string, depth);
+
+    logger.debug("LCP size: " + to_string(lcp_string.size));
+    logger.debug("LCP isSuccess: " + to_string(isSuccess));
+
+    logger.debug("Printing LCP...");
+    for (int i = 0; i < lcp_string.size; i++) {
+        print_core(&(lcp_string.cores[i]));
+        printf(" ");
     }
-    
-    logger.log("Testing FASTA file reader...");
-    vector<FastaPair> fasta_data = read_fasta_file(input_file, gzip);
-    logger.log("Read " + to_string(fasta_data.size()) + " sequences.");
+    printf("\n");
+
+    for (int i = 0; i < lcp_string.size; i++) {
+        printf("(%d %d)", lcp_string.cores[i].start, lcp_string.cores[i].end);
+        printf(" ");
+    }
+    printf("\n");
+
+    logger.debug("Freeing LCP...");
+    free_lps(&lcp_string);
+
+    logger.debug("Done!");
 
     return 0;
 }
