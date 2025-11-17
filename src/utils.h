@@ -9,9 +9,6 @@
 #include <any>
 #include <memory>
 
-// Logger
-// Usage:
-// Logger logger = get_logger("my_logger");
 class Logger {
 public:
     Logger(const std::string& name);
@@ -20,24 +17,13 @@ private:
     std::string name;
 };
 
-// Use as logger.log("message")
 #define debug(msg) log_impl(msg, __FILE__, __LINE__)
 
-// Gzip I/O
-// Returns a unique_ptr to an istream that can read from a plain or gzipped file.
 std::unique_ptr<std::istream> open_input_stream(const std::string& file_path, bool is_gzipped = false);
 
-// FASTA Reader
 using FastaPair = std::pair<std::string, std::string>;
 
-// FastaStreamer provides an iterator-based way to read a FASTA file.
-// It does not load the entire file into memory.
-// Usage:
-// FastaStreamer streamer("path/to/file.fasta");
-// for (const FastaPair& pair : streamer) {
-//     std::cout << "Header: " << pair.first << ", Sequence: " << pair.second << std::endl;
-// }
-class FastaIterator; // Forward declaration
+class FastaIterator;
 
 class FastaStreamer {
 public:
@@ -55,7 +41,6 @@ public:
     const FastaPair& operator*() const;
     bool operator!=(const FastaIterator& other) const;
 
-    // Standard iterator traits
     using iterator_category = std::input_iterator_tag;
     using value_type = FastaPair;
     using difference_type = std::ptrdiff_t;
@@ -69,19 +54,8 @@ private:
     void read_next_sequence();
 };
 
-// Reads an entire FASTA file into a vector.
 std::vector<FastaPair> read_fasta_file(const std::string& file_path, bool is_gzipped = false);
 
-
-// Argument Parser
-// A simple argument parser.
-// Usage:
-// ArgParser parser;
-// parser.add("input", "--input", "-i", "Input file", "string", true);
-// parser.add("threads", "--threads", "-t", "Number of threads", "int", false);
-// std::map<std::string, std::any> args = parser.parse(argc, argv);
-// std::string input_file = std::any_cast<std::string>(args["input"]);
-// int threads = args.count("threads") ? std::any_cast<int>(args["threads"]) : 1;
 struct Argument {
     std::string flag;
     std::string short_flag;
@@ -102,5 +76,11 @@ private:
     std::map<std::string, std::string> flag_to_name;
     void print_help();
 };
+
+uint32_t hash_core(const struct core* c);
+
+uint32_t hash_k_cores(const struct core* cores, int k);
+
+uint32_t update_k_cores_hash(uint32_t old_hash, const struct core* old_first, const struct core* new_last, int k);
 
 #endif // UTILS_H

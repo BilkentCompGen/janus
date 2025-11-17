@@ -5,13 +5,19 @@ LDFLAGS = -lz -llcptools
 TARGET = svp
 SRCDIR = src
 OBJDIR = obj
+CSVFILES = *.csv
+GFAFILES = *.gfa
 
 SOURCES = main.cpp $(wildcard $(SRCDIR)/*.cpp)
 OBJECTS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(SOURCES)))
 
-.PHONY: all clean
+.PHONY: all clean profile
 
 all: $(TARGET)
+
+# Build with debug symbols for profiling (keeps -O3 for realistic performance)
+profile: CXXFLAGS += -g
+profile: $(TARGET)
 
 $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
@@ -23,4 +29,4 @@ $(OBJDIR)/%.o: %.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SRCDIR)/*.hpp)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
-	rm -rf $(OBJDIR) $(TARGET)
+	rm -rf $(OBJDIR) $(TARGET) $(CSVFILES) $(GFAFILES)
