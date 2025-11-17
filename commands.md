@@ -86,3 +86,18 @@ I also needed to run these for library to work.
 echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/local.conf
 sudo ldconfig
 ```
+
+# Graph
+
+## Bifrost
+
+I needed to update the CMake version to 3.10
+
+In /home/yuio/svp/tool/bifrost/src/DataStorage.tcc, change line 81 from:
+```cpp
+for (size_t i = 0; i != sz_link; ++i) unitig_cs_link[i] = o.sz_link[i].load();
+```
+to:
+```cpp
+for (size_t i = 0; i != sz_link; ++i) unitig_cs_link[i] = o.unitig_cs_link[i].load();
+```
