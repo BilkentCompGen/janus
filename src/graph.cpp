@@ -56,7 +56,7 @@ static CompressedNode createCompressedNode(const std::vector<ublock>& path, cons
     return comp_node;
 }
 
-std::unordered_map<ublock, CompressedNode> LCPGraph::compressGraph() const {
+CompressedGraph LCPGraph::compress() const {
     compression_logger.debug("Starting graph compression...");
     
     std::unordered_map<ublock, CompressedNode> compressed;
@@ -129,7 +129,7 @@ std::unordered_map<ublock, CompressedNode> LCPGraph::compressGraph() const {
     }
     
     compression_logger.debug("Compression complete: " + std::to_string(nodes.size()) + " -> " + std::to_string(compressed.size()) + " nodes");
-    return compressed;
+    return CompressedGraph(std::move(compressed));
 }
 
 static const uint32_t COLOR_PALETTE[] = {
@@ -155,18 +155,16 @@ static std::string getNodeColor(const CompressedNode& node) {
     return "#969696";
 }
 
-void LCPGraph::exportGFA(const std::string& graph_name) const {
-    auto compressed = compressGraph();
-    
+void CompressedGraph::exportGFA(const std::string& graph_name) const {
     std::ofstream out(graph_name + ".gfa");
     if (!out) return;
     out << "H\tVN:Z:1.0\n";
     
     std::unordered_map<ublock, size_t> hash_to_id;
     size_t node_id = 1;
-    for (const auto& [hash, _] : compressed) hash_to_id[hash] = node_id++;
+    for (const auto& [hash, _] : nodes) hash_to_id[hash] = node_id++;
     
-    for (const auto& [hash, node] : compressed) {
+    for (const auto& [hash, node] : nodes) {
         out << "S\t" << hash_to_id[hash] << "\t*\tLN:i:" << node.length() << "\tCN:i:" << node.count << "\tHASH:i:" << hash;
         for (size_t i = 0; i < MAX_COLORS; ++i) {
             if (node.colors[i] > 0) out << "\tC" << i << ":i:" << node.colors[i];
@@ -174,7 +172,7 @@ void LCPGraph::exportGFA(const std::string& graph_name) const {
         out << "\n";
     }
     
-    for (const auto& [hash, node] : compressed) {
+    for (const auto& [hash, node] : nodes) {
         size_t from_id = hash_to_id[hash];
         for (ublock next_hash : node.next) {
             if (hash_to_id.count(next_hash) && next_hash != hash) {
@@ -186,7 +184,7 @@ void LCPGraph::exportGFA(const std::string& graph_name) const {
     std::ofstream col(graph_name + ".csv");
     if (!col) return;
     col << "Name,Colour\n";
-    for (const auto& [hash, node] : compressed) {
+    for (const auto& [hash, node] : nodes) {
         col << hash_to_id.at(hash) << "," << getNodeColor(node) << "\n";
     }
 }

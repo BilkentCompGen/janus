@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++20 -O3 -Wall -Wextra -pedantic -Isrc
+CXXFLAGS = -std=c++20 -O3 -g -Wall -Wextra -pedantic
 LDFLAGS = -lz -llcptools
 
 TARGET = svp
@@ -15,7 +15,6 @@ OBJECTS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(SOURCES)))
 
 all: $(TARGET)
 
-# Build with debug symbols for profiling (keeps -O3 for realistic performance)
 profile: CXXFLAGS += -g
 profile: $(TARGET)
 
