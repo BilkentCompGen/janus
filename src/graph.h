@@ -36,21 +36,31 @@ struct CompressedNode {
     size_t length() const { return path.size(); }
 };
 
+class CompressedGraph {
+private:
+    std::unordered_map<ublock, CompressedNode> nodes;
+    
+public:
+    CompressedGraph(std::unordered_map<ublock, CompressedNode> nodes) : nodes(std::move(nodes)) {}
+    
+    const std::unordered_map<ublock, CompressedNode>& getNodes() const { return nodes; }
+    void exportGFA(const std::string& graph_name) const;
+};
+
 class LCPGraph {
 private:
     std::unordered_map<ublock, Node> nodes;
     int k;
     
-    std::unordered_map<ublock, CompressedNode> compressGraph() const;
     void printStatistics(const std::string& label) const;
     void printCompressedStatistics(const std::unordered_map<ublock, CompressedNode>& compressed, const std::string& label) const;
     
 public:
     LCPGraph(int k = 1) : k(k) {}
     ~LCPGraph() = default;
-
+    
     void addString(struct lps* lcp_string, int color);
-    void exportGFA(const std::string& graph_name) const;
+    CompressedGraph compress() const;
 };
 
 #endif // GRAPH_H

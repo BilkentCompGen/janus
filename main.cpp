@@ -8,6 +8,7 @@
 
 #include "src/utils.h"
 #include "src/graph.h"
+#include "src/sv.h"
 #include "lps.h"
 
 using namespace std;
@@ -105,9 +106,39 @@ int main(int argc, char** argv) {
     }
     main_logger.debug("Processed " + to_string(tumor_seq_count) + " tumor sequences");
     
+    main_logger.debug("Compressing graph...");
+    auto compressed_graph = graph.compress();
+    
     graph_logger.debug("Exporting graph to " + output_name + "...");
-    graph.exportGFA(output_name);
+    compressed_graph.exportGFA(output_name);
     graph_logger.debug("Graph exported to " + output_name + ".gfa and " + output_name + ".csv");
+
+    main_logger.debug("Detecting structural variants...");
+    auto sv_calls = detectPresenceAbsenceSVs(compressed_graph);
+    
+    int deletion_count = 0;
+    int insertion_count = 0;
+    for (const auto& sv : sv_calls) {
+        if (sv.type == SVType::DELETION) {
+            deletion_count++;
+        } else if (sv.type == SVType::INSERTION) {
+            insertion_count++;
+        }
+    }
+    
+    main_logger.debug("Found " + to_string(sv_calls.size()) + " structural variants:");
+    main_logger.debug("  Deletions: " + to_string(deletion_count));
+    main_logger.debug("  Insertions: " + to_string(insertion_count));
+    
+    int print_count = min(10, static_cast<int>(sv_calls.size()));
+    if (print_count > 0) {
+        main_logger.debug("First " + to_string(print_count) + " SVs:");
+        for (int i = 0; i < print_count; ++i) {
+            const auto& sv = sv_calls[i];
+            string type_str = (sv.type == SVType::DELETION) ? "DELETION" : "INSERTION";
+            main_logger.debug("  " + type_str + " at node_hash: " + to_string(sv.node_hash));
+        }
+    }
 
     main_logger.debug("Done!");
 
