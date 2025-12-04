@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
+#include <stdexcept>
 
 #include "lps.h"
 #include "core.h"
@@ -13,20 +14,27 @@
 constexpr std::size_t MAX_COLORS = 32;
 typedef unsigned int ublock;
 
-struct Node {
+// Node data: core hash, colors, and count
+struct NodeData {
     ublock core_hash;
-    std::unordered_set<ublock> next;
-    std::unordered_set<ublock> prev;
     unsigned int colors[MAX_COLORS] = {0};
     unsigned int count = 0;
     
-    Node(ublock core_hash) : core_hash(core_hash) {}
+    NodeData() : core_hash(0) {}
+    NodeData(ublock hash) : core_hash(hash) {}
+};
+
+// Node edges: next and prev connections (cleared after compression)
+struct NodeEdges {
+    std::unordered_set<ublock> next;
+    std::unordered_set<ublock> prev;
     
     bool isCompressible() const {
         return prev.size() == 1 && next.size() == 1;
     }
 };
 
+// Compressed node: path of core hashes and outgoing edges
 struct CompressedNode {
     std::vector<ublock> path;
     std::unordered_set<ublock> next;
@@ -36,31 +44,52 @@ struct CompressedNode {
     size_t length() const { return path.size(); }
 };
 
-class CompressedGraph {
-private:
-    std::unordered_map<ublock, CompressedNode> nodes;
-    
-public:
-    CompressedGraph(std::unordered_map<ublock, CompressedNode> nodes) : nodes(std::move(nodes)) {}
-    
-    const std::unordered_map<ublock, CompressedNode>& getNodes() const { return nodes; }
-    void exportGFA(const std::string& graph_name) const;
-};
-
+// Unified LCP Graph - handles both uncompressed and compressed states
 class LCPGraph {
 private:
-    std::unordered_map<ublock, Node> nodes;
+    bool is_compressed = false;
     int k;
     
-    void printStatistics(const std::string& label) const;
-    void printCompressedStatistics(const std::unordered_map<ublock, CompressedNode>& compressed, const std::string& label) const;
+    // Node data (kept after compression for color/count info)
+    std::unordered_map<ublock, NodeData> node_dict;
     
+    // Node edges (cleared after compression)
+    std::unordered_map<ublock, NodeEdges> nodes;
+    
+    // Compressed nodes (populated after compression)
+    std::unordered_map<ublock, CompressedNode> compressed_nodes;
+    
+    // Helper for compression
+    CompressedNode createCompressedNode(const std::vector<ublock>& path) const;
+
 public:
     LCPGraph(int k = 1) : k(k) {}
     ~LCPGraph() = default;
     
+    // Add string to graph (throws if already compressed)
     void addString(struct lps* lcp_string, int color);
-    CompressedGraph compress() const;
+    
+    // Compress the graph (frees node edges, sets is_compressed)
+    void compress();
+    
+    // Export to GFA format
+    void exportGFA(const std::string& graph_name) const;
+    
+    // Get path for a compressed node
+    std::vector<ublock> getPath(ublock compressed_node_id) const;
+    
+    // Accessors
+    bool isCompressed() const { return is_compressed; }
+    int getK() const { return k; }
+    
+    const std::unordered_map<ublock, NodeData>& getNodeDict() const { return node_dict; }
+    const std::unordered_map<ublock, CompressedNode>& getCompressedNodes() const { return compressed_nodes; }
+    
+    // Get node count
+    size_t nodeCount() const { 
+        return is_compressed ? compressed_nodes.size() : node_dict.size(); 
+    }
+    size_t originalNodeCount() const { return node_dict.size(); }
 };
 
 #endif // GRAPH_H
