@@ -12,6 +12,10 @@ static Logger statistics_logger("statistics");
 
 
 void LCPGraph::addString(struct lps* lcp_string, int color) {
+    if (is_compressed) {
+        throw std::runtime_error("Cannot add strings to a compressed graph");
+    }
+    
     if (lcp_string->size == 0) return;
     
     ublock curr = hash_k_cores(&lcp_string->cores[0], k);
@@ -21,52 +25,69 @@ void LCPGraph::addString(struct lps* lcp_string, int color) {
             curr = update_k_cores_hash(curr, &lcp_string->cores[i - 1], &lcp_string->cores[i + k - 1], k);
         }
         
-        Node& node = nodes.try_emplace(curr, curr).first->second;
-        node.count++;
-        node.colors[color]++;
+        // Update node data
+        NodeData& data = node_dict.try_emplace(curr, curr).first->second;
+        data.count++;
+        data.colors[color]++;
+        
+        // Update node edges
+        NodeEdges& edges = nodes[curr];
         
         if (i + 1 <= static_cast<int>(lcp_string->size) - k) {
             ublock next_hash = update_k_cores_hash(curr, &lcp_string->cores[i], &lcp_string->cores[i + k], k);
-            node.next.emplace(next_hash);
+            edges.next.emplace(next_hash);
             
-            Node& next_node = nodes.try_emplace(next_hash, next_hash).first->second;
-            next_node.prev.emplace(curr);
-            next_node.colors[color]++;
-            next_node.count++;
+            // Update next node
+            NodeData& next_data = node_dict.try_emplace(next_hash, next_hash).first->second;
+            next_data.count++;
+            next_data.colors[color]++;
+            
+            NodeEdges& next_edges = nodes[next_hash];
+            next_edges.prev.emplace(curr);
         }
     }
 }
 
-static CompressedNode createCompressedNode(const std::vector<ublock>& path, const std::unordered_map<ublock, Node>& nodes) {
+CompressedNode LCPGraph::createCompressedNode(const std::vector<ublock>& path) const {
     CompressedNode comp_node;
     comp_node.path = path;
     
     if (!path.empty()) {
-        const Node& last_node = nodes.at(path.back());
-        comp_node.next = last_node.next;
+        // Get outgoing edges from the last node in path
+        auto edges_it = nodes.find(path.back());
+        if (edges_it != nodes.end()) {
+            comp_node.next = edges_it->second.next;
+        }
         
+        // Aggregate counts and colors from all nodes in path
         for (ublock h : path) {
-            const Node& node = nodes.at(h);
-            comp_node.count += node.count;
-            for (size_t i = 0; i < MAX_COLORS; ++i) {
-                comp_node.colors[i] += node.colors[i];
+            auto data_it = node_dict.find(h);
+            if (data_it != node_dict.end()) {
+                const NodeData& data = data_it->second;
+                comp_node.count += data.count;
+                for (size_t i = 0; i < MAX_COLORS; ++i) {
+                    comp_node.colors[i] += data.colors[i];
+                }
             }
         }
     }
     return comp_node;
 }
 
-CompressedGraph LCPGraph::compress() const {
+void LCPGraph::compress() {
+    if (is_compressed) {
+        return; // Already compressed
+    }
+    
     compression_logger.debug("Starting graph compression...");
     
-    std::unordered_map<ublock, CompressedNode> compressed;
     std::unordered_set<ublock> processed;
     
-    for (const auto& [hash, node] : nodes) {
+    for (const auto& [hash, edges] : nodes) {
         if (processed.count(hash)) continue;
         
-        if (!node.isCompressible()) {
-            compressed[hash] = createCompressedNode({hash}, nodes);
+        if (!edges.isCompressible()) {
+            compressed_nodes[hash] = createCompressedNode({hash});
             processed.insert(hash);
             continue;
         }
@@ -77,11 +98,13 @@ CompressedGraph LCPGraph::compress() const {
         ublock prev_node = 0;
         
         while (true) {
-            const Node& curr_node = nodes.at(current);
-            if (curr_node.prev.size() != 1) break;
+            auto curr_edges_it = nodes.find(current);
+            if (curr_edges_it == nodes.end() || curr_edges_it->second.prev.size() != 1) break;
             
-            ublock pred = *curr_node.prev.begin();
-            if (pred == prev_node || processed.count(pred) || !nodes.at(pred).isCompressible()) break;
+            ublock pred = *curr_edges_it->second.prev.begin();
+            auto pred_edges_it = nodes.find(pred);
+            if (pred == prev_node || processed.count(pred) || 
+                pred_edges_it == nodes.end() || !pred_edges_it->second.isCompressible()) break;
             
             prev_node = current;
             current = pred;
@@ -98,27 +121,30 @@ CompressedGraph LCPGraph::compress() const {
             chain.push_back(current);
             processed.insert(current);
             
-            const Node& curr_node = nodes.at(current);
-            if (!curr_node.isCompressible() || curr_node.next.size() != 1) break;
+            auto curr_edges_it = nodes.find(current);
+            if (curr_edges_it == nodes.end() || !curr_edges_it->second.isCompressible() || 
+                curr_edges_it->second.next.size() != 1) break;
             
-            ublock next = *curr_node.next.begin();
-            if (!nodes.count(next) || processed.count(next) || !nodes.at(next).isCompressible()) break;
+            ublock next = *curr_edges_it->second.next.begin();
+            auto next_edges_it = nodes.find(next);
+            if (next_edges_it == nodes.end() || processed.count(next) || 
+                !next_edges_it->second.isCompressible()) break;
             
             current = next;
         }
         
-        compressed[chain_start] = createCompressedNode(chain, nodes);
+        compressed_nodes[chain_start] = createCompressedNode(chain);
     }
     
     // Update edges to point to compressed nodes
     std::unordered_map<ublock, ublock> node_to_compressed;
-    for (const auto& [comp_hash, comp_node] : compressed) {
+    for (const auto& [comp_hash, comp_node] : compressed_nodes) {
         for (ublock h : comp_node.path) {
             node_to_compressed[h] = comp_hash;
         }
     }
     
-    for (auto& [comp_hash, comp_node] : compressed) {
+    for (auto& [comp_hash, comp_node] : compressed_nodes) {
         std::unordered_set<ublock> updated_next;
         for (ublock next_hash : comp_node.next) {
             if (node_to_compressed.count(next_hash)) {
@@ -128,8 +154,20 @@ CompressedGraph LCPGraph::compress() const {
         comp_node.next = updated_next;
     }
     
-    compression_logger.debug("Compression complete: " + std::to_string(nodes.size()) + " -> " + std::to_string(compressed.size()) + " nodes");
-    return CompressedGraph(std::move(compressed));
+    // Clear the node edges to free memory
+    nodes.clear();
+    is_compressed = true;
+    
+    compression_logger.debug("Compression complete: " + std::to_string(node_dict.size()) + 
+                            " -> " + std::to_string(compressed_nodes.size()) + " nodes");
+}
+
+std::vector<ublock> LCPGraph::getPath(ublock compressed_node_id) const {
+    auto it = compressed_nodes.find(compressed_node_id);
+    if (it != compressed_nodes.end()) {
+        return it->second.path;
+    }
+    return {};
 }
 
 static const uint32_t COLOR_PALETTE[] = {
@@ -155,24 +193,29 @@ static std::string getNodeColor(const CompressedNode& node) {
     return "#969696";
 }
 
-void CompressedGraph::exportGFA(const std::string& graph_name) const {
+void LCPGraph::exportGFA(const std::string& graph_name) const {
+    if (!is_compressed) {
+        throw std::runtime_error("Graph must be compressed before exporting");
+    }
+    
     std::ofstream out(graph_name + ".gfa");
     if (!out) return;
     out << "H\tVN:Z:1.0\n";
     
     std::unordered_map<ublock, size_t> hash_to_id;
     size_t node_id = 1;
-    for (const auto& [hash, _] : nodes) hash_to_id[hash] = node_id++;
+    for (const auto& [hash, _] : compressed_nodes) hash_to_id[hash] = node_id++;
     
-    for (const auto& [hash, node] : nodes) {
-        out << "S\t" << hash_to_id[hash] << "\t*\tLN:i:" << node.length() << "\tCN:i:" << node.count << "\tHASH:i:" << hash;
+    for (const auto& [hash, node] : compressed_nodes) {
+        out << "S\t" << hash_to_id[hash] << "\t*\tLN:i:" << node.length() 
+            << "\tCN:i:" << node.count << "\tHASH:i:" << hash;
         for (size_t i = 0; i < MAX_COLORS; ++i) {
             if (node.colors[i] > 0) out << "\tC" << i << ":i:" << node.colors[i];
         }
         out << "\n";
     }
     
-    for (const auto& [hash, node] : nodes) {
+    for (const auto& [hash, node] : compressed_nodes) {
         size_t from_id = hash_to_id[hash];
         for (ublock next_hash : node.next) {
             if (hash_to_id.count(next_hash) && next_hash != hash) {
@@ -184,7 +227,7 @@ void CompressedGraph::exportGFA(const std::string& graph_name) const {
     std::ofstream col(graph_name + ".csv");
     if (!col) return;
     col << "Name,Colour\n";
-    for (const auto& [hash, node] : nodes) {
+    for (const auto& [hash, node] : compressed_nodes) {
         col << hash_to_id.at(hash) << "," << getNodeColor(node) << "\n";
     }
 }

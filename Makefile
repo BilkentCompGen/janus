@@ -7,6 +7,7 @@ SRCDIR = src
 OBJDIR = obj
 CSVFILES = *.csv
 GFAFILES = *.gfa
+TSVFILES = *.tsv
 
 SOURCES = main.cpp $(wildcard $(SRCDIR)/*.cpp)
 OBJECTS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(SOURCES)))
@@ -28,4 +29,4 @@ $(OBJDIR)/%.o: %.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SRCDIR)/*.hpp)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
-	rm -rf $(OBJDIR) $(TARGET) $(CSVFILES) $(GFAFILES)
+	rm -rf $(OBJDIR) $(TARGET) $(CSVFILES) $(GFAFILES) $(TSVFILES)
