@@ -2,6 +2,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <algorithm>
+#include <filesystem>
 
 #include "utils.h"
 #include "graph.h"
@@ -193,22 +194,29 @@ static std::string getNodeColor(const CompressedNode& node) {
     return "#969696";
 }
 
-void LCPGraph::exportGFA(const std::string& graph_name) const {
+void LCPGraph::exportGFA(const std::string& output_dir, const std::string& experiment_name) const {
     if (!is_compressed) {
         throw std::runtime_error("Graph must be compressed before exporting");
     }
     
-    std::ofstream out(graph_name + ".gfa");
+    namespace fs = std::filesystem;
+    fs::path base_dir = output_dir;
+    fs::path gfa_path = base_dir / "gfa" / (experiment_name + ".gfa");
+    fs::path csv_path = base_dir / "csv" / (experiment_name + ".csv");
+    
+    fs::create_directories(gfa_path.parent_path());
+    fs::create_directories(csv_path.parent_path());
+    
+    std::ofstream out(gfa_path);
     if (!out) return;
     out << "H\tVN:Z:1.0\n";
     
-    std::unordered_map<ublock, size_t> hash_to_id;
+    std::unordered_map<uint64_t, size_t> hash_to_id;
     size_t node_id = 1;
     for (const auto& [hash, _] : compressed_nodes) hash_to_id[hash] = node_id++;
     
     for (const auto& [hash, node] : compressed_nodes) {
-        out << "S\t" << hash_to_id[hash] << "\t*\tLN:i:" << node.length() 
-            << "\tCN:i:" << node.count << "\tHASH:i:" << hash;
+        out << "S\t" << hash_to_id[hash] << "\t*\tLN:i:" << node.length() << "\tCN:i:" << node.count << "\tHASH:i:" << hash;
         for (size_t i = 0; i < MAX_COLORS; ++i) {
             if (node.colors[i] > 0) out << "\tC" << i << ":i:" << node.colors[i];
         }
@@ -217,14 +225,14 @@ void LCPGraph::exportGFA(const std::string& graph_name) const {
     
     for (const auto& [hash, node] : compressed_nodes) {
         size_t from_id = hash_to_id[hash];
-        for (ublock next_hash : node.next) {
+        for (uint64_t next_hash : node.next) {
             if (hash_to_id.count(next_hash) && next_hash != hash) {
                 out << "L\t" << from_id << "\t+\t" << hash_to_id[next_hash] << "\t+\t0M\n";
             }
         }
     }
     
-    std::ofstream col(graph_name + ".csv");
+    std::ofstream col(csv_path);
     if (!col) return;
     col << "Name,Colour\n";
     for (const auto& [hash, node] : compressed_nodes) {

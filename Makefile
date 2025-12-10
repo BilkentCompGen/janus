@@ -29,4 +29,7 @@ $(OBJDIR)/%.o: %.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SRCDIR)/*.hpp)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
-	rm -rf $(OBJDIR) $(TARGET) $(CSVFILES) $(GFAFILES) $(TSVFILES)
+	rm -rf $(OBJDIR) $(TARGET) $(CSVFILES) $(GFAFILES) $(TSVFILES) output
+
+images:
+	./generate_images.sh
