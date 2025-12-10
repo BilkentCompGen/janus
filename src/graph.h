@@ -73,7 +73,7 @@ public:
     void compress();
     
     // Export to GFA format
-    void exportGFA(const std::string& graph_name) const;
+    void exportGFA(const std::string& output_dir, const std::string& experiment_name) const;
     
     // Get path for a compressed node
     std::vector<ublock> getPath(ublock compressed_node_id) const;
