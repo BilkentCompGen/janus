@@ -37,12 +37,18 @@ int main(int argc, char** argv) {
     int depth = any_cast<int>(args["depth"]);
     int k = any_cast<int>(args["k"]);
     string output_name = any_cast<string>(args["output"]);
+    std::filesystem::path base_output_dir = "output";
+
+    std::filesystem::path tsv_dir = base_output_dir / "tsv"; 
+
+    std::filesystem::create_directories(tsv_dir);
+    main_logger.debug("Output dir: " + base_output_dir.string());
+    main_logger.debug("Output: " + output_name);
 
     main_logger.debug("Normal directory: " + normal_dir);
     main_logger.debug("Tumor directory: " + tumor_dir);
     main_logger.debug("Depth: " + to_string(depth));
     main_logger.debug("K: " + to_string(k));
-    main_logger.debug("Output: " + output_name);
     
     main_logger.debug("Scanning directories for FASTA files...");
     vector<string> normal_files, tumor_files;
@@ -136,9 +142,9 @@ int main(int argc, char** argv) {
     graph.compress();
     main_logger.debug("Graph compressed: " + to_string(graph.originalNodeCount()) + " -> " + to_string(graph.nodeCount()) + " nodes");
     
-    graph_logger.debug("Exporting graph to " + output_name + "...");
-    graph.exportGFA(output_name);
-    graph_logger.debug("Graph exported to " + output_name + ".gfa and " + output_name + ".csv");
+    graph_logger.debug("Exporting graph to " + base_output_dir.string() + "...");
+    graph.exportGFA(base_output_dir.string(), output_name);
+    graph_logger.debug("Graph exported.");
 
 
     main_logger.debug("Detecting structural variants...");
@@ -228,7 +234,7 @@ int main(int argc, char** argv) {
     }
 
     // Save SVs to TSV file
-    string sv_filename = output_name + "_svs.tsv";
+    std::filesystem::path sv_filename = tsv_dir / (output_name + ".tsv");
     ofstream sv_file(sv_filename);
     if (sv_file) {
         sv_file << "type\tchrom\tstart\tend\ttumor_samples\tnormal_count\ttumor_count\n";
@@ -259,7 +265,7 @@ int main(int argc, char** argv) {
             }
         }
         sv_file.close();
-        main_logger.debug("SVs saved to " + sv_filename);
+        main_logger.debug("SVs saved to " + sv_filename.string());
     }
 
     main_logger.debug("Done!");
