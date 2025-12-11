@@ -32,4 +32,10 @@ clean:
 	rm -rf $(OBJDIR) $(TARGET) $(CSVFILES) $(GFAFILES) $(TSVFILES) output
 
 images:
-	./generate_images.sh
+	./scripts/generate_images.sh
+
+eval:
+	python3 scripts/evaluate_deletions.py
+
+coverage:
+	python3 scripts/evaluate_coverage.py
