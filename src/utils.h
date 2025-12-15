@@ -79,8 +79,4 @@ private:
 
 uint32_t hash_core(const struct core* c);
 
-uint32_t hash_k_cores(const struct core* cores, int k);
-
-uint32_t update_k_cores_hash(uint32_t old_hash, const struct core* old_first, const struct core* new_last, int k);
-
 #endif // UTILS_H

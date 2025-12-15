@@ -7,4 +7,5 @@ data
 tool
 .venv
 simulation
-output
+outputs
+lib

@@ -185,76 +185,6 @@ map<string, any> ArgParser::parse(int argc, char** argv) {
     return results;
 }
 
-//////////////////////////////////////////////////////// MurmurHash3 ///////////////////////////////////////////////////////////
-
-/**
-* @brief Computes the 32-bit MurmurHash3 hash for a given key.
- *
- * This function computes a 32-bit hash of the input data 'key' with the
- * specified length 'len' and an optional seed value. It processes the
- * input in blocks and handles any remaining bytes.
- *
- * @param key Pointer to the data to be hashed.
- * @param len The length of the data in bytes.
- * @param seed An initial seed value for the hash computation.
- * @return The resulting 32-bit hash value.
- */
- uint32_t MurmurHash3_32(const void *key, int len, uint32_t seed) {
-    const uint8_t *data = (const uint8_t *)key;
-    const int nblocks = len / 4;
-
-    uint32_t h1 = seed;
-
-    const uint32_t c1 = 0xcc9e2d51;
-    const uint32_t c2 = 0x1b873593;
-
-    // Body: Process blocks of 4 bytes at a time
-    const uint32_t *blocks = (const uint32_t *)(data + nblocks * 4);
-
-    for (int i = -nblocks; i; i++) {
-        uint32_t k1 = blocks[i];
-
-        k1 *= c1;
-        k1 = (k1 << 15) | (k1 >> (32 - 15));
-        k1 *= c2;
-
-        h1 ^= k1;
-        h1 = (h1 << 15) | (h1 >> (32 - 15));
-        h1 = h1 * 5 + 0xe6546b64;
-    }
-
-    // Tail: Process remaining bytes
-    const uint8_t *tail = (const uint8_t *)(data + nblocks * 4);
-
-    uint32_t k1 = 0;
-
-    switch (len & 3) {
-    case 3:
-        k1 ^= tail[2] << 16;
-        break;
-    case 2:
-        k1 ^= tail[1] << 8;
-        break;
-    case 1:
-        k1 ^= tail[0];
-        k1 *= c1;
-        k1 = (k1 << 15) | (k1 >> (32 - 15));
-        k1 *= c2;
-        h1 ^= k1;
-    }
-
-    // Finalization: Mix the hash to ensure the last few bits are fully mixed
-    h1 ^= len;
-
-    /* fmix32 */
-    h1 ^= h1 >> 16;
-    h1 *= 0x85ebca6b;
-    h1 ^= h1 >> 13;
-    h1 *= 0xc2b2ae35;
-    h1 ^= h1 >> 16;
-    return h1;
-}
-
 //////////////////////////////////////////////////////// LCP Core Hashing ///////////////////////////////////////////////////////////
 
 #define UBLOCK_BIT_SIZE 32
@@ -312,27 +242,4 @@ uint32_t hash_core(const struct core* c) {
     }
     
     return hash;
-}
-
-
-uint32_t hash_k_cores(const struct core* cores, int k) {
-    uint32_t h = 0u;
-    for (int i = 0; i < k; ++i) {
-        uint32_t ch = hash_core(&cores[i]);
-        h = h * pow_table[1] + ch;
-    }
-    return h;
-}
-
-uint32_t update_k_cores_hash(uint32_t old_hash, const struct core* old_first, const struct core* new_last, int k) {
-    uint32_t powB = pow_table[k - 1];
-
-    uint32_t first = hash_core(old_first);
-    uint32_t last  = hash_core(new_last);
-
-    old_hash -= first * powB;
-    old_hash *= pow_table[1];
-    old_hash += last;
-
-    return old_hash;
 }

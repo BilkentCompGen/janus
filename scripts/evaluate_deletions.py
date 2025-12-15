@@ -1,292 +1,326 @@
 #!/usr/bin/env python3
 """
-Evaluate deletion detection performance by merging detected deletions
-and comparing against ground truth CNVs.
+Evaluate deletion calls against ground truth.
+
+This script compares predicted deletions (from merged TSV) with ground truth
+deletions (from VCF file) and calculates precision, recall, and F1 score.
 """
 
+import sys
 import argparse
-import pandas as pd
+import re
+from typing import List, Tuple, Set
 from collections import defaultdict
 
 
-def merge_deletions(deletions, merge_distance=1000):
+def parse_vcf(vcf_file: str) -> List[Tuple[str, int, int]]:
     """
-    Merge nearby deletions on the same chromosome.
-    
-    Args:
-        deletions: List of deletion dictionaries with 'chrom', 'start', 'end', 'tumor_samples'
-        merge_distance: Maximum distance between deletions to merge (bp)
+    Parse VCF file and extract deletion intervals.
     
     Returns:
-        List of merged deletions
+        List of (chrom, start, end) tuples for deletions
     """
-    if not deletions:
-        return []
-    
-    # Group by chromosome and tumor sample
-    by_chrom_sample = defaultdict(list)
-    for del_region in deletions:
-        chrom = del_region['chrom']
-        samples = del_region['tumor_samples'].split(',') if isinstance(del_region['tumor_samples'], str) else [del_region['tumor_samples']]
-        for sample in samples:
-            by_chrom_sample[(chrom, sample)].append({
-                'start': del_region['start'],
-                'end': del_region['end'],
-                'sample': sample
-            })
-    
-    merged = []
-    
-    for (chrom, sample), regions in by_chrom_sample.items():
-        # Sort by start position
-        regions = sorted(regions, key=lambda x: x['start'])
-        
-        current = regions[0].copy()
-        
-        for next_region in regions[1:]:
-            # Check if should merge
-            if next_region['start'] <= current['end'] + merge_distance:
-                # Merge: extend current region
-                current['end'] = max(current['end'], next_region['end'])
-            else:
-                # Save current and start new region
-                merged.append({
-                    'chrom': chrom,
-                    'start': current['start'],
-                    'end': current['end'],
-                    'tumor_sample': sample
-                })
-                current = next_region.copy()
-        
-        # Don't forget the last one
-        merged.append({
-            'chrom': chrom,
-            'start': current['start'],
-            'end': current['end'],
-            'tumor_sample': sample
-        })
-    
-    return merged
-
-
-def load_detected_deletions(tsv_file):
-    """Load deletions from pipeline output TSV."""
-    df = pd.read_csv(tsv_file, sep='\t')
-    
-    # Filter for deletions only
-    df = df[df['type'] == 'DEL'].copy()
-    
     deletions = []
-    for _, row in df.iterrows():
-        deletions.append({
-            'chrom': str(row['chrom']),
-            'start': int(row['start']),
-            'end': int(row['end']),
-            'tumor_samples': str(row['tumor_samples'])
-        })
     
-    return deletions
-
-
-def load_ground_truth(tsv_file, parental=None):
-    """Load ground truth deletions (copy == -1) from simulation.
-    
-    Args:
-        tsv_file: Path to ground truth TSV
-        parental: If specified (0 or 1), filter to only that parental haplotype
-    """
-    # Read file, skipping the # in the header
-    with open(tsv_file, 'r') as f:
-        lines = f.readlines()
-    
-    # Fix the header line by removing the leading #
-    if lines and lines[0].startswith('#'):
-        lines[0] = lines[0][1:]  # Remove the # character
-    
-    # Read into pandas
-    from io import StringIO
-    df = pd.read_csv(StringIO(''.join(lines)), sep='\t')
-    
-    # Filter for deletions (copy == -1)
-    df = df[df['copy'] == -1].copy()
-    
-    # Filter by parental if specified
-    if parental is not None:
-        df = df[df['parental'] == parental].copy()
-    
-    deletions = []
-    for _, row in df.iterrows():
-        deletions.append({
-            'chrom': str(row['chr']),
-            'start': int(row['start']),
-            'end': int(row['end']),
-            'tumor_sample': str(row['carrier']),
-            'parental': int(row['parental'])
-        })
-    
-    return deletions
-
-
-def calculate_overlap(region1, region2):
-    """Calculate overlap between two regions."""
-    if region1['chrom'] != region2['chrom']:
-        return 0
-    
-    start = max(region1['start'], region2['start'])
-    end = min(region1['end'], region2['end'])
-    
-    if start >= end:
-        return 0
-    
-    return end - start
-
-
-def reciprocal_overlap(region1, region2):
-    """Calculate reciprocal overlap ratio between two regions."""
-    overlap = calculate_overlap(region1, region2)
-    if overlap == 0:
-        return 0.0
-    
-    len1 = region1['end'] - region1['start']
-    len2 = region2['end'] - region2['start']
-    
-    return min(overlap / len1, overlap / len2)
-
-
-def evaluate_deletions(detected, ground_truth, overlap_threshold=0.5):
-    """
-    Evaluate deletion detection performance.
-    
-    Args:
-        detected: List of detected deletions
-        ground_truth: List of ground truth deletions
-        overlap_threshold: Minimum reciprocal overlap to consider a match
-    
-    Returns:
-        Dictionary with evaluation metrics
-    """
-    # Track which ground truth deletions were detected
-    true_positives = 0
-    false_positives = 0
-    matched_gt = set()
-    
-    # For each detected deletion, check if it matches any ground truth
-    for det in detected:
-        best_match = None
-        best_overlap = 0
-        
-        for i, gt in enumerate(ground_truth):
-            # Only compare same chromosome and same sample
-            if det['chrom'] != gt['chrom']:
-                continue
-            if str(det['tumor_sample']) != str(gt['tumor_sample']):
+    with open(vcf_file, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
                 continue
             
-            overlap = reciprocal_overlap(det, gt)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_match = i
+            fields = line.strip().split('\t')
+            if len(fields) < 8:
+                continue
+            
+            chrom = fields[0]
+            pos = int(fields[1])
+            info = fields[7]
+            
+            # Check if it's a deletion
+            if '<DEL>' not in fields[4]:
+                continue
+            
+            # Extract END from INFO field
+            end_match = re.search(r'END=(\d+)', info)
+            if end_match:
+                end = int(end_match.group(1))
+                deletions.append((chrom, pos, end))
+            else:
+                # If no END, use POS+1 (single base deletion)
+                deletions.append((chrom, pos, pos + 1))
+    
+    return deletions
+
+
+def parse_tsv(tsv_file: str) -> List[Tuple[str, int, int]]:
+    """
+    Parse TSV file and extract deletion intervals.
+    
+    Returns:
+        List of (chrom, start, end) tuples for deletions
+    """
+    deletions = []
+    
+    with open(tsv_file, 'r') as f:
+        header = f.readline()  # Skip header
+        if not header.startswith('type'):
+            raise ValueError("Expected TSV header starting with 'type'")
         
-        if best_overlap >= overlap_threshold:
-            true_positives += 1
-            matched_gt.add(best_match)
-        else:
-            false_positives += 1
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            
+            fields = line.split('\t')
+            if len(fields) < 4:
+                continue
+            
+            type_str, chrom, start_str, end_str = fields[0], fields[1], fields[2], fields[3]
+            
+            if type_str == "DEL":
+                try:
+                    start = int(start_str)
+                    end = int(end_str)
+                    deletions.append((chrom, start, end))
+                except ValueError:
+                    print(f"Warning: Invalid coordinates in line: {line}", file=sys.stderr)
+                    continue
     
-    false_negatives = len(ground_truth) - len(matched_gt)
+    return deletions
+
+
+def calculate_overlap(interval1: Tuple[int, int], interval2: Tuple[int, int]) -> int:
+    """Calculate overlap length between two intervals."""
+    start1, end1 = interval1
+    start2, end2 = interval2
     
-    # Calculate metrics
-    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    overlap_start = max(start1, start2)
+    overlap_end = min(end1, end2)
     
-    return {
-        'true_positives': true_positives,
-        'false_positives': false_positives,
-        'false_negatives': false_negatives,
-        'detected_total': len(detected),
-        'ground_truth_total': len(ground_truth),
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1
-    }
+    if overlap_start < overlap_end:
+        return overlap_end - overlap_start
+    return 0
+
+
+def calculate_intersection_over_union(interval1: Tuple[int, int], interval2: Tuple[int, int]) -> float:
+    """Calculate Intersection over Union (IoU) for two intervals."""
+    start1, end1 = interval1
+    start2, end2 = interval2
+    
+    intersection = calculate_overlap(interval1, interval2)
+    
+    union_start = min(start1, start2)
+    union_end = max(end1, end2)
+    union = union_end - union_start
+    
+    if union == 0:
+        return 0.0
+    
+    return intersection / union
+
+
+def match_deletions(
+    predicted: List[Tuple[str, int, int]],
+    ground_truth: List[Tuple[str, int, int]],
+    min_overlap_ratio: float = 0.5,
+    min_iou: float = 0.0
+) -> Tuple[List[Tuple], List[Tuple], List[Tuple], List[Tuple]]:
+    """
+    Match predicted deletions with ground truth deletions.
+    
+    Args:
+        predicted: List of (chrom, start, end) for predicted deletions
+        ground_truth: List of (chrom, start, end) for ground truth deletions
+        min_overlap_ratio: Minimum overlap ratio to consider a match (default: 0.5)
+        min_iou: Minimum IoU to consider a match (default: 0.0, i.e., any overlap)
+    
+    Returns:
+        (true_positives, false_positives, false_negatives, matched_pairs)
+    """
+    # Group by chromosome
+    pred_by_chrom = defaultdict(list)
+    gt_by_chrom = defaultdict(list)
+    
+    for chrom, start, end in predicted:
+        pred_by_chrom[chrom].append((start, end))
+    
+    for chrom, start, end in ground_truth:
+        gt_by_chrom[chrom].append((start, end))
+    
+    true_positives = []
+    false_positives = []
+    false_negatives = []
+    matched_pairs = []
+    
+    # Track which ground truth deletions have been matched
+    gt_matched = set()
+    
+    # For each predicted deletion, find best matching ground truth
+    for pred_chrom, pred_intervals in pred_by_chrom.items():
+        gt_intervals = gt_by_chrom.get(pred_chrom, [])
+        
+        for pred_start, pred_end in pred_intervals:
+            pred_interval = (pred_start, pred_end)
+            best_match = None
+            best_iou = 0.0
+            best_overlap_ratio = 0.0
+            best_gt_idx = -1
+            
+            for idx, (gt_start, gt_end) in enumerate(gt_intervals):
+                if idx in gt_matched:
+                    continue
+                
+                gt_interval = (gt_start, gt_end)
+                iou = calculate_intersection_over_union(pred_interval, gt_interval)
+                overlap = calculate_overlap(pred_interval, gt_interval)
+                
+                # Calculate overlap ratio relative to both intervals
+                pred_len = pred_end - pred_start
+                gt_len = gt_end - gt_start
+                overlap_ratio_pred = overlap / pred_len if pred_len > 0 else 0
+                overlap_ratio_gt = overlap / gt_len if gt_len > 0 else 0
+                overlap_ratio = min(overlap_ratio_pred, overlap_ratio_gt)
+                
+                if iou >= min_iou and overlap_ratio >= min_overlap_ratio:
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_overlap_ratio = overlap_ratio
+                        best_match = (gt_start, gt_end)
+                        best_gt_idx = idx
+            
+            if best_match is not None:
+                true_positives.append((pred_chrom, pred_start, pred_end))
+                matched_pairs.append((
+                    (pred_chrom, pred_start, pred_end),
+                    (pred_chrom, best_match[0], best_match[1]),
+                    best_iou,
+                    best_overlap_ratio
+                ))
+                gt_matched.add(best_gt_idx)
+            else:
+                false_positives.append((pred_chrom, pred_start, pred_end))
+    
+    # Find unmatched ground truth deletions
+    for chrom, gt_intervals in gt_by_chrom.items():
+        for idx, (gt_start, gt_end) in enumerate(gt_intervals):
+            if idx not in gt_matched:
+                false_negatives.append((chrom, gt_start, gt_end))
+    
+    return true_positives, false_positives, false_negatives, matched_pairs
+
+
+def calculate_metrics(tp: int, fp: int, fn: int) -> Tuple[float, float, float]:
+    """Calculate precision, recall, and F1 score."""
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    
+    return precision, recall, f1
+
+
+def print_detailed_report(
+    matched_pairs: List[Tuple],
+    false_positives: List[Tuple],
+    false_negatives: List[Tuple],
+    output_file: str = None
+):
+    """Print detailed comparison report."""
+    out = open(output_file, 'w') if output_file else sys.stdout
+    
+    out.write("=" * 80 + "\n")
+    out.write("DETAILED DELETION COMPARISON REPORT\n")
+    out.write("=" * 80 + "\n\n")
+    
+    # Matched deletions
+    out.write(f"MATCHED DELETIONS ({len(matched_pairs)}):\n")
+    out.write("-" * 80 + "\n")
+    out.write(f"{'Predicted':<30} {'Ground Truth':<30} {'IoU':<10} {'Overlap Ratio':<15}\n")
+    out.write("-" * 80 + "\n")
+    
+    for pred, gt, iou, overlap_ratio in sorted(matched_pairs, key=lambda x: (x[0][0], x[0][1])):
+        pred_str = f"{pred[0]}:{pred[1]}-{pred[2]}"
+        gt_str = f"{gt[0]}:{gt[1]}-{gt[2]}"
+        out.write(f"{pred_str:<30} {gt_str:<30} {iou:<10.3f} {overlap_ratio:<15.3f}\n")
+    
+    out.write("\n")
+    
+    # False positives
+    if false_positives:
+        out.write(f"FALSE POSITIVES ({len(false_positives)}):\n")
+        out.write("-" * 80 + "\n")
+        for chrom, start, end in sorted(false_positives, key=lambda x: (x[0], x[1])):
+            out.write(f"{chrom}:{start}-{end}\n")
+        out.write("\n")
+    
+    # False negatives
+    if false_negatives:
+        out.write(f"FALSE NEGATIVES ({len(false_negatives)}):\n")
+        out.write("-" * 80 + "\n")
+        for chrom, start, end in sorted(false_negatives, key=lambda x: (x[0], x[1])):
+            out.write(f"{chrom}:{start}-{end}\n")
+        out.write("\n")
+    
+    if output_file:
+        out.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate deletion detection performance')
-    parser.add_argument('experiment', help='Experiment name (e.g., trial2)')
-    parser.add_argument('--merge-distance', type=int, default=1000, help='Maximum distance to merge deletions (bp, default: 1000)')
-    parser.add_argument('--overlap-threshold', type=float, default=0.5, help='Minimum reciprocal overlap for a match (default: 0.5)')
-    parser.add_argument('--chrom', help='Filter to specific chromosome (e.g., 1)')
-    parser.add_argument('--parental', type=int, choices=[0, 1], default=0, help='Filter ground truth to parental haplotype (default: 0 for parental_0 only)')
-    parser.add_argument('--output', '-o', help='Output file for merged deletions (optional)')
+    parser = argparse.ArgumentParser(
+        description="Evaluate deletion calls against ground truth",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --vcf simulation/sim.vcf --tsv outputs/tsv/d4_merged.tsv
+  %(prog)s --vcf simulation/sim.vcf --tsv outputs/tsv/d4_merged.tsv --min-overlap 0.8 --report report.txt
+        """
+    )
+    parser.add_argument('--vcf', required=True, help='Ground truth VCF file')
+    parser.add_argument('--tsv', required=True, help='Predicted deletions TSV file (merged)')
+    parser.add_argument('--min-overlap', type=float, default=0.5,
+                        help='Minimum overlap ratio to consider a match (default: 0.5)')
+    parser.add_argument('--min-iou', type=float, default=0.0,
+                        help='Minimum IoU to consider a match (default: 0.0)')
+    parser.add_argument('--report', help='Output file for detailed report (optional)')
     
     args = parser.parse_args()
     
-    # Construct paths
-    detected_tsv = f"output/tsv/{args.experiment}.tsv"
-    ground_truth_tsv = "simulation/ground_truth_cnvs.tsv"
+    print("Reading ground truth from VCF...", file=sys.stderr)
+    ground_truth = parse_vcf(args.vcf)
+    print(f"Found {len(ground_truth)} ground truth deletions", file=sys.stderr)
     
-    print(f"Loading detected deletions from {detected_tsv}...")
-    detected = load_detected_deletions(detected_tsv)
-    print(f"  Loaded {len(detected)} raw deletions")
+    print("Reading predictions from TSV...", file=sys.stderr)
+    predicted = parse_tsv(args.tsv)
+    print(f"Found {len(predicted)} predicted deletions", file=sys.stderr)
     
-    print(f"\nMerging deletions (merge distance: {args.merge_distance} bp)...")
-    merged = merge_deletions(detected, merge_distance=args.merge_distance)
-    print(f"  After merging: {len(merged)} deletions")
+    print("Matching deletions...", file=sys.stderr)
+    tp, fp, fn, matched_pairs = match_deletions(
+        predicted, ground_truth,
+        min_overlap_ratio=args.min_overlap,
+        min_iou=args.min_iou
+    )
     
-    # Filter by chromosome if specified
-    if args.chrom:
-        merged = [d for d in merged if d['chrom'] == args.chrom]
-        print(f"  After filtering to chr{args.chrom}: {len(merged)} deletions")
+    precision, recall, f1 = calculate_metrics(len(tp), len(fp), len(fn))
     
-    if args.output:
-        # Save merged deletions
-        df_merged = pd.DataFrame(merged)
-        df_merged.to_csv(args.output, sep='\t', index=False)
-        print(f"  Saved merged deletions to {args.output}")
+    # Print summary
+    print("\n" + "=" * 80)
+    print("EVALUATION SUMMARY")
+    print("=" * 80)
+    print(f"Ground Truth Deletions: {len(ground_truth)}")
+    print(f"Predicted Deletions:    {len(predicted)}")
+    print(f"\nTrue Positives (TP):    {len(tp)}")
+    print(f"False Positives (FP):   {len(fp)}")
+    print(f"False Negatives (FN):   {len(fn)}")
+    print(f"\nPrecision:              {precision:.4f} ({len(tp)}/{len(tp) + len(fp)})")
+    print(f"Recall:                 {recall:.4f} ({len(tp)}/{len(tp) + len(fn)})")
+    print(f"F1 Score:               {f1:.4f}")
+    print("=" * 80)
     
-    print(f"\nLoading ground truth from {ground_truth_tsv} (parental={args.parental})...")
-    ground_truth = load_ground_truth(ground_truth_tsv, parental=args.parental)
-    print(f"  Loaded {len(ground_truth)} ground truth deletions (parental={args.parental})")
-    
-    # Filter by chromosome if specified
-    if args.chrom:
-        ground_truth = [d for d in ground_truth if d['chrom'] == args.chrom]
-        print(f"  After filtering to chr{args.chrom}: {len(ground_truth)} ground truth deletions")
-    
-    # Debug: Show sample data and sample distribution
-    if merged:
-        print(f"\n[DEBUG] Sample detected deletion:")
-        print(f"  {merged[0]}")
-        detected_samples = set(d['tumor_sample'] for d in merged)
-        print(f"[DEBUG] Detected samples: {sorted(detected_samples)}")
-        print(f"[DEBUG] Detected count by sample: {[(s, sum(1 for d in merged if d['tumor_sample'] == s)) for s in sorted(detected_samples)]}")
-    
-    if ground_truth:
-        print(f"\n[DEBUG] Sample ground truth deletion:")
-        print(f"  {ground_truth[0]}")
-        gt_samples = set(d['tumor_sample'] for d in ground_truth)
-        print(f"[DEBUG] Ground truth samples: {sorted(gt_samples)}")
-        print(f"[DEBUG] Ground truth count by sample: {[(s, sum(1 for d in ground_truth if d['tumor_sample'] == s)) for s in sorted(gt_samples)]}")
-    
-    print(f"\nEvaluating (overlap threshold: {args.overlap_threshold})...")
-    metrics = evaluate_deletions(merged, ground_truth, overlap_threshold=args.overlap_threshold)
-    
-    print("\n" + "="*60)
-    print(f"EVALUATION RESULTS - {args.experiment}")
-    print("="*60)
-    print(f"Ground truth deletions: {metrics['ground_truth_total']}")
-    print(f"Detected deletions:     {metrics['detected_total']}")
-    print()
-    print(f"True Positives:  {metrics['true_positives']}")
-    print(f"False Positives: {metrics['false_positives']}")
-    print(f"False Negatives: {metrics['false_negatives']}")
-    print()
-    print(f"Precision: {metrics['precision']:.4f}")
-    print(f"Recall:    {metrics['recall']:.4f}")
-    print(f"F1 Score:  {metrics['f1_score']:.4f}")
-    print("="*60)
+    # Print detailed report if requested
+    if args.report:
+        print(f"\nWriting detailed report to {args.report}...", file=sys.stderr)
+        print_detailed_report(matched_pairs, fp, fn, args.report)
+        print("Done!", file=sys.stderr)
+    elif len(matched_pairs) <= 50:  # Only print details if not too many
+        print_detailed_report(matched_pairs, fp, fn)
 
 
 if __name__ == '__main__':
