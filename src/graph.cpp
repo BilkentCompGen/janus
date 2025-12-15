@@ -79,7 +79,7 @@ void LCPGraph::exportGFA(const std::string& output_dir, const std::string& exper
                 }
             }
         }
-        char color_buf[8];
+        char color_buf[9];  // "#" + 6 hex digits + null terminator
         snprintf(color_buf, sizeof(color_buf), "#%06X", c);
         csv_out << id << "," << color_buf << "\n";
     }

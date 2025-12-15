@@ -27,19 +27,19 @@ def intervals_overlap(start1: int, end1: int, start2: int, end2: int) -> bool:
     return start1 < end2 and end1 > start2
 
 
-def load_collision_positions(collision_file: Optional[str]) -> Tuple[Set[Tuple[str, int, int]], Dict[Tuple[str, int, int], int]]:
+def load_collision_positions(collision_file: Optional[str]) -> Tuple[Dict[str, List[Tuple[int, int, int]]], Dict[Tuple[str, int, int], int]]:
     """
-    Load collision positions from TSV file.
+    Load collision positions from TSV file, indexed by chromosome.
     
     Returns:
-        (collision_positions_set, position_to_hash_map)
-        collision_positions_set: set of (chrom, start, end) tuples
+        (collision_by_chrom, position_to_hash_map)
+        collision_by_chrom: dict from chrom to list of (start, end, hash_decimal) tuples, sorted by start
         position_to_hash_map: map from (chrom, start, end) to hash_decimal
     """
     if not collision_file:
-        return set(), {}
+        return {}, {}
     
-    collision_positions = set()
+    collision_by_chrom = defaultdict(list)  # chrom -> [(start, end, hash), ...]
     position_to_hash = {}
     
     print(f"Reading collision file {collision_file}...", file=sys.stderr)
@@ -68,18 +68,23 @@ def load_collision_positions(collision_file: Optional[str]) -> Tuple[Set[Tuple[s
                 # Only track positions from hashes with collisions (count > 1)
                 if collision_count > 1:
                     pos = (chrom, start, end)
-                    collision_positions.add(pos)
+                    collision_by_chrom[chrom].append((start, end, hash_decimal))
                     position_to_hash[pos] = hash_decimal
             except ValueError:
                 continue
     
-    print(f"Loaded {len(collision_positions)} collision positions from {len(set(position_to_hash.values()))} unique hashes", file=sys.stderr)
-    return collision_positions, position_to_hash
+    # Sort collision positions by start for each chromosome (for efficient lookup)
+    for chrom in collision_by_chrom:
+        collision_by_chrom[chrom].sort(key=lambda x: x[0])
+    
+    total_collisions = sum(len(positions) for positions in collision_by_chrom.values())
+    print(f"Loaded {total_collisions} collision positions from {len(set(position_to_hash.values()))} unique hashes", file=sys.stderr)
+    return dict(collision_by_chrom), position_to_hash
 
 
 def filter_collision_deletions(
     deletions: List[Tuple[int, int, int, str]],  # (start, end, count, chrom)
-    collision_positions: Set[Tuple[str, int, int]],
+    collision_by_chrom: Dict[str, List[Tuple[int, int, int]]],  # chrom -> [(start, end, hash), ...]
     position_to_hash: Dict[Tuple[str, int, int], int]
 ) -> Tuple[List[Tuple[int, int, int, str]], List[Tuple[int, int, int, str]]]:
     """
@@ -91,7 +96,7 @@ def filter_collision_deletions(
     Returns:
         (kept_deletions, discarded_deletions)
     """
-    if not collision_positions:
+    if not collision_by_chrom:
         # No collisions to filter, return all as kept
         return deletions, []
     
@@ -104,31 +109,37 @@ def filter_collision_deletions(
     for chrom in deletions_by_chrom:
         deletions_by_chrom[chrom].sort(key=lambda x: x[0])
     
-    # Track which hashes should be kept (have neighbors) or discarded (no neighbors)
-    hash_decisions = {}  # hash_decimal -> True (keep) or False (discard) or None (not decided)
+    # Build exact match lookup for fast checking
+    exact_collision_positions = set(position_to_hash.keys())
     
-    # Check each deletion for neighbors
+    # Track which hashes should be kept (have neighbors) or discarded (no neighbors)
+    hash_decisions = {}  # hash_decimal -> True (keep) or False (discard)
+    
+    # Check each deletion for neighbors (only check collisions from same chromosome)
     for chrom, chrom_deletions in deletions_by_chrom.items():
+        chrom_collisions = collision_by_chrom.get(chrom, [])
+        
         for i, (start, end, count, _) in enumerate(chrom_deletions):
             pos = (chrom, start, end)
             
-            # Check if this deletion overlaps a collision position
-            overlaps_collision = False
-            collision_hash = None
+            # Check exact match first (fast)
+            collision_hash = position_to_hash.get(pos)
             
-            # Check exact match first
-            if pos in collision_positions:
-                overlaps_collision = True
-                collision_hash = position_to_hash.get(pos)
-            else:
-                # Check if it overlaps any collision position (fuzzy match)
-                for coll_chrom, coll_start, coll_end in collision_positions:
-                    if coll_chrom == chrom and intervals_overlap(start, end, coll_start, coll_end):
-                        overlaps_collision = True
-                        collision_hash = position_to_hash.get((coll_chrom, coll_start, coll_end))
+            # If no exact match, check overlap with sorted collision list (only nearby ones)
+            if collision_hash is None and chrom_collisions:
+                # Binary search for nearby collisions (only check a small window)
+                # Since collisions are sorted, we can do a limited search
+                for coll_start, coll_end, coll_hash in chrom_collisions:
+                    # Early termination if we've passed the relevant region
+                    if coll_end < start:
+                        continue
+                    if coll_start > end:
+                        break
+                    if intervals_overlap(start, end, coll_start, coll_end):
+                        collision_hash = coll_hash
                         break
             
-            if not overlaps_collision or collision_hash is None:
+            if collision_hash is None:
                 continue
             
             # Check for neighbors (other deletions that overlap with this one)
@@ -153,22 +164,23 @@ def filter_collision_deletions(
     for start, end, count, chrom in deletions:
         pos = (chrom, start, end)
         
-        # Check if this position is a collision
-        is_collision = False
-        collision_hash = None
+        # Check if this position overlaps a collision (exact match first, then overlap)
+        collision_hash = position_to_hash.get(pos)
         
-        if pos in collision_positions:
-            is_collision = True
-            collision_hash = position_to_hash.get(pos)
-        else:
-            # Check fuzzy overlap
-            for coll_chrom, coll_start, coll_end in collision_positions:
-                if coll_chrom == chrom and intervals_overlap(start, end, coll_start, coll_end):
-                    is_collision = True
-                    collision_hash = position_to_hash.get((coll_chrom, coll_start, coll_end))
+        # If no exact match, check overlap with sorted collision list
+        if collision_hash is None:
+            chrom_collisions = collision_by_chrom.get(chrom, [])
+            for coll_start, coll_end, coll_hash in chrom_collisions:
+                # Early termination
+                if coll_end < start:
+                    continue
+                if coll_start > end:
+                    break
+                if intervals_overlap(start, end, coll_start, coll_end):
+                    collision_hash = coll_hash
                     break
         
-        if is_collision and collision_hash is not None:
+        if collision_hash is not None:
             if hash_decisions.get(collision_hash, False):
                 kept.append((start, end, count, chrom))
             else:
@@ -213,11 +225,11 @@ def merge_intervals(intervals: List[Tuple[int, int, int]]) -> List[Tuple[int, in
     return merged
 
 
-def process_tsv(input_file: str, output_file: str, collision_file: Optional[str] = None, discarded_file: Optional[str] = None):
+def process_tsv(input_file: str, output_file: str, collision_file: Optional[str] = None, discarded_file: Optional[str] = None, min_length: int = 0, min_count: int = 0):
     """Process TSV file and merge overlapping deletions with optional collision filtering."""
     
     # Load collision positions if provided
-    collision_positions, position_to_hash = load_collision_positions(collision_file)
+    collision_by_chrom, position_to_hash = load_collision_positions(collision_file)
     
     # Group intervals by (chrom, tumor_samples)
     groups = defaultdict(list)
@@ -270,9 +282,9 @@ def process_tsv(input_file: str, output_file: str, collision_file: Optional[str]
         intervals_for_filter = [(start, end, count, chrom) for start, end, count, chrom in intervals]
         
         # Apply collision filtering if collisions are provided
-        if collision_positions:
+        if collision_by_chrom:
             kept_intervals, discarded_intervals = filter_collision_deletions(
-                intervals_for_filter, collision_positions, position_to_hash
+                intervals_for_filter, collision_by_chrom, position_to_hash
             )
             total_discarded += len(discarded_intervals)
             
@@ -309,21 +321,34 @@ def process_tsv(input_file: str, output_file: str, collision_file: Optional[str]
     merged_results.sort(key=sort_key)
     discarded_results.sort(key=sort_key)
     
+    # Apply length and count filtering
+    filtered_by_length_count = []
+    for type_str, chrom, start, end, samples, count in merged_results:
+        length = end - start
+        if length >= min_length and count >= min_count:
+            filtered_by_length_count.append((type_str, chrom, start, end, samples, count))
+    
+    total_filtered = len(filtered_by_length_count)
+    
     # Print statistics
     print(f"Merged {total_before} intervals into {total_after_merge} intervals", file=sys.stderr)
-    if collision_positions:
+    if collision_by_chrom:
         print(f"After collision filtering: {total_after_filter} kept, {total_discarded} discarded", file=sys.stderr)
-        print(f"Filtering removed {100 * total_discarded / total_before:.1f}% of intervals", file=sys.stderr)
-    print(f"Final reduction: {total_before - total_after_filter} intervals ({100 * (total_before - total_after_filter) / total_before:.1f}%)", file=sys.stderr)
+        print(f"Collision filtering removed {100 * total_discarded / total_before:.1f}% of intervals", file=sys.stderr)
+    if min_length > 0 or min_count > 0:
+        length_filtered = len(merged_results) - total_filtered
+        print(f"After length/count filtering (min_length={min_length}bp, min_count={min_count}): {total_filtered} kept, {length_filtered} filtered", file=sys.stderr)
+        print(f"Length/count filtering removed {100 * length_filtered / len(merged_results):.1f}% of merged intervals", file=sys.stderr)
+    print(f"Final reduction: {total_before - total_filtered} intervals ({100 * (total_before - total_filtered) / total_before:.1f}%)", file=sys.stderr)
     
-    # Write output
+    # Write output (use filtered results)
     print(f"Writing merged results to {output_file}...", file=sys.stderr)
     with open(output_file, 'w') as f:
         f.write(header + '\n')
-        for type_str, chrom, start, end, samples, count in merged_results:
+        for type_str, chrom, start, end, samples, count in filtered_by_length_count:
             f.write(f"{type_str}\t{chrom}\t{start}\t{end}\t{samples}\t{count}\n")
     
-    print(f"Done! Wrote {len(merged_results)} merged intervals.", file=sys.stderr)
+    print(f"Done! Wrote {total_filtered} merged intervals.", file=sys.stderr)
     
     # Write discarded deletions if requested
     if discarded_file and discarded_results:
@@ -349,11 +374,13 @@ Examples:
     parser.add_argument('output', help='Output TSV file')
     parser.add_argument('--collisions', help='Collision TSV file (optional, for filtering)')
     parser.add_argument('--discarded', help='Output file for discarded deletions (optional)')
+    parser.add_argument('--min-length', type=int, default=2000, help='Minimum deletion length in bp (default: 2000)')
+    parser.add_argument('--min-count', type=int, default=0, help='Minimum supporting call count (default: 0)')
     
     args = parser.parse_args()
     
     try:
-        process_tsv(args.input, args.output, args.collisions, args.discarded)
+        process_tsv(args.input, args.output, args.collisions, args.discarded, args.min_length, args.min_count)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
