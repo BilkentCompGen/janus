@@ -5,37 +5,24 @@ LDFLAGS = -lz -llcptools
 TARGET = svp
 SRCDIR = src
 OBJDIR = obj
-CSVFILES = *.csv
-GFAFILES = *.gfa
-TSVFILES = *.tsv
+LIBDIR = lib
 
 SOURCES = main.cpp $(wildcard $(SRCDIR)/*.cpp)
 OBJECTS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(SOURCES)))
 
-.PHONY: all clean profile
+.PHONY: all clean
 
 all: $(TARGET)
-
-profile: CXXFLAGS += -g
-profile: $(TARGET)
 
 $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 VPATH = .:$(SRCDIR)
 
+# Pattern rule for source files
 $(OBJDIR)/%.o: %.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SRCDIR)/*.hpp)
 	@mkdir -p $(OBJDIR)
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -I$(LIBDIR)/lcptools -c -o $@ $<
 
 clean:
-	rm -rf $(OBJDIR) $(TARGET) $(CSVFILES) $(GFAFILES) $(TSVFILES) output
-
-images:
-	./scripts/generate_images.sh
-
-eval:
-	python3 scripts/evaluate_deletions.py
-
-coverage:
-	python3 scripts/evaluate_coverage.py
+	rm -rf $(OBJDIR) $(TARGET) *.tsv outputs
