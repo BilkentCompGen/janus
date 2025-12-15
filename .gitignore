@@ -9,3 +9,4 @@ tool
 simulation
 outputs
 lib
+__pycache__
