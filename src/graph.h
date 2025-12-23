@@ -69,7 +69,7 @@ public:
         return (it != node_positions.end()) ? it->second : empty;
     }
     
-    void compressGraph();
+    void compressGraph(std::unordered_set<node_hash_t>* deletion_nodes = nullptr);
 };
 
 #endif // GRAPH_H
