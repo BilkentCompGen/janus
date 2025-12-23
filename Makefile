@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++20 -O3 -g -Wall -Wextra -pedantic
-LDFLAGS = -lz -llcptools
+LDFLAGS = -lz -llcptools -lhts
 
 TARGET = svp
 SRCDIR = src

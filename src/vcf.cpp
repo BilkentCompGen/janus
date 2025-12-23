@@ -1,105 +1,95 @@
 #include "vcf.h"
-#include "sv.h"
-#include <fstream>
-#include <sstream>
-#include <regex>
+#include "graph.h"
+
+#include <htslib/vcf.h>
+#include <htslib/hts.h>
+
+#include <unordered_set>
+#include <vector>
+#include <string>
+#include <algorithm>
+
 
 std::vector<DeletionRegion> parseVCFDeletions(const std::string& vcf_path) {
     std::vector<DeletionRegion> deletions;
-    std::ifstream vcf_file(vcf_path);
-    
-    if (!vcf_file.is_open()) {
+
+    htsFile* fp = bcf_open(vcf_path.c_str(), "r");
+    if (!fp) return deletions;
+
+    bcf_hdr_t* hdr = bcf_hdr_read(fp);
+    if (!hdr) {
+        bcf_close(fp);
         return deletions;
     }
-    
-    std::string line;
-    std::regex end_regex(R"(END=(\d+))");
-    
-    while (std::getline(vcf_file, line)) {
-        // Skip header lines
-        if (line.empty() || line[0] == '#') {
+
+    bcf1_t* rec = bcf_init();
+
+    while (bcf_read(fp, hdr, rec) == 0) {
+        bcf_unpack(rec, BCF_UN_INFO);
+
+        char* svtype = nullptr;
+        int n_svtype = 0;
+        if (bcf_get_info_string(hdr, rec, "SVTYPE", &svtype, &n_svtype) < 0) continue;
+
+        if (std::string(svtype) != "DEL") {
+            free(svtype);
             continue;
         }
+        free(svtype);
+
+        int64_t* end_pos_ptr = nullptr;
+        int n_end = 0;
+        if (bcf_get_info_int64(hdr, rec, "END", &end_pos_ptr, &n_end) < 0 || n_end == 0) continue;
         
-        // Parse VCF line: CHROM POS ID REF ALT QUAL FILTER INFO ...
-        std::istringstream iss(line);
-        std::string chrom, pos, id, ref, alt, qual, filter, info;
-        
-        if (!(iss >> chrom >> pos >> id >> ref >> alt >> qual >> filter >> info)) {
-            continue;
-        }
-        
-        // Only process deletions
-        if (alt != "<DEL>") {
-            continue;
-        }
-        
-        // Extract END from INFO field
-        std::smatch match;
-        if (!std::regex_search(info, match, end_regex)) {
-            continue;
-        }
-        
-        uint64_t start_pos = std::stoull(pos);
-        uint64_t end_pos = std::stoull(match[1].str());
-        
-        if (end_pos <= start_pos) {
-            continue;
-        }
-        
-        // Remove 'chr' prefix if present
-        if (chrom.size() > 3 && chrom.substr(0, 3) == "chr") {
-            chrom = chrom.substr(3);
-        }
-        
-        DeletionRegion del;
-        del.chrom = chrom;
-        del.start = start_pos;
-        del.end = end_pos;
-        deletions.push_back(del);
+        int64_t end_pos = end_pos_ptr[0];
+        free(end_pos_ptr);
+
+        uint64_t start_pos = static_cast<uint64_t>(rec->pos) + 1;
+        if (end_pos <= static_cast<int64_t>(start_pos)) continue;
+
+        std::string chrom = bcf_hdr_id2name(hdr, rec->rid);
+        if (chrom.rfind("chr", 0) == 0) chrom = chrom.substr(3);
+
+        deletions.push_back({chrom, start_pos, static_cast<uint64_t>(end_pos)});
     }
-    
+
+    bcf_destroy(rec);
+    bcf_hdr_destroy(hdr);
+    bcf_close(fp);
+
     return deletions;
 }
 
-std::unordered_set<node_hash_t> findDeletionNodeHashes(
-    const std::vector<DeletionRegion>& deletions,
-    const LinearReference& reference) {
-    std::unordered_set<node_hash_t> deletion_hashes;
+std::unordered_set<node_hash> findDeletionNodeHashes(const std::vector<DeletionRegion>& deletions, const LCPGraph& graph) {
+    std::unordered_set<node_hash> deletion_hashes;
     
+    std::unordered_map<std::string, std::vector<DeletionRegion>> deletions_by_chrom;
     for (const auto& del : deletions) {
-        // Find all core hashes that overlap with this deletion region
-        for (size_t i = 0; i < reference.size(); ++i) {
-            std::string core_chrom = reference.getChrom(i);
-            uint64_t core_start = reference.getStart(i);
-            uint64_t core_end = reference.getEnd(i);
+        deletions_by_chrom[del.chrom].push_back(del);
+    }
+
+    for (const auto& [hash, node] : graph.nodes) {
+        auto positions = graph.getPositions(hash, 0);
+        
+        for (const auto& pos : positions) {
+            std::string core_chrom = pos.chrom;
+            if (core_chrom.rfind("chr", 0) == 0) core_chrom = core_chrom.substr(3);
             
-            // Check if chromosome matches
-            std::string del_chrom = del.chrom;
-            if (core_chrom.size() > 3 && core_chrom.substr(0, 3) == "chr") {
-                core_chrom = core_chrom.substr(3);
-            }
-            if (del_chrom.size() > 3 && del_chrom.substr(0, 3) == "chr") {
-                del_chrom = del_chrom.substr(3);
-            }
+            auto chrom_it = deletions_by_chrom.find(core_chrom);
+            if (chrom_it == deletions_by_chrom.end()) continue;
             
-            if (core_chrom != del_chrom) {
-                continue;
-            }
-            
-            // Check if core overlaps with deletion region
-            // Overlap: max(0, min(core_end, del.end) - max(core_start, del.start))
-            uint64_t overlap_start = std::max(core_start, del.start);
-            uint64_t overlap_end = std::min(core_end, del.end);
-            
-            if (overlap_end > overlap_start) {
-                // Core overlaps with deletion, add its hash
-                node_hash_t hash = reference.hashes[i];
-                deletion_hashes.insert(hash);
+            for (const auto& del : chrom_it->second) {
+                uint64_t overlap_start = std::max(pos.start, del.start);
+                uint64_t overlap_end = std::min(pos.end, del.end);
+                
+                if (overlap_end > overlap_start) {
+                    deletion_hashes.insert(hash);
+                    goto next_node;
+                }
             }
         }
+        next_node:;
     }
-    
+
     return deletion_hashes;
 }
-

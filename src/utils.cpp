@@ -357,3 +357,31 @@ uint64_t hash_core(const struct core* c, const char* sequence) {
     uint64_t hash = MurmurHash3_64(c->bit_rep, byte_len, (uint64_t)c->label);
     return hash;
 }
+
+//////////////////////////////////////////////////////// TSV Export ///////////////////////////////////////////////////////////
+
+void writeTSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers) {
+    std::ofstream out(filename);
+    if (!out) throw std::runtime_error("Could not open file for writing: " + filename);
+    
+    size_t max_cols = 0;
+    for (const auto& [key, vec] : data) max_cols = std::max(max_cols, vec.size());
+    
+    if (!headers.empty()) {
+        for (size_t i = 0; i < headers.size(); i++) {
+            if (i > 0) out << "\t";
+            out << headers[i];
+        }
+        out << "\n";
+    } else throw std::runtime_error("Headers are required for TSV export");
+    
+    for (const auto& [key, vec] : data) {
+        out << key;
+        for (size_t i = 0; i < max_cols; i++) {
+            out << "\t";
+            if (i < vec.size()) out << vec[i];
+            else out << "";
+        }
+        out << "\n";
+    }
+}
