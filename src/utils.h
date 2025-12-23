@@ -77,6 +77,6 @@ private:
     void print_help();
 };
 
-uint32_t hash_core(const struct core* c);
+uint64_t hash_core(const struct core* c, const char* sequence = nullptr);
 
 #endif // UTILS_H

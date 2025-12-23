@@ -41,6 +41,7 @@ int main(int argc, char** argv) {
     fs::create_directories(output_dir);
     main_logger.debug("Output directory: " + output_dir.string());
 
+    // Graph and reference
     LCPGraph graph;
     LinearReference reference;
     CollisionTracker collision_tracker;
@@ -69,19 +70,21 @@ int main(int argc, char** argv) {
         processed_count++;
         main_logger.debug("Processing chromosome: " + chrom);
 
+        // Store global sequence for this chromosome
+        collision_tracker.setSequence(chrom, pair.second);
+
         struct lps lcp_string;
         init_lps(&lcp_string, pair.second.c_str(), pair.second.size());
         lps_deepen(&lcp_string, depth);
-        graph.addString(&lcp_string, 0);
+        graph.addString(&lcp_string, 0, pair.second.c_str());
 
         for (int j = 0; j < lcp_string.size; ++j) {
-            ublock hash = hash_core(&lcp_string.cores[j]);
+            node_hash_t hash = hash_core(&lcp_string.cores[j], pair.second.c_str());
             uint64_t start = lcp_string.cores[j].start;
             uint64_t end = lcp_string.cores[j].end;
             reference.addCore(hash, chrom, start, end);
             collision_tracker.addHash(hash, chrom, start, end);
         }
-
         free_lps(&lcp_string);
     }
     main_logger.debug("Processed " + to_string(processed_count) + " reference sequences (skipped " + to_string(skipped_count) + " non-chr19 sequences)");
@@ -121,7 +124,7 @@ int main(int argc, char** argv) {
         struct lps lcp_string;
         init_lps(&lcp_string, pair.second.c_str(), pair.second.size());
         lps_deepen(&lcp_string, depth);
-        graph.addString(&lcp_string, 1);
+        graph.addString(&lcp_string, 1, pair.second.c_str());
         free_lps(&lcp_string);
     }
     main_logger.debug("Processed " + to_string(processed_count) + " tumor sequences (skipped " + to_string(skipped_count) + " non-chr19 sequences)");
@@ -129,9 +132,32 @@ int main(int argc, char** argv) {
     int num_tumor_samples = 1;
     main_logger.debug("Graph built with " + to_string(graph.nodeCount()) + " nodes");
 
+    main_logger.debug("Compressing graph...");
+    graph.compressGraph();
+    main_logger.debug("Graph compressed");
+
     main_logger.debug("Exporting graph to GFA and CSV...");
     graph.exportGFA(output_dir.string(), output_prefix);
-    main_logger.debug("Graph exported to " + (output_dir / "gfa" / (output_prefix + ".gfa")).string() + " and " + (output_dir / "csv" / (output_prefix + ".csv")).string());
+    main_logger.debug("Graph exported");
+
+    main_logger.debug("Detecting bubbles...");
+    std::vector<BubblePathReport> tumor_paths_report;
+    std::vector<BubblePathReport> normal_paths_report;
+    auto bubbles = detectBubbles(graph, reference, &tumor_paths_report, &normal_paths_report);
+    main_logger.debug("Found " + to_string(bubbles.size()) + " bubbles");
+
+    main_logger.debug("Exporting bubbles...");
+    exportBubblesTSV(bubbles, output_dir.string(), output_prefix);
+    exportBubblesDetailedTSV(bubbles, graph, output_dir.string(), output_prefix);
+
+    // Export all tumor-only and normal-only paths for debugging
+    std::vector<BubblePathReport> all_paths;
+    all_paths.reserve(tumor_paths_report.size() + normal_paths_report.size());
+    all_paths.insert(all_paths.end(), tumor_paths_report.begin(), tumor_paths_report.end());
+    all_paths.insert(all_paths.end(), normal_paths_report.begin(), normal_paths_report.end());
+    exportBubblePathsTSV(all_paths, output_dir.string(), output_prefix);
+
+    main_logger.debug("Bubbles exported");
 
     main_logger.debug("Detecting structural variants...");
     auto sv_calls = detectDeletions(graph, reference, num_tumor_samples);

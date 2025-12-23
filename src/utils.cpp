@@ -4,6 +4,8 @@
 #include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <cstdint>
 
 #include "utils.h"
 #include "zstr.hpp"
@@ -191,6 +193,114 @@ map<string, any> ArgParser::parse(int argc, char** argv) {
 #define ROTATION_SHIFT (UBLOCK_BIT_SIZE - 1)
 #define SPARSE_HASHING_CONSTANT 0x9e3779b9u
 
+// Portable 64-bit MurmurHash3 implementation
+// Returns h1 (low 64 bits) of MurmurHash3_x64_128
+// Fixed: unaligned access, strict aliasing, endianness, overflow issues
+
+static inline uint64_t rotl64(uint64_t x, int r) {
+    return (x << r) | (x >> (64 - r));
+}
+
+static inline uint64_t fmix64(uint64_t k) {
+    k ^= k >> 33;
+    k *= 0xff51afd7ed558ccdULL;
+    k ^= k >> 33;
+    k *= 0xc4ceb9fe1a85ec53ULL;
+    k ^= k >> 33;
+    return k;
+}
+
+// Safe little-endian load with optional byteswap for big-endian
+static inline uint64_t load_u64_le(const void *p) {
+    uint64_t v;
+    std::memcpy(&v, p, sizeof(v));
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    // Byteswap on big-endian systems
+    v = __builtin_bswap64(v);
+#elif defined(_WIN32) || defined(_WIN64)
+    // Windows: assume little-endian (x86/x64)
+    // Could add runtime check if needed
+#endif
+    return v;
+}
+
+// Returns h1 (low 64 bits) of MurmurHash3_x64_128
+uint64_t MurmurHash3_64(const void *key, size_t len, uint64_t seed) {
+    const uint8_t *data = (const uint8_t *)key;
+    size_t nblocks = len / 16;  // Fixed: use size_t instead of int
+    
+    uint64_t h1 = seed;
+    uint64_t h2 = seed;
+    
+    const uint64_t c1 = 0x87c37b91114253d5ULL;
+    const uint64_t c2 = 0x4cf5ad432745937fULL;
+    
+    // Body: Process blocks of 16 bytes at a time
+    // Fixed: use safe memcpy-based loads instead of direct pointer casting
+    for (size_t i = 0; i < nblocks; i++) {
+        uint64_t k1 = load_u64_le(data + i * 16 + 0);
+        uint64_t k2 = load_u64_le(data + i * 16 + 8);
+        
+        k1 *= c1;
+        k1 = rotl64(k1, 31);
+        k1 *= c2;
+        h1 ^= k1;
+        
+        h1 = rotl64(h1, 27);
+        h1 += h2;
+        h1 = h1 * 5 + 0x52dce729;
+        
+        k2 *= c2;
+        k2 = rotl64(k2, 33);
+        k2 *= c1;
+        h2 ^= k2;
+        
+        h2 = rotl64(h2, 31);
+        h2 += h1;
+        h2 = h2 * 5 + 0x38495ab5;
+    }
+    
+    // Tail: Process remaining bytes
+    const uint8_t *tail = data + nblocks * 16;
+    uint64_t k1 = 0;
+    uint64_t k2 = 0;
+    
+    switch (len & 15) {
+    case 15: k2 ^= ((uint64_t)tail[14]) << 48; [[fallthrough]];
+    case 14: k2 ^= ((uint64_t)tail[13]) << 40; [[fallthrough]];
+    case 13: k2 ^= ((uint64_t)tail[12]) << 32; [[fallthrough]];
+    case 12: k2 ^= ((uint64_t)tail[11]) << 24; [[fallthrough]];
+    case 11: k2 ^= ((uint64_t)tail[10]) << 16; [[fallthrough]];
+    case 10: k2 ^= ((uint64_t)tail[9]) << 8; [[fallthrough]];
+    case  9: k2 ^= ((uint64_t)tail[8]) << 0;
+             k2 *= c2; k2 = rotl64(k2, 33); k2 *= c1; h2 ^= k2; [[fallthrough]];
+    case  8: k1 ^= ((uint64_t)tail[7]) << 56; [[fallthrough]];
+    case  7: k1 ^= ((uint64_t)tail[6]) << 48; [[fallthrough]];
+    case  6: k1 ^= ((uint64_t)tail[5]) << 40; [[fallthrough]];
+    case  5: k1 ^= ((uint64_t)tail[4]) << 32; [[fallthrough]];
+    case  4: k1 ^= ((uint64_t)tail[3]) << 24; [[fallthrough]];
+    case  3: k1 ^= ((uint64_t)tail[2]) << 16; [[fallthrough]];
+    case  2: k1 ^= ((uint64_t)tail[1]) << 8; [[fallthrough]];
+    case  1: k1 ^= ((uint64_t)tail[0]) << 0;
+             k1 *= c1; k1 = rotl64(k1, 31); k1 *= c2; h1 ^= k1; [[fallthrough]];
+    case  0: break;
+    }
+    
+    // Finalization
+    h1 ^= (uint64_t)len;
+    h2 ^= (uint64_t)len;
+    
+    h1 += h2;
+    h2 += h1;
+    
+    h1 = fmix64(h1);
+    h2 = fmix64(h2);
+    
+    h1 += h2;
+    
+    return h1;  // Return only h1 (low 64 bits of x64_128)
+}
+
 static const uint32_t pow_table[33] = {
     0x00000001u,  // KBASE^0
     0x01000193u,  // KBASE^1
@@ -227,19 +337,23 @@ static const uint32_t pow_table[33] = {
     0x447C1481u,  // KBASE^32
 };
 
-uint32_t hash_core(const struct core* c) {
+uint64_t hash_core(const struct core* c, const char* sequence) {
     if (c == NULL) return 0;
 
-    uint32_t hash = c->label;
-    hash = hash * SPARSE_HASHING_CONSTANT;
-    
-    ubit_size num_blocks = (c->bit_size + UBLOCK_BIT_SIZE - 1) / UBLOCK_BIT_SIZE;
-    
-    for (ubit_size i = 0; i < num_blocks; ++i) {
-        hash = (hash << 1) | (hash >> ROTATION_SHIFT);
-        hash ^= c->bit_rep[i];
-        hash = hash * SPARSE_HASHING_CONSTANT;
+    // If we have the raw DNA sequence, hash it directly
+    if (sequence != nullptr && c->end > c->start) {
+        uint64_t length = c->end - c->start;
+        const char* seq_start = sequence + c->start;
+        
+        // Hash the raw DNA sequence substring with MurmurHash3-64
+        // Use label as seed for additional uniqueness
+        uint64_t hash = MurmurHash3_64(seq_start, length, (uint64_t)c->label);
+        return hash;
     }
     
+    // Fallback: hash bit_rep if sequence not available
+    ubit_size num_blocks = (c->bit_size + UBLOCK_BIT_SIZE - 1) / UBLOCK_BIT_SIZE;
+    size_t byte_len = num_blocks * sizeof(ublock);
+    uint64_t hash = MurmurHash3_64(c->bit_rep, byte_len, (uint64_t)c->label);
     return hash;
 }
