@@ -1,5 +1,6 @@
 #include "sv.h"
 #include "utils.h"
+#include "vcf.h"
 #include <algorithm>
 #include <set>
 #include <fstream>
@@ -27,7 +28,7 @@ namespace {
     }
 }
 
-void LinearReference::addCore(ublock hash, const std::string& chrom, uint64_t start, uint64_t end) {
+void LinearReference::addCore(node_hash_t hash, const std::string& chrom, uint64_t start, uint64_t end) {
     hashes.push_back(hash);
     chroms.push_back(chrom);
     starts.push_back(start);
@@ -41,7 +42,7 @@ void LinearReference::buildIndex() {
     }
 }
 
-std::vector<size_t> LinearReference::align(ublock hash) const {
+std::vector<size_t> LinearReference::align(node_hash_t hash) const {
     auto it = hash_positions.find(hash);
     if (it != hash_positions.end()) {
         return it->second;
@@ -49,43 +50,67 @@ std::vector<size_t> LinearReference::align(ublock hash) const {
     return {};
 }
 
-std::vector<SVCall> detectDeletions(const LCPGraph& graph, const LinearReference& reference, int num_tumor_samples) {
+std::vector<SVCall> detectDeletionsFromBubbles(const std::vector<Bubble>& bubbles, const LCPGraph& graph, const LinearReference& reference) {
     std::vector<SVCall> sv_calls;
-    const auto& nodes = graph.getNodes();
     
-    for (const auto& [hash, node] : nodes) {
-        // DELETION: Present in normal (color 0), absent in tumor
-        if (!node.hasColor(0)) continue;  // Must be in normal
+    for (const auto& bubble : bubbles) {
+        // Use start and end nodes from bubble
+        node_hash_t start_hash = bubble.start_node;
+        node_hash_t end_hash = bubble.end_node;
         
-        // Check each tumor sample
-        for (int tumor_id = 1; tumor_id <= num_tumor_samples; ++tumor_id) {
-            if (!node.hasColor(tumor_id)) {
-                // Found a deletion!
-                SVCall call;
-                call.type = SVType::DELETION;
-                call.node_hash = hash;
-                call.count = node.count;
-                call.tumor_samples.push_back(tumor_id);
-                
-                // Align to reference
-                std::vector<size_t> indices = reference.align(hash);
-                
-                std::set<std::pair<uint64_t, uint64_t>> seen;
-                for (size_t idx : indices) {
-                    if (call.chrom.empty()) {
-                        call.chrom = reference.getChrom(idx);
-                    }
-                    auto pos = std::make_pair(reference.getStart(idx), reference.getEnd(idx));
-                    if (seen.insert(pos).second) {
-                        call.genomic_starts.push_back(pos.first);
-                        call.genomic_ends.push_back(pos.second);
-                    }
+        // Get positions for start node
+        std::vector<size_t> start_indices = reference.align(start_hash);
+        std::vector<size_t> end_indices = reference.align(end_hash);
+        
+        if (start_indices.empty() || end_indices.empty()) continue;
+        
+        // Create SV call from bubble's start and end nodes
+        SVCall call;
+        call.type = SVType::DELETION;
+        call.node_hash = start_hash; // Use start node as primary hash
+        
+        // Collect all unique positions from start and end nodes
+        std::set<std::pair<std::string, std::pair<uint64_t, uint64_t>>> seen;
+        
+        for (size_t idx : start_indices) {
+            std::string chrom = reference.getChrom(idx);
+            uint64_t start = reference.getStart(idx);
+            uint64_t end = reference.getEnd(idx);
+            auto key = std::make_pair(chrom, std::make_pair(start, end));
+            if (seen.insert(key).second) {
+                if (call.chrom.empty()) {
+                    call.chrom = chrom;
                 }
-                
-                if (!call.genomic_starts.empty()) {
-                    sv_calls.push_back(call);
-                }
+                call.genomic_starts.push_back(start);
+                call.genomic_ends.push_back(end);
             }
+        }
+        
+        for (size_t idx : end_indices) {
+            std::string chrom = reference.getChrom(idx);
+            uint64_t start = reference.getStart(idx);
+            uint64_t end = reference.getEnd(idx);
+            auto key = std::make_pair(chrom, std::make_pair(start, end));
+            if (seen.insert(key).second) {
+                if (call.chrom.empty()) {
+                    call.chrom = chrom;
+                }
+                call.genomic_starts.push_back(start);
+                call.genomic_ends.push_back(end);
+            }
+        }
+        
+        // Set count from graph nodes
+        const auto& nodes = graph.getNodes();
+        auto start_it = nodes.find(start_hash);
+        if (start_it != nodes.end()) {
+            call.count = start_it->second.count;
+        }
+        
+        call.tumor_samples.push_back(1); // Default tumor sample
+        
+        if (!call.genomic_starts.empty()) {
+            sv_calls.push_back(call);
         }
     }
     
@@ -154,29 +179,41 @@ void exportBubblesTSV(const std::vector<Bubble>& bubbles, const std::string& out
     std::ofstream out(filename);
     if (!out) return;
     
-    out << "type\tchrom\tstart\tend\ttumor_path_length\tnormal_path_length\t"
-        << "tumor_node_count\tnormal_node_count\ttumor_node_hashes\tnormal_node_hashes\n";
+    out << "type\tchrom\tstart\tend\tstart_node\tend_node\t"
+        << "tumor_path_count\tnormal_path_count\t"
+        << "tumor_paths_info\tnormal_paths_info\n";
     
     for (const auto& bubble : bubbles) {
         std::string type_str = (bubble.type == SVType::DELETION) ? "DELETION" : "INSERTION";
         
-        std::string tumor_hashes;
-        for (size_t i = 0; i < bubble.tumor_path.size(); ++i) {
-            if (i > 0) tumor_hashes += ",";
-            tumor_hashes += std::to_string(bubble.tumor_path[i]);
+        // Format: path1_length:node_count:hashes;path2_length:node_count:hashes;...
+        std::string tumor_paths_info;
+        for (size_t i = 0; i < bubble.tumor_paths.size(); ++i) {
+            if (i > 0) tumor_paths_info += ";";
+            const auto& tpath = bubble.tumor_paths[i];
+            tumor_paths_info += std::to_string(tpath.path_length) + ":" + std::to_string(tpath.node_count) + ":";
+            for (size_t j = 0; j < tpath.internal_nodes.size(); ++j) {
+                if (j > 0) tumor_paths_info += ",";
+                tumor_paths_info += std::to_string(tpath.internal_nodes[j]);
+            }
         }
         
-        std::string normal_hashes;
-        for (size_t i = 0; i < bubble.normal_path.size(); ++i) {
-            if (i > 0) normal_hashes += ",";
-            normal_hashes += std::to_string(bubble.normal_path[i]);
+        std::string normal_paths_info;
+        for (size_t i = 0; i < bubble.normal_paths.size(); ++i) {
+            if (i > 0) normal_paths_info += ";";
+            const auto& npath = bubble.normal_paths[i];
+            normal_paths_info += std::to_string(npath.path_length) + ":" + std::to_string(npath.node_count) + ":";
+            for (size_t j = 0; j < npath.internal_nodes.size(); ++j) {
+                if (j > 0) normal_paths_info += ",";
+                normal_paths_info += std::to_string(npath.internal_nodes[j]);
+            }
         }
         
         out << type_str << "\t" << bubble.chrom << "\t"
             << bubble.start_pos << "\t" << bubble.end_pos << "\t"
-            << bubble.tumor_path_length << "\t" << bubble.normal_path_length << "\t"
-            << bubble.tumor_path.size() << "\t" << bubble.normal_path.size() << "\t"
-            << tumor_hashes << "\t" << normal_hashes << "\n";
+            << bubble.start_node << "\t" << bubble.end_node << "\t"
+            << bubble.tumor_paths.size() << "\t" << bubble.normal_paths.size() << "\t"
+            << tumor_paths_info << "\t" << normal_paths_info << "\n";
     }
 }
 
@@ -189,56 +226,66 @@ void exportBubblesDetailedTSV(const std::vector<Bubble>& bubbles, const LCPGraph
     if (!out) return;
     
     out << "bubble_id\ttype\tchrom\tstart_pos\tend_pos\tbubble_length\t"
-        << "start_node\tedge_node\t"
-        << "tumor_path_length\tnormal_path_length\t"
-        << "tumor_node_count\tnormal_node_count\t"
-        << "tumor_node_hashes\tnormal_node_hashes\t"
-        << "tumor_node_positions\tnormal_node_positions\t"
+        << "start_node\tend_node\t"
+        << "tumor_path_count\tnormal_path_count\t"
+        << "tumor_paths_detail\tnormal_paths_detail\t"
         << "start_node_positions\tend_node_positions\n";
     
     for (size_t idx = 0; idx < bubbles.size(); ++idx) {
         const auto& bubble = bubbles[idx];
         std::string type_str = (bubble.type == SVType::DELETION) ? "DELETION" : "INSERTION";
         
-        // Tumor path hashes
-        std::string tumor_hashes;
-        for (size_t i = 0; i < bubble.tumor_path.size(); ++i) {
-            if (i > 0) tumor_hashes += ",";
-            tumor_hashes += std::to_string(bubble.tumor_path[i]);
-        }
-        
-        // Normal path hashes
-        std::string normal_hashes;
-        for (size_t i = 0; i < bubble.normal_path.size(); ++i) {
-            if (i > 0) normal_hashes += ",";
-            normal_hashes += std::to_string(bubble.normal_path[i]);
-        }
-        
-        // Tumor path positions (all positions for all nodes)
-        std::string tumor_positions;
-        bool first_tumor = true;
-        for (node_hash_t h : bubble.tumor_path) {
-            const auto& positions = graph.getPositions(h);
-            for (const auto& pos : positions) {
-                if (!first_tumor) tumor_positions += ";";
-                tumor_positions += std::to_string(pos.first) + "-" + std::to_string(pos.second);
-                first_tumor = false;
+        // Format tumor paths: path_idx:length:node_count:chrom:start:end:hashes:positions;...
+        std::string tumor_paths_detail;
+        for (size_t i = 0; i < bubble.tumor_paths.size(); ++i) {
+            if (i > 0) tumor_paths_detail += ";";
+            const auto& tpath = bubble.tumor_paths[i];
+            tumor_paths_detail += std::to_string(i) + ":" + std::to_string(tpath.path_length) + ":" 
+                + std::to_string(tpath.node_count) + ":" + tpath.chrom + ":" 
+                + std::to_string(tpath.start_pos) + ":" + std::to_string(tpath.end_pos) + ":";
+            // Hashes
+            for (size_t j = 0; j < tpath.internal_nodes.size(); ++j) {
+                if (j > 0) tumor_paths_detail += ",";
+                tumor_paths_detail += std::to_string(tpath.internal_nodes[j]);
+            }
+            tumor_paths_detail += ":";
+            // Positions
+            bool first_pos = true;
+            for (node_hash_t h : tpath.internal_nodes) {
+                const auto& positions = graph.getPositions(h);
+                for (const auto& pos : positions) {
+                    if (!first_pos) tumor_paths_detail += ",";
+                    tumor_paths_detail += std::to_string(pos.first) + "-" + std::to_string(pos.second);
+                    first_pos = false;
+                }
             }
         }
-        if (tumor_positions.empty()) tumor_positions = ".";
         
-        // Normal path positions
-        std::string normal_positions;
-        bool first_normal = true;
-        for (node_hash_t h : bubble.normal_path) {
-            const auto& positions = graph.getPositions(h);
-            for (const auto& pos : positions) {
-                if (!first_normal) normal_positions += ";";
-                normal_positions += std::to_string(pos.first) + "-" + std::to_string(pos.second);
-                first_normal = false;
+        // Format normal paths similarly
+        std::string normal_paths_detail;
+        for (size_t i = 0; i < bubble.normal_paths.size(); ++i) {
+            if (i > 0) normal_paths_detail += ";";
+            const auto& npath = bubble.normal_paths[i];
+            normal_paths_detail += std::to_string(i) + ":" + std::to_string(npath.path_length) + ":" 
+                + std::to_string(npath.node_count) + ":" + npath.chrom + ":" 
+                + std::to_string(npath.start_pos) + ":" + std::to_string(npath.end_pos) + ":";
+            // Hashes
+            for (size_t j = 0; j < npath.internal_nodes.size(); ++j) {
+                if (j > 0) normal_paths_detail += ",";
+                normal_paths_detail += std::to_string(npath.internal_nodes[j]);
+            }
+            normal_paths_detail += ":";
+            // Positions
+            bool first_pos = true;
+            for (node_hash_t h : npath.internal_nodes) {
+                const auto& positions = graph.getPositions(h);
+                for (const auto& pos : positions) {
+                    if (!first_pos) normal_paths_detail += ",";
+                    normal_paths_detail += std::to_string(pos.first) + "-" + std::to_string(pos.second);
+                    first_pos = false;
+                }
             }
         }
-        if (normal_positions.empty()) normal_positions = ".";
         
         // Start node positions
         std::string start_positions;
@@ -267,10 +314,8 @@ void exportBubblesDetailedTSV(const std::vector<Bubble>& bubbles, const LCPGraph
         out << idx << "\t" << type_str << "\t" << bubble.chrom << "\t"
             << bubble.start_pos << "\t" << bubble.end_pos << "\t" << bubble_length << "\t"
             << bubble.start_node << "\t" << bubble.end_node << "\t"
-            << bubble.tumor_path_length << "\t" << bubble.normal_path_length << "\t"
-            << bubble.tumor_path.size() << "\t" << bubble.normal_path.size() << "\t"
-            << tumor_hashes << "\t" << normal_hashes << "\t"
-            << tumor_positions << "\t" << normal_positions << "\t"
+            << bubble.tumor_paths.size() << "\t" << bubble.normal_paths.size() << "\t"
+            << tumor_paths_detail << "\t" << normal_paths_detail << "\t"
             << start_positions << "\t" << end_positions << "\n";
     }
 }
@@ -328,7 +373,7 @@ namespace {
         uint64_t end = 0;
     };
 
-    std::vector<AlignmentInfo> collectAlignments(ublock hash, const LinearReference& reference) {
+    std::vector<AlignmentInfo> collectAlignments(node_hash_t hash, const LinearReference& reference) {
         std::vector<AlignmentInfo> res;
         auto idxs = reference.align(hash);
         res.reserve(idxs.size());
@@ -378,6 +423,39 @@ std::vector<Bubble> detectBubbles(
     std::vector<Bubble> bubbles;
     
     const auto& nodes = graph.getNodes();
+    
+    // Debug: count branch points and T+N nodes
+    size_t branch_points = 0;
+    size_t tn_nodes = 0;
+    size_t tn_branch_points = 0;
+    
+    for (const auto& [hash, node] : nodes) {
+        const auto& next_set = graph.getNext(hash);
+        if (next_set.size() >= 2) {
+            branch_points++;
+        }
+        
+        bool has_normal = node.hasColor(0);
+        bool has_tumor = false;
+        for (int i = 1; i < 32; ++i) {
+            if (node.hasColor(i)) {
+                has_tumor = true;
+                break;
+            }
+        }
+        
+        if (has_normal && has_tumor) {
+            tn_nodes++;
+            if (next_set.size() >= 2) {
+                tn_branch_points++;
+            }
+        }
+    }
+    
+    sv_logger.debug("Graph stats: " + std::to_string(nodes.size()) + " nodes, " + 
+                    std::to_string(branch_points) + " branch points, " +
+                    std::to_string(tn_nodes) + " T+N nodes, " +
+                    std::to_string(tn_branch_points) + " T+N branch points");
     
     // Find branch points (nodes with multiple outgoing edges)
     for (const auto& [hash, node] : nodes) {
@@ -549,80 +627,131 @@ std::vector<Bubble> detectBubbles(
         for (const auto& p : tumor_paths) emit_report(p, "TUMOR_ONLY", tumor_paths_out);
         for (const auto& p : normal_paths) emit_report(p, "NORMAL_ONLY", normal_paths_out);
 
-        // Create bubbles: pair each tumor path with each normal path
+        // Create single bubble per branch point with all T-only and N-only paths
+        // Group paths by end node (must converge to same end)
+        std::map<node_hash_t, std::pair<std::vector<std::vector<node_hash_t>>, std::vector<std::vector<node_hash_t>>>> paths_by_end;
+        
         for (const auto& tumor_path : tumor_paths) {
-            for (const auto& normal_path : normal_paths) {
-                if (tumor_path.back() != normal_path.back()) continue;  // Must converge to same end node
-                
-                Bubble bubble;
-                bubble.start_node = hash;
-                bubble.end_node = tumor_path.back();
-                
+            paths_by_end[tumor_path.back()].first.push_back(tumor_path);
+        }
+        for (const auto& normal_path : normal_paths) {
+            paths_by_end[normal_path.back()].second.push_back(normal_path);
+        }
+        
+        // Create one bubble per end node convergence
+        for (const auto& [end_node, path_groups] : paths_by_end) {
+            const auto& tumor_group = path_groups.first;
+            const auto& normal_group = path_groups.second;
+            
+            if (tumor_group.empty() || normal_group.empty()) continue; // Need both types
+            
+            Bubble bubble;
+            bubble.start_node = hash;
+            bubble.end_node = end_node;
+            
+            // Helper to create PathInfo from a path
+            auto createPathInfo = [&](const std::vector<node_hash_t>& path) -> PathInfo {
+                PathInfo info;
                 // Extract internal nodes (excluding start and end T+N nodes)
-                for (size_t i = 1; i + 1 < tumor_path.size(); ++i) {
-                    bubble.tumor_path.push_back(tumor_path[i]);
+                for (size_t i = 1; i + 1 < path.size(); ++i) {
+                    info.internal_nodes.push_back(path[i]);
                 }
-                for (size_t i = 1; i + 1 < normal_path.size(); ++i) {
-                    bubble.normal_path.push_back(normal_path[i]);
-                }
+                info.path_length = pathSpan(graph, info.internal_nodes);
+                info.node_count = info.internal_nodes.size();
                 
-                // Calculate path spans (min/max) instead of sum of occurrences
-                bubble.tumor_path_length = pathSpan(graph, bubble.tumor_path);
-                bubble.normal_path_length = pathSpan(graph, bubble.normal_path);
-                
-                // Get positions from reference alignment (all combinations, same chrom)
-                auto start_aligns_raw = collectAlignments(bubble.start_node, reference);
-                auto end_aligns_raw   = collectAlignments(bubble.end_node, reference);
+                // Get positions from reference alignment
+                auto start_aligns_raw = collectAlignments(path.front(), reference);
+                auto end_aligns_raw = collectAlignments(path.back(), reference);
                 auto start_aligns = compressAlignmentsByChrom(start_aligns_raw);
-                auto end_aligns   = compressAlignmentsByChrom(end_aligns_raw);
-
-                if (start_aligns.empty() || end_aligns.empty()) {
-                    continue; // cannot place on reference
-                }
-
-                for (const auto& sa : start_aligns) {
-                    for (const auto& ea : end_aligns) {
-                        if (sa.chrom != ea.chrom) continue;
-
-                        Bubble b = bubble; // copy base
-                        b.chrom = sa.chrom;
-
-                        uint64_t mn = sa.start, mx = ea.end;
-                        // include internal node spans
-                        if (!b.tumor_path.empty() || !b.normal_path.empty()) {
-                            // aggregate all internal nodes of both paths for span
-                            uint64_t inner_mn = std::numeric_limits<uint64_t>::max();
-                            uint64_t inner_mx = 0;
-                            bool has_inner = false;
-                            for (node_hash_t h : b.tumor_path) {
-                                for (const auto& pos : graph.getPositions(h)) {
-                                    inner_mn = std::min<uint64_t>(inner_mn, pos.first);
-                                    inner_mx = std::max<uint64_t>(inner_mx, pos.second);
-                                    has_inner = true;
+                auto end_aligns = compressAlignmentsByChrom(end_aligns_raw);
+                
+                if (!start_aligns.empty() && !end_aligns.empty()) {
+                    // Use first same-chrom combination for this path
+                    for (const auto& sa : start_aligns) {
+                        for (const auto& ea : end_aligns) {
+                            if (sa.chrom == ea.chrom) {
+                                uint64_t mn = sa.start, mx = ea.end;
+                                // Include internal node spans
+                                if (!info.internal_nodes.empty()) {
+                                    uint64_t inner_mn = std::numeric_limits<uint64_t>::max();
+                                    uint64_t inner_mx = 0;
+                                    bool has_inner = false;
+                                    for (node_hash_t h : info.internal_nodes) {
+                                        for (const auto& pos : graph.getPositions(h)) {
+                                            inner_mn = std::min<uint64_t>(inner_mn, pos.first);
+                                            inner_mx = std::max<uint64_t>(inner_mx, pos.second);
+                                            has_inner = true;
+                                        }
+                                    }
+                                    if (has_inner) {
+                                        mn = std::min<uint64_t>(mn, inner_mn);
+                                        mx = std::max<uint64_t>(mx, inner_mx);
+                                    }
                                 }
-                            }
-                            for (node_hash_t h : b.normal_path) {
-                                for (const auto& pos : graph.getPositions(h)) {
-                                    inner_mn = std::min<uint64_t>(inner_mn, pos.first);
-                                    inner_mx = std::max<uint64_t>(inner_mx, pos.second);
-                                    has_inner = true;
-                                }
-                            }
-                            if (has_inner) {
-                                mn = std::min<uint64_t>(mn, inner_mn);
-                                mx = std::max<uint64_t>(mx, inner_mx);
+                                info.chrom = sa.chrom;
+                                info.start_pos = mn;
+                                info.end_pos = mx;
+                                return info;
                             }
                         }
-                        b.start_pos = mn;
-                        b.end_pos = mx;
-
-                        // Determine SV type (still only DELETION for now)
-                        b.type = (b.normal_path_length > b.tumor_path_length) ? 
-                            SVType::DELETION : SVType::DELETION;
-
-                        bubbles.push_back(std::move(b));
                     }
                 }
+                return info; // Return with empty chrom if no alignment
+            };
+            
+            // Create PathInfo for all tumor paths
+            for (const auto& tumor_path : tumor_group) {
+                bubble.tumor_paths.push_back(createPathInfo(tumor_path));
+            }
+            
+            // Create PathInfo for all normal paths
+            for (const auto& normal_path : normal_group) {
+                bubble.normal_paths.push_back(createPathInfo(normal_path));
+            }
+            
+            // Calculate overall bubble span (min start, max end across all paths)
+            uint64_t bubble_mn = std::numeric_limits<uint64_t>::max();
+            uint64_t bubble_mx = 0;
+            std::string bubble_chrom;
+            bool has_pos = false;
+            
+            for (const auto& tpath : bubble.tumor_paths) {
+                if (!tpath.chrom.empty() && tpath.end_pos > tpath.start_pos) {
+                    if (bubble_chrom.empty()) bubble_chrom = tpath.chrom;
+                    if (tpath.chrom == bubble_chrom) {
+                        bubble_mn = std::min<uint64_t>(bubble_mn, tpath.start_pos);
+                        bubble_mx = std::max<uint64_t>(bubble_mx, tpath.end_pos);
+                        has_pos = true;
+                    }
+                }
+            }
+            for (const auto& npath : bubble.normal_paths) {
+                if (!npath.chrom.empty() && npath.end_pos > npath.start_pos) {
+                    if (bubble_chrom.empty()) bubble_chrom = npath.chrom;
+                    if (npath.chrom == bubble_chrom) {
+                        bubble_mn = std::min<uint64_t>(bubble_mn, npath.start_pos);
+                        bubble_mx = std::max<uint64_t>(bubble_mx, npath.end_pos);
+                        has_pos = true;
+                    }
+                }
+            }
+            
+            if (has_pos) {
+                bubble.chrom = bubble_chrom;
+                bubble.start_pos = bubble_mn;
+                bubble.end_pos = bubble_mx;
+                
+                // Determine SV type: if any normal path is longer than any tumor path, it's a deletion
+                uint64_t max_normal_len = 0, max_tumor_len = 0;
+                for (const auto& npath : bubble.normal_paths) {
+                    max_normal_len = std::max(max_normal_len, npath.path_length);
+                }
+                for (const auto& tpath : bubble.tumor_paths) {
+                    max_tumor_len = std::max(max_tumor_len, tpath.path_length);
+                }
+                bubble.type = (max_normal_len > max_tumor_len) ? SVType::DELETION : SVType::DELETION;
+                
+                bubbles.push_back(std::move(bubble));
             }
         }
     }
