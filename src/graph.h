@@ -10,58 +10,66 @@
 #include "lps.h"
 #include "core.h"
 
-typedef unsigned int ublock;
+// Use uint64_t for hash+label combination (avoid conflict with lcptools' ublock)
+typedef uint64_t node_hash_t;
 
-// Simplified node: just hash, color bitmask, and global count
 struct Node {
-    ublock hash;
-    uint32_t colors;  // Bitmask: bit i set = color i present
-    unsigned int count;  // Global count across all colors
+    node_hash_t hash;
+    uint32_t colors;
+    unsigned int count;
     
     Node() : hash(0), colors(0), count(0) {}
-    Node(ublock h) : hash(h), colors(0), count(0) {}
+    Node(node_hash_t h) : hash(h), colors(0), count(0) {}
     
-    // Check if color is present
     bool hasColor(int color) const {
         return (colors >> color) & 1;
     }
     
-    // Set color bit
     void setColor(int color) {
         colors |= (1U << color);
     }
 };
 
-// Simple graph - no compression
 class LCPGraph {
 private:
-    // Node data: hash -> Node
-    std::unordered_map<ublock, Node> nodes;
+    std::unordered_map<node_hash_t, Node> nodes;
     
-    // Edges: hash -> {next hashes}
-    std::unordered_map<ublock, std::unordered_set<ublock>> next_edges;
-    std::unordered_map<ublock, std::unordered_set<ublock>> prev_edges;
+    std::unordered_map<node_hash_t, std::unordered_set<node_hash_t>> next_edges;
+    std::unordered_map<node_hash_t, std::unordered_set<node_hash_t>> prev_edges;
+    
+    // Store positions for each node: hash -> vector of (start, end) pairs
+    std::unordered_map<node_hash_t, std::vector<std::pair<uint64_t, uint64_t>>> node_positions;
 
 public:
     LCPGraph() = default;
     ~LCPGraph() = default;
     
-    // Add string to graph (k=1: each core is a node)
-    void addString(struct lps* lcp_string, int color);
+    void addString(struct lps* lcp_string, int color, const char* sequence = nullptr);
     
-    // Export to GFA format
     void exportGFA(const std::string& output_dir, const std::string& experiment_name) const;
     
-    // Accessors
-    const std::unordered_map<ublock, Node>& getNodes() const { return nodes; }
+    const std::unordered_map<node_hash_t, Node>& getNodes() const { return nodes; }
     size_t nodeCount() const { return nodes.size(); }
     
-    // Get next/prev edges for a node
-    const std::unordered_set<ublock>& getNext(ublock hash) const {
-        static const std::unordered_set<ublock> empty;
+    const std::unordered_set<node_hash_t>& getNext(node_hash_t hash) const {
+        static const std::unordered_set<node_hash_t> empty;
         auto it = next_edges.find(hash);
         return (it != next_edges.end()) ? it->second : empty;
     }
+    
+    const std::unordered_set<node_hash_t>& getPrev(node_hash_t hash) const {
+        static const std::unordered_set<node_hash_t> empty;
+        auto it = prev_edges.find(hash);
+        return (it != prev_edges.end()) ? it->second : empty;
+    }
+    
+    const std::vector<std::pair<uint64_t, uint64_t>>& getPositions(node_hash_t hash) const {
+        static const std::vector<std::pair<uint64_t, uint64_t>> empty;
+        auto it = node_positions.find(hash);
+        return (it != node_positions.end()) ? it->second : empty;
+    }
+    
+    void compressGraph();
 };
 
 #endif // GRAPH_H

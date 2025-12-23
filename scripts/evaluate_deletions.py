@@ -13,9 +13,13 @@ from typing import List, Tuple, Set
 from collections import defaultdict
 
 
-def parse_vcf(vcf_file: str) -> List[Tuple[str, int, int]]:
+def parse_vcf(vcf_file: str, min_length: int = 0) -> List[Tuple[str, int, int]]:
     """
     Parse VCF file and extract deletion intervals.
+    
+    Args:
+        vcf_file: Path to VCF file
+        min_length: Minimum deletion length to include (default: 0, include all)
     
     Returns:
         List of (chrom, start, end) tuples for deletions
@@ -43,10 +47,13 @@ def parse_vcf(vcf_file: str) -> List[Tuple[str, int, int]]:
             end_match = re.search(r'END=(\d+)', info)
             if end_match:
                 end = int(end_match.group(1))
-                deletions.append((chrom, pos, end))
+                length = end - pos
+                if length >= min_length:
+                    deletions.append((chrom, pos, end))
             else:
                 # If no END, use POS+1 (single base deletion)
-                deletions.append((chrom, pos, pos + 1))
+                if min_length <= 1:
+                    deletions.append((chrom, pos, pos + 1))
     
     return deletions
 
@@ -86,6 +93,51 @@ def parse_tsv(tsv_file: str) -> List[Tuple[str, int, int]]:
                     continue
     
     return deletions
+
+
+def merge_overlapping_intervals(intervals: List[Tuple[str, int, int]]) -> List[Tuple[str, int, int]]:
+    """
+    Merge overlapping or adjacent intervals on the same chromosome.
+    
+    Args:
+        intervals: List of (chrom, start, end) tuples
+    
+    Returns:
+        List of merged (chrom, start, end) tuples
+    """
+    if not intervals:
+        return []
+    
+    # Group by chromosome
+    by_chrom = defaultdict(list)
+    for chrom, start, end in intervals:
+        by_chrom[chrom].append((start, end))
+    
+    merged = []
+    
+    for chrom, chrom_intervals in by_chrom.items():
+        # Sort by start position
+        chrom_intervals.sort(key=lambda x: x[0])
+        
+        if not chrom_intervals:
+            continue
+        
+        # Merge overlapping/adjacent intervals
+        current_start, current_end = chrom_intervals[0]
+        
+        for start, end in chrom_intervals[1:]:
+            if start <= current_end:  # Overlapping or adjacent
+                # Merge: extend current_end if needed
+                current_end = max(current_end, end)
+            else:
+                # No overlap, save current interval and start new one
+                merged.append((chrom, current_start, current_end))
+                current_start, current_end = start, end
+        
+        # Don't forget the last interval
+        merged.append((chrom, current_start, current_end))
+    
+    return merged
 
 
 def calculate_overlap(interval1: Tuple[int, int], interval2: Tuple[int, int]) -> int:
@@ -221,7 +273,8 @@ def print_detailed_report(
     matched_pairs: List[Tuple],
     false_positives: List[Tuple],
     false_negatives: List[Tuple],
-    output_file: str = None
+    output_file: str = None,
+    min_gt_length: int = 0
 ):
     """Print detailed comparison report."""
     out = open(output_file, 'w') if output_file else sys.stdout
@@ -251,12 +304,23 @@ def print_detailed_report(
             out.write(f"{chrom}:{start}-{end}\n")
         out.write("\n")
     
-    # False negatives
+    # False negatives (filter by min_gt_length if specified)
+    filtered_fn = []
     if false_negatives:
-        out.write(f"FALSE NEGATIVES ({len(false_negatives)}):\n")
+        for chrom, start, end in false_negatives:
+            length = end - start
+            if length >= min_gt_length:
+                filtered_fn.append((chrom, start, end))
+    
+    if filtered_fn:
+        out.write(f"FALSE NEGATIVES ({len(filtered_fn)}):\n")
         out.write("-" * 80 + "\n")
-        for chrom, start, end in sorted(false_negatives, key=lambda x: (x[0], x[1])):
-            out.write(f"{chrom}:{start}-{end}\n")
+        out.write(f"{'Ground Truth':<30} {'Length':<15}\n")
+        out.write("-" * 80 + "\n")
+        for chrom, start, end in sorted(filtered_fn, key=lambda x: (x[0], x[1])):
+            length = end - start
+            gt_str = f"{chrom}:{start}-{end}"
+            out.write(f"{gt_str:<30} {length:<15,}bp\n")
         out.write("\n")
     
     if output_file:
@@ -279,17 +343,23 @@ Examples:
                         help='Minimum overlap ratio to consider a match (default: 0.5)')
     parser.add_argument('--min-iou', type=float, default=0.0,
                         help='Minimum IoU to consider a match (default: 0.0)')
+    parser.add_argument('--min-gt-length', type=int, default=0,
+                        help='Minimum ground truth deletion length to include in report (default: 0)')
     parser.add_argument('--report', help='Output file for detailed report (optional)')
     
     args = parser.parse_args()
     
     print("Reading ground truth from VCF...", file=sys.stderr)
-    ground_truth = parse_vcf(args.vcf)
-    print(f"Found {len(ground_truth)} ground truth deletions", file=sys.stderr)
+    ground_truth = parse_vcf(args.vcf, min_length=args.min_gt_length)
+    print(f"Found {len(ground_truth)} ground truth deletions (min_length={args.min_gt_length}bp)", file=sys.stderr)
     
     print("Reading predictions from TSV...", file=sys.stderr)
-    predicted = parse_tsv(args.tsv)
-    print(f"Found {len(predicted)} predicted deletions", file=sys.stderr)
+    predicted_raw = parse_tsv(args.tsv)
+    print(f"Found {len(predicted_raw)} predicted deletions (before merging)", file=sys.stderr)
+    
+    # Merge overlapping intervals
+    predicted = merge_overlapping_intervals(predicted_raw)
+    print(f"Found {len(predicted)} predicted deletions (after merging)", file=sys.stderr)
     
     print("Matching deletions...", file=sys.stderr)
     tp, fp, fn, matched_pairs = match_deletions(
@@ -317,10 +387,10 @@ Examples:
     # Print detailed report if requested
     if args.report:
         print(f"\nWriting detailed report to {args.report}...", file=sys.stderr)
-        print_detailed_report(matched_pairs, fp, fn, args.report)
+        print_detailed_report(matched_pairs, fp, fn, args.report, args.min_gt_length)
         print("Done!", file=sys.stderr)
     elif len(matched_pairs) <= 50:  # Only print details if not too many
-        print_detailed_report(matched_pairs, fp, fn)
+        print_detailed_report(matched_pairs, fp, fn, min_gt_length=args.min_gt_length)
 
 
 if __name__ == '__main__':
