@@ -24,5 +24,8 @@ $(OBJDIR)/%.o: %.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SRCDIR)/*.hpp)
 	@mkdir -p $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -I$(LIBDIR)/lcptools -c -o $@ $<
 
+images:
+	./scripts/generate_images.sh
+
 clean:
 	rm -rf $(OBJDIR) $(TARGET) *.tsv outputs
