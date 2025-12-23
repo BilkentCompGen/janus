@@ -79,4 +79,6 @@ private:
 
 uint64_t hash_core(const struct core* c, const char* sequence = nullptr);
 
+void writeTSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers = {});
+
 #endif // UTILS_H

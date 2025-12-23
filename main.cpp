@@ -6,8 +6,6 @@
 
 #include "src/utils.h"
 #include "src/graph.h"
-#include "src/sv.h"
-#include "src/analysis.h"
 #include "src/vcf.h"
 #include "lib/lcptools/lps.h"
 #include "lib/lcptools/encoding.h"
@@ -42,10 +40,7 @@ int main(int argc, char** argv) {
     fs::create_directories(output_dir);
     main_logger.debug("Output directory: " + output_dir.string());
 
-    // Graph and reference
     LCPGraph graph;
-    LinearReference reference;
-    CollisionTracker collision_tracker;
 
     main_logger.debug("Processing reference genome (normal, color 0) - only chromosome 19...");
     FastaStreamer ref_streamer(normal_file, false);
@@ -53,148 +48,59 @@ int main(int argc, char** argv) {
     int skipped_count = 0;
     for (const FastaPair& pair : ref_streamer) {
         string chrom = pair.first;
-        if (!chrom.empty() && chrom[0] == '>') {
-            chrom = chrom.substr(1);
-        }
-        // Remove anything after first space
-        size_t space_pos = chrom.find(' ');
-        if (space_pos != string::npos) {
-            chrom = chrom.substr(0, space_pos);
-        }
-        
-        // Only process chromosome 19 (exact match, skip alt/random contigs)
-        if (chrom != "19") {
-            skipped_count++;
-            continue;
-        }
+        if (chrom != "19") continue;
 
         processed_count++;
         main_logger.debug("Processing chromosome: " + chrom);
 
-        // Store global sequence for this chromosome
-        collision_tracker.setSequence(chrom, pair.second);
+        graph.setSequence(0, chrom, pair.second);
 
         struct lps lcp_string;
         init_lps(&lcp_string, pair.second.c_str(), pair.second.size());
         lps_deepen(&lcp_string, depth);
-        graph.addString(&lcp_string, 0, pair.second.c_str());
-
-        for (int j = 0; j < lcp_string.size; ++j) {
-            node_hash_t hash = hash_core(&lcp_string.cores[j], pair.second.c_str());
-            uint64_t start = lcp_string.cores[j].start;
-            uint64_t end = lcp_string.cores[j].end;
-            reference.addCore(hash, chrom, start, end);
-            collision_tracker.addHash(hash, chrom, start, end);
-        }
+        graph.addString(&lcp_string, 0, pair.second.c_str(), chrom);
         free_lps(&lcp_string);
     }
     main_logger.debug("Processed " + to_string(processed_count) + " reference sequences (skipped " + to_string(skipped_count) + " non-chr19 sequences)");
 
-    reference.buildIndex();
-    main_logger.debug("Linear reference built with " + to_string(reference.size()) + " positions");
-
-    main_logger.debug("Analyzing hash collisions...");
-    collision_tracker.generateTSVReport(output_dir, output_prefix);
-
     main_logger.debug("Processing tumor genome (color 1) - only chromosome 19...");
     FastaStreamer tumor_streamer(tumor_file, false);    
     for (const FastaPair& pair : tumor_streamer) {
-        // Extract chromosome from FASTA header
         string chrom = pair.first;
-        if (!chrom.empty() && chrom[0] == '>') {
-            chrom = chrom.substr(1);
-        }
-        // Remove anything after first space
-        size_t space_pos = chrom.find(' ');
-        if (space_pos != string::npos) {
-            chrom = chrom.substr(0, space_pos);
-        }
-        // Remove _hapA or _hapB suffix if present
+
         size_t hap_pos = chrom.find("_hap");
-        if (hap_pos != string::npos) {
-            chrom = chrom.substr(0, hap_pos);
-        }
-        
-        // Only process chromosome 19 (exact match)
-        if (chrom != "19") {
-            continue;
-        }
+        if (hap_pos != string::npos) chrom = chrom.substr(0, hap_pos);
+        if (chrom != "19") continue;
 
         main_logger.debug("Processing tumor chromosome: " + chrom);
+
+        graph.setSequence(1, chrom, pair.second);
 
         struct lps lcp_string;
         init_lps(&lcp_string, pair.second.c_str(), pair.second.size());
         lps_deepen(&lcp_string, depth);
-        graph.addString(&lcp_string, 1, pair.second.c_str());
+        graph.addString(&lcp_string, 1, pair.second.c_str(), chrom);
         free_lps(&lcp_string);
     }
     main_logger.debug("Processed " + to_string(processed_count) + " tumor sequences (skipped " + to_string(skipped_count) + " non-chr19 sequences)");
 
     main_logger.debug("Graph built with " + to_string(graph.nodeCount()) + " nodes");
 
-    // Parse VCF to find deletion regions and their corresponding node hashes
     main_logger.debug("Parsing VCF for deletion regions...");
     std::string vcf_path = "simulation/sim.vcf";
     auto deletions = parseVCFDeletions(vcf_path);
     main_logger.debug("Found " + to_string(deletions.size()) + " deletion regions in VCF");
     
-    std::unordered_set<node_hash_t> deletion_node_hashes = findDeletionNodeHashes(deletions, reference);
+    std::unordered_set<node_hash> deletion_node_hashes = findDeletionNodeHashes(deletions, graph);
     main_logger.debug("Found " + to_string(deletion_node_hashes.size()) + " node hashes overlapping with deletions");
     
-    // Mark deletion nodes with color 2 (deletion color) - treat as separate category like N=0, T=1, D=2
-    // We need non-const access to modify nodes
-    // Since getNodes() returns const reference, we'll need to add a method or use a workaround
-    // For now, let's add deletion color marking in a way that works with the current API
-    // Actually, we can do this by accessing the graph's internal structure through a friend or public method
-    // But the simplest is to pass deletion_nodes to compressGraph and let it mark them
-    // Or better: add a method to LCPGraph to mark nodes with a color
-    
     main_logger.debug("Compressing graph...");
-    graph.compressGraph(&deletion_node_hashes);  // Pass deletion nodes to mark with color 2 during compression
+    graph.compressGraph(&deletion_node_hashes);
     main_logger.debug("Graph compressed. Deletion nodes after compression: " + to_string(deletion_node_hashes.size()));
 
     main_logger.debug("Exporting graph to GFA and CSV...");
     graph.exportGFA(output_dir.string(), output_prefix);
     main_logger.debug("Graph exported");
-
-    main_logger.debug("Detecting bubbles...");
-    std::vector<BubblePathReport> tumor_paths_report;
-    std::vector<BubblePathReport> normal_paths_report;
-    auto bubbles = detectBubbles(graph, reference, &tumor_paths_report, &normal_paths_report);
-    main_logger.debug("Found " + to_string(bubbles.size()) + " bubbles");
-
-    main_logger.debug("Exporting bubbles...");
-    exportBubblesTSV(bubbles, output_dir.string(), output_prefix);
-    exportBubblesDetailedTSV(bubbles, graph, output_dir.string(), output_prefix);
-
-    // Export all tumor-only and normal-only paths for debugging
-    std::vector<BubblePathReport> all_paths;
-    all_paths.reserve(tumor_paths_report.size() + normal_paths_report.size());
-    all_paths.insert(all_paths.end(), tumor_paths_report.begin(), tumor_paths_report.end());
-    all_paths.insert(all_paths.end(), normal_paths_report.begin(), normal_paths_report.end());
-    exportBubblePathsTSV(all_paths, output_dir.string(), output_prefix);
-
-    main_logger.debug("Bubbles exported");
-
-    // SV calling temporarily disabled - focusing on graph visualization
-    /*
-    main_logger.debug("Detecting structural variants from bubbles...");
-    auto sv_calls = detectDeletionsFromBubbles(bubbles, graph, reference);
-
-    int deletion_count = 0;
-    for (const auto& sv : sv_calls) {
-        if (sv.type == SVType::DELETION) deletion_count++;
-    }
-
-    main_logger.debug("Found " + to_string(sv_calls.size()) + " structural variants:");
-    main_logger.debug("  Deletions: " + to_string(deletion_count));
-
-    fs::path tsv_dir = output_dir / "tsv";
-    fs::create_directories(tsv_dir);
-    fs::path sv_filename = tsv_dir / (output_prefix + ".tsv");
-    exportTSV(sv_calls, sv_filename.string());
-    main_logger.debug("SVs saved to " + sv_filename.string());
-    */
 
     main_logger.debug("Done!");
 

@@ -8,18 +8,18 @@
 
 struct DeletionRegion {
     std::string chrom;
-    uint64_t start;
-    uint64_t end;
+    uint64_t start;   // 1-based inclusive
+    uint64_t end;     // 1-based inclusive
 };
 
-// Forward declarations
-struct LinearReference;
-typedef uint64_t node_hash_t;
+typedef uint64_t node_hash;
 
-std::vector<DeletionRegion> parseVCFDeletions(const std::string& vcf_path);
-std::unordered_set<node_hash_t> findDeletionNodeHashes(
-    const std::vector<DeletionRegion>& deletions,
-    const LinearReference& reference);
+class LCPGraph;
+
+std::vector<DeletionRegion>
+parseVCFDeletions(const std::string& vcf_path);
+
+std::unordered_set<node_hash>
+findDeletionNodeHashes(const std::vector<DeletionRegion>& deletions, const LCPGraph& graph);
 
 #endif // VCF_H
-
