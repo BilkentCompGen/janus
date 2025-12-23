@@ -87,23 +87,41 @@ void LCPGraph::exportGFA(const std::string& output_dir, const std::string& exper
         gfa_out << "\n";
         
         // CSV: color for visualization
-        uint32_t c = 0;
+        // 7-color system: N=0, T=1, GT=2 (deletion from ground truth)
+        // N (0) → Blue (0x0000FF)
+        // T (1) → Red (0xFF0000)
+        // GT (2) → Green (0x00FF00)
+        // N+T (0+1) → Purple (0x800080)
+        // N+GT (0+2) → Cyan (0x00FFFF) - T yok, sadece N ve GT
+        // T+GT (1+2) → Yellow (0xFFFF00)
+        // N+T+GT (0+1+2) → Orange (0xFF8000) - T dallanıyor (bubble'lar)
+        
         bool has_normal = node.hasColor(0);
         bool has_tumor = false;
-        for (int i = 1; i < 32; ++i) {
-            if (node.hasColor(i)) {
-                has_tumor = true;
-                break;
-            }
+        // Check for tumor color (1) specifically, not all colors > 0
+        if (node.hasColor(1)) {
+            has_tumor = true;
         }
+        bool has_deletion = node.hasColor(2);
         
-        if (has_normal && has_tumor) {
-            c = 0x800080;
+        uint32_t c = 0;
+        if (has_normal && has_tumor && has_deletion) {
+            c = 0xFF8000;  // Orange: N+T+GT (T dallanıyor - bubble'lar)
+        } else if (has_tumor && has_deletion) {
+            c = 0xFFFF00;  // Yellow: T+GT
+        } else if (has_normal && has_deletion) {
+            c = 0x00FFFF;  // Cyan: N+GT (T yok, sadece N ve GT)
+        } else if (has_deletion) {
+            c = 0x00FF00;  // Green: GT only
+        } else if (has_normal && has_tumor) {
+            c = 0x800080;  // Purple: N+T
         } else if (has_normal) {
-            c = 0x0000FF;
+            c = 0x0000FF;  // Blue: N only
         } else if (has_tumor) {
-            c = 0xFF0000;
+            c = 0xFF0000;  // Red: T only
         }
+        // else: c = 0 (black) - should not happen
+        
         c &= 0xFFFFFF;
         char color_buf[9];
         snprintf(color_buf, sizeof(color_buf), "#%06X", c);
@@ -122,8 +140,25 @@ void LCPGraph::exportGFA(const std::string& output_dir, const std::string& exper
     }
 }
 
-void LCPGraph::compressGraph() {
+void LCPGraph::compressGraph(std::unordered_set<node_hash_t>* deletion_nodes) {
     graph_logger.debug("Starting graph compression...");
+    
+    // First, mark all deletion nodes with color 2 (deletion color)
+    // Treat deletion as a separate category: N=0, T=1, D=2
+    if (deletion_nodes) {
+        for (node_hash_t del_hash : *deletion_nodes) {
+            auto it = nodes.find(del_hash);
+            if (it != nodes.end()) {
+                it->second.setColor(2);  // Color 2 = deletion (GT deletion)
+            }
+        }
+    }
+    
+    // Track which nodes are deletion nodes (will be updated as we collapse)
+    std::unordered_set<node_hash_t> is_deletion;
+    if (deletion_nodes) {
+        is_deletion = *deletion_nodes;
+    }
 
     // --- Phase 1: discover disjoint maximal chains to collapse ---
     std::unordered_set<node_hash_t> claimed; // ensures no overlapping chains
@@ -216,9 +251,10 @@ void LCPGraph::compressGraph() {
 
         std::unordered_set<node_hash_t> chain_set(chain.begin(), chain.end());
 
-        // Merge positions and counts
+        // Merge positions, counts, and colors
         std::vector<std::pair<uint64_t, uint64_t>> merged_positions;
         uint64_t merged_count = 0;
+        uint32_t merged_colors = 0;  // Merge all colors from chain
         {
             size_t total_pos = 0;
             for (node_hash_t h : chain) {
@@ -230,6 +266,7 @@ void LCPGraph::compressGraph() {
             for (node_hash_t h : chain) {
                 if (auto nit = nodes.find(h); nit != nodes.end()) {
                     merged_count += nit->second.count;
+                    merged_colors |= nit->second.colors;  // Merge colors (OR operation)
                 }
                 auto pit = node_positions.find(h);
                 if (pit != node_positions.end()) {
@@ -283,6 +320,7 @@ void LCPGraph::compressGraph() {
             node_positions.erase(n);
             next_edges.erase(n);
             prev_edges.erase(n);
+            is_deletion.erase(n);  // Remove from deletion set
         }
 
         // Rebuild adjacency for the collapsed node (= first)
@@ -290,6 +328,11 @@ void LCPGraph::compressGraph() {
         next_edges[first].clear();
         if (auto fit = nodes.find(first); fit != nodes.end()) {
             fit->second.count = merged_count;
+            fit->second.colors = merged_colors;  // Set merged colors (includes color 2 if any node had it)
+            // Track in deletion set if has color 2
+            if (fit->second.hasColor(2)) {
+                is_deletion.insert(first);
+            }
         }
 
         for (node_hash_t p : external_preds) {
@@ -306,6 +349,11 @@ void LCPGraph::compressGraph() {
 
         // Store merged positions
         node_positions[first] = std::move(merged_positions);
+    }
+    
+    // Update deletion_nodes set if provided (after all collapses)
+    if (deletion_nodes) {
+        *deletion_nodes = std::move(is_deletion);
     }
 
     graph_logger.debug("Graph compression completed. Nodes: " + std::to_string(nodes.size()));

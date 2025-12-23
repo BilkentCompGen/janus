@@ -8,6 +8,7 @@
 #include "src/graph.h"
 #include "src/sv.h"
 #include "src/analysis.h"
+#include "src/vcf.h"
 #include "lib/lcptools/lps.h"
 #include "lib/lcptools/encoding.h"
 
@@ -129,12 +130,28 @@ int main(int argc, char** argv) {
     }
     main_logger.debug("Processed " + to_string(processed_count) + " tumor sequences (skipped " + to_string(skipped_count) + " non-chr19 sequences)");
 
-    int num_tumor_samples = 1;
     main_logger.debug("Graph built with " + to_string(graph.nodeCount()) + " nodes");
 
+    // Parse VCF to find deletion regions and their corresponding node hashes
+    main_logger.debug("Parsing VCF for deletion regions...");
+    std::string vcf_path = "simulation/sim.vcf";
+    auto deletions = parseVCFDeletions(vcf_path);
+    main_logger.debug("Found " + to_string(deletions.size()) + " deletion regions in VCF");
+    
+    std::unordered_set<node_hash_t> deletion_node_hashes = findDeletionNodeHashes(deletions, reference);
+    main_logger.debug("Found " + to_string(deletion_node_hashes.size()) + " node hashes overlapping with deletions");
+    
+    // Mark deletion nodes with color 2 (deletion color) - treat as separate category like N=0, T=1, D=2
+    // We need non-const access to modify nodes
+    // Since getNodes() returns const reference, we'll need to add a method or use a workaround
+    // For now, let's add deletion color marking in a way that works with the current API
+    // Actually, we can do this by accessing the graph's internal structure through a friend or public method
+    // But the simplest is to pass deletion_nodes to compressGraph and let it mark them
+    // Or better: add a method to LCPGraph to mark nodes with a color
+    
     main_logger.debug("Compressing graph...");
-    graph.compressGraph();
-    main_logger.debug("Graph compressed");
+    graph.compressGraph(&deletion_node_hashes);  // Pass deletion nodes to mark with color 2 during compression
+    main_logger.debug("Graph compressed. Deletion nodes after compression: " + to_string(deletion_node_hashes.size()));
 
     main_logger.debug("Exporting graph to GFA and CSV...");
     graph.exportGFA(output_dir.string(), output_prefix);
@@ -159,8 +176,10 @@ int main(int argc, char** argv) {
 
     main_logger.debug("Bubbles exported");
 
-    main_logger.debug("Detecting structural variants...");
-    auto sv_calls = detectDeletions(graph, reference, num_tumor_samples);
+    // SV calling temporarily disabled - focusing on graph visualization
+    /*
+    main_logger.debug("Detecting structural variants from bubbles...");
+    auto sv_calls = detectDeletionsFromBubbles(bubbles, graph, reference);
 
     int deletion_count = 0;
     for (const auto& sv : sv_calls) {
@@ -175,6 +194,7 @@ int main(int argc, char** argv) {
     fs::path sv_filename = tsv_dir / (output_prefix + ".tsv");
     exportTSV(sv_calls, sv_filename.string());
     main_logger.debug("SVs saved to " + sv_filename.string());
+    */
 
     main_logger.debug("Done!");
 
