@@ -1,24 +1,36 @@
-#include <iostream>
-#include <fstream>
-#include <stdexcept>
-#include <chrono>
 #include <algorithm>
+#include <chrono>
 #include <cctype>
-#include <cstring>
+#include <ctime>
 #include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <stdexcept>
 
-#include "utils.h"
 #include "zstr.hpp"
+
 #include "core.h"
+#include "utils.h"
 
 using namespace std;
+using namespace chrono;
 
 //////////////////////////////////////////////////////////// Logger ////////////////////////////////////////////////////////////
 Logger::Logger(const string& name) : name(name) {}
 
 void Logger::log_impl(const string& msg, const char* file, int line) const {
-    auto tp_ms = chrono::time_point_cast<chrono::milliseconds>(chrono::system_clock::now());
-    cout << format("{:%H:%M:%S}", tp_ms) << " | " << name << " | " << file << ":" << line << " | " << msg << endl;
+    auto now = chrono::system_clock::now();
+    auto time_t = chrono::system_clock::to_time_t(now);
+    auto ms = chrono::duration_cast<chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    
+    stringstream ss;
+    ss << put_time(localtime(&time_t), "%H:%M:%S");
+    ss << "." << setfill('0') << setw(3) << ms.count();
+    
+    cout << ss.str() << " | " << name << " | " << file << ":" << line << " | " << msg << endl;
 }
 
 /////////////////////////////////////////////////////////// Gzip I/O ///////////////////////////////////////////////////////////
@@ -106,14 +118,6 @@ void FastaIterator::read_next_sequence() {
         trim(line);
         if(!line.empty()) current_pair.second += line;
     }
-}
-
-
-vector<FastaPair> read_fasta_file(const string& file_path, bool is_gzipped) {
-    vector<FastaPair> fasta_data;
-    FastaStreamer streamer(file_path, is_gzipped);
-    for (const FastaPair& pair : streamer) fasta_data.push_back(pair);
-    return fasta_data;
 }
 
 //////////////////////////////////////////////////////// Argument Parser /////////////////////////////////////////////////////
@@ -358,9 +362,9 @@ uint64_t hash_core(const struct core* c, const char* sequence) {
     return hash;
 }
 
-//////////////////////////////////////////////////////// TSV Export ///////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////// CSV Export ///////////////////////////////////////////////////////////
 
-void writeTSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers) {
+void writeCSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers, char separator) {
     std::ofstream out(filename);
     if (!out) throw std::runtime_error("Could not open file for writing: " + filename);
     
@@ -369,16 +373,16 @@ void writeTSV(const std::map<std::string, std::vector<std::string>>& data, const
     
     if (!headers.empty()) {
         for (size_t i = 0; i < headers.size(); i++) {
-            if (i > 0) out << "\t";
+            if (i > 0) out << separator;
             out << headers[i];
         }
         out << "\n";
-    } else throw std::runtime_error("Headers are required for TSV export");
+    } else throw std::runtime_error("Headers are required for CSV export");
     
     for (const auto& [key, vec] : data) {
         out << key;
         for (size_t i = 0; i < max_cols; i++) {
-            out << "\t";
+            out << separator;
             if (i < vec.size()) out << vec[i];
             else out << "";
         }

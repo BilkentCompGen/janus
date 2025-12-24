@@ -1,13 +1,13 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include <iostream>
-#include <string>
-#include <vector>
-#include <map>
-#include <utility>
 #include <any>
+#include <iostream>
+#include <map>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 class Logger {
 public:
@@ -54,8 +54,6 @@ private:
     void read_next_sequence();
 };
 
-std::vector<FastaPair> read_fasta_file(const std::string& file_path, bool is_gzipped = false);
-
 struct Argument {
     std::string flag;
     std::string short_flag;
@@ -79,6 +77,6 @@ private:
 
 uint64_t hash_core(const struct core* c, const char* sequence = nullptr);
 
-void writeTSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers = {});
+void writeCSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers = {}, char separator = ',');
 
 #endif // UTILS_H
