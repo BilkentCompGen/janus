@@ -1,14 +1,15 @@
-#include <iostream>
-#include <string>
-#include <map>
 #include <any>
+#include <cstdint>
 #include <filesystem>
+#include <iostream>
+#include <map>
+#include <string>
 
-#include "src/utils.h"
-#include "src/graph.h"
-#include "src/vcf.h"
-#include "lib/lcptools/lps.h"
 #include "lib/lcptools/encoding.h"
+#include "lib/lcptools/lps.h"
+
+#include "src/graph.h"
+#include "src/utils.h"
 
 using namespace std;
 
@@ -53,12 +54,10 @@ int main(int argc, char** argv) {
         processed_count++;
         main_logger.debug("Processing chromosome: " + chrom);
 
-        graph.setSequence(0, chrom, pair.second);
-
         struct lps lcp_string;
         init_lps(&lcp_string, pair.second.c_str(), pair.second.size());
         lps_deepen(&lcp_string, depth);
-        graph.addString(&lcp_string, 0, pair.second.c_str(), chrom);
+        graph.addString(&lcp_string, 0, pair.second.c_str());
         free_lps(&lcp_string);
     }
     main_logger.debug("Processed " + to_string(processed_count) + " reference sequences (skipped " + to_string(skipped_count) + " non-chr19 sequences)");
@@ -74,32 +73,44 @@ int main(int argc, char** argv) {
 
         main_logger.debug("Processing tumor chromosome: " + chrom);
 
-        graph.setSequence(1, chrom, pair.second);
-
         struct lps lcp_string;
         init_lps(&lcp_string, pair.second.c_str(), pair.second.size());
         lps_deepen(&lcp_string, depth);
-        graph.addString(&lcp_string, 1, pair.second.c_str(), chrom);
+        graph.addString(&lcp_string, 1, pair.second.c_str());
         free_lps(&lcp_string);
     }
     main_logger.debug("Processed " + to_string(processed_count) + " tumor sequences (skipped " + to_string(skipped_count) + " non-chr19 sequences)");
 
     main_logger.debug("Graph built with " + to_string(graph.nodeCount()) + " nodes");
 
+    /*
     main_logger.debug("Parsing VCF for deletion regions...");
     std::string vcf_path = "simulation/sim.vcf";
     auto deletions = parseVCFDeletions(vcf_path);
     main_logger.debug("Found " + to_string(deletions.size()) + " deletion regions in VCF");
-    
+
     std::unordered_set<node_hash> deletion_node_hashes = findDeletionNodeHashes(deletions, graph);
     main_logger.debug("Found " + to_string(deletion_node_hashes.size()) + " node hashes overlapping with deletions");
+    */
     
     main_logger.debug("Compressing graph...");
-    graph.compressGraph(&deletion_node_hashes);
-    main_logger.debug("Graph compressed. Deletion nodes after compression: " + to_string(deletion_node_hashes.size()));
+    graph.compressGraph(nullptr);
+    // main_logger.debug("Graph compressed. Deletion nodes after compression: " + to_string(deletion_node_hashes.size()));
+
+    // Color map: binary representation -> hex color
+    // Bit 0 = Normal, Bit 1 = Tumor, Bit 2 = Deletion
+    map<uint32_t, uint32_t> color_map = {
+        {0x01, 0x0000FF},  // 001: N only -> Blue
+        {0x02, 0xFF0000},  // 010: T only -> Red
+        {0x03, 0x800080},  // 011: N+T -> Purple
+        {0x04, 0x00FF00},  // 100: D only -> Green
+        {0x05, 0x00FFFF},  // 101: N+D -> Cyan
+        {0x06, 0xFFFF00},  // 110: T+D -> Yellow
+        {0x07, 0xFF8000}   // 111: N+T+D -> Orange
+    };
 
     main_logger.debug("Exporting graph to GFA and CSV...");
-    graph.exportGFA(output_dir.string(), output_prefix);
+    graph.exportGFA(output_dir.string(), output_prefix, &color_map);
     main_logger.debug("Graph exported");
 
     main_logger.debug("Done!");

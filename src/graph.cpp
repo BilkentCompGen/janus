@@ -1,19 +1,18 @@
-#include "graph.h"
-#include "sv.h"
-#include "utils.h"
-#include <iostream>
-#include <fstream>
-#include <filesystem>
 #include <algorithm>
-#include <queue>
-#include <set>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <map>
+
+#include "graph.h"
+#include "utils.h"
 
 static Logger graph_logger("graph");
 
-void LCPGraph::addString(struct lps* lcp_string, int color, const char* sequence, const std::string& chrom) {
+void LCPGraph::addString(struct lps* lcp_string, int color, const char* sequence) {
     if (lcp_string->size == 0) return;
     
-    // For k=1: each core becomes a single node
     for (int i = 0; i < lcp_string->size; ++i) {
         node_hash hash = hash_core(&lcp_string->cores[i], sequence);
         
@@ -21,9 +20,6 @@ void LCPGraph::addString(struct lps* lcp_string, int color, const char* sequence
         if (node.hash == 0) node.hash = hash;
         node.count++;
         node.setColor(color);
-        
-        // Store position with cell_id, chrom, start, end
-        node_positions[hash].emplace_back(color, chrom, lcp_string->cores[i].start, lcp_string->cores[i].end);
 
         if (i + 1 < lcp_string->size) {
             node_hash next_hash = hash_core(&lcp_string->cores[i + 1], sequence);
@@ -33,7 +29,7 @@ void LCPGraph::addString(struct lps* lcp_string, int color, const char* sequence
     }
 }
 
-void LCPGraph::exportGFA(const std::string& output_dir, const std::string& experiment_name) const {
+void LCPGraph::exportGFA(const std::string& output_dir, const std::string& experiment_name, const std::map<uint32_t, uint32_t>* color_map) const {
     namespace fs = std::filesystem;
     fs::path base_dir = output_dir;
     fs::path gfa_path = base_dir / "gfa" / (experiment_name + ".gfa");
@@ -45,41 +41,22 @@ void LCPGraph::exportGFA(const std::string& output_dir, const std::string& exper
     std::ofstream gfa_out(gfa_path);
     if (!gfa_out) return;
     
-    std::ofstream csv_out(csv_path);
-    if (!csv_out) return;
-    
     gfa_out << "H\tVN:Z:1.0\n";
-    csv_out << "Name,Colour\n";
     
-    // Map hash to sequential ID
     std::unordered_map<node_hash, size_t> hash_to_id;
     size_t node_id = 1;
     for (const auto& [hash, _] : nodes) {
         hash_to_id[hash] = node_id++;
     }
     
-    // Write nodes
+    std::map<std::string, std::vector<std::string>> csv_data;
+    
     for (const auto& [hash, node] : nodes) {
         size_t id = hash_to_id[hash];
         
-        // Calculate node length from positions (sum of all position lengths)
-        uint64_t node_length = 0;
-        auto pos_it = node_positions.find(hash);
-        if (pos_it != node_positions.end()) {
-            for (const auto& pos_info : pos_it->second) {
-                if (pos_info.end > pos_info.start) {
-                    node_length += (pos_info.end - pos_info.start);
-                }
-            }
-        }
-        // If no positions found, use count as fallback
-        if (node_length == 0) {
-            node_length = node.count;
-        }
+        uint64_t node_length = node.count;
         
-        // GFA: S line
         gfa_out << "S\t" << id << "\t*\tLN:i:" << node_length << "\tCN:i:" << node.count << "\tHASH:i:" << hash;
-        // Add color info
         for (int i = 0; i < 32; ++i) {
             if (node.hasColor(i)) {
                 gfa_out << "\tC" << i << ":i:1";
@@ -87,49 +64,20 @@ void LCPGraph::exportGFA(const std::string& output_dir, const std::string& exper
         }
         gfa_out << "\n";
         
-        // CSV: color for visualization
-        // 7-color system: N=0, T=1, GT=2 (deletion from ground truth)
-        // N (0) → Blue (0x0000FF)
-        // T (1) → Red (0xFF0000)
-        // GT (2) → Green (0x00FF00)
-        // N+T (0+1) → Purple (0x800080)
-        // N+GT (0+2) → Cyan (0x00FFFF) - T yok, sadece N ve GT
-        // T+GT (1+2) → Yellow (0xFFFF00)
-        // N+T+GT (0+1+2) → Orange (0xFF8000) - T dallanıyor (bubble'lar)
-        
-        bool has_normal = node.hasColor(0);
-        bool has_tumor = false;
-        // Check for tumor color (1) specifically, not all colors > 0
-        if (node.hasColor(1)) {
-            has_tumor = true;
-        }
-        bool has_deletion = node.hasColor(2);
-        
         uint32_t c = 0;
-        if (has_normal && has_tumor && has_deletion) {
-            c = 0xFF8000;  // Orange: N+T+GT (T dallanıyor - bubble'lar)
-        } else if (has_tumor && has_deletion) {
-            c = 0xFFFF00;  // Yellow: T+GT
-        } else if (has_normal && has_deletion) {
-            c = 0x00FFFF;  // Cyan: N+GT (T yok, sadece N ve GT)
-        } else if (has_deletion) {
-            c = 0x00FF00;  // Green: GT only
-        } else if (has_normal && has_tumor) {
-            c = 0x800080;  // Purple: N+T
-        } else if (has_normal) {
-            c = 0x0000FF;  // Blue: N only
-        } else if (has_tumor) {
-            c = 0xFF0000;  // Red: T only
+        if (color_map) {
+            auto it = color_map->find(node.colors);
+            if (it != color_map->end()) {
+                c = it->second;
+            }
         }
-        // else: c = 0 (black) - should not happen
         
         c &= 0xFFFFFF;
         char color_buf[9];
         snprintf(color_buf, sizeof(color_buf), "#%06X", c);
-        csv_out << id << "," << color_buf << "\n";
+        csv_data[std::to_string(id)].push_back(color_buf);
     }
-    
-    // Write edges
+
     for (const auto& [hash, next_set] : next_edges) {
         size_t from_id = hash_to_id[hash];
         for (node_hash next_hash : next_set) {
@@ -139,6 +87,8 @@ void LCPGraph::exportGFA(const std::string& output_dir, const std::string& exper
             }
         }
     }
+    
+    writeCSV(csv_data, csv_path.string(), {"Name", "Colour"}, ',');
 }
 
 void LCPGraph::compressGraph(std::unordered_set<node_hash>* deletion_nodes) {
@@ -175,6 +125,7 @@ void LCPGraph::compressGraph(std::unordered_set<node_hash>* deletion_nodes) {
 
         const uint32_t c = getNodeColor(h);
 
+        // Found a chain start, build the chain
         std::vector<node_hash> chain;
         node_hash cur = h;
 
@@ -184,16 +135,16 @@ void LCPGraph::compressGraph(std::unordered_set<node_hash>* deletion_nodes) {
             chain.push_back(cur);
             claimed.insert(cur);
 
-            const auto& out = getNextNodes(cur);
-            if (out.size() != 1) break;
+            const auto& curNext = getNextNodes(cur);
+            if (curNext.size() != 1) break;  // End of chain (no next or multiple nexts)
 
-            node_hash nxt = *out.begin();
+            node_hash nxt = *curNext.begin();
             if (!nodeExists(nxt) || claimed.count(nxt)) break;
-            if (getNodeColor(nxt) != c) break;
+            if (getNodeColor(nxt) != c) break;  // Must have same color
 
             const auto& nxtPrev = getPrevNodes(nxt);
-            if (nxtPrev.size() != 1) break;
-            if (*nxtPrev.begin() != cur) break;
+            if (nxtPrev.size() != 1) break;  // End of chain (multiple prevs)
+            if (*nxtPrev.begin() != cur) break;  // Not a linear connection
 
             cur = nxt;
         }
@@ -214,30 +165,14 @@ void LCPGraph::compressGraph(std::unordered_set<node_hash>* deletion_nodes) {
 
         std::unordered_set<node_hash> chain_set(chain.begin(), chain.end());
 
-        // Merge positions, counts, and colors
-        std::vector<PositionInfo> merged_positions;
+        // Merge counts only (colors are identical, positions not needed)
         uint64_t merged_count = 0;
-        uint32_t merged_colors = 0;  // Merge all colors from chain
-        {
-            size_t total_pos = 0;
-            for (node_hash h : chain) {
-                auto pit = node_positions.find(h);
-                if (pit != node_positions.end()) total_pos += pit->second.size();
-            }
-            merged_positions.reserve(total_pos);
-
-            for (node_hash h : chain) {
-                if (auto nit = nodes.find(h); nit != nodes.end()) {
-                    merged_count += nit->second.count;
-                    merged_colors |= nit->second.colors;  // Merge colors (OR operation)
-                }
-                auto pit = node_positions.find(h);
-                if (pit != node_positions.end()) {
-                    merged_positions.insert(
-                        merged_positions.end(),
-                        pit->second.begin(),
-                        pit->second.end()
-                    );
+        uint32_t chain_color = 0;  // All nodes have same color, just take first one
+        for (node_hash h : chain) {
+            if (auto nit = nodes.find(h); nit != nodes.end()) {
+                merged_count += nit->second.count;
+                if (chain_color == 0) {
+                    chain_color = nit->second.colors;  // Take first node's color (all are same)
                 }
             }
         }
@@ -280,7 +215,6 @@ void LCPGraph::compressGraph(std::unordered_set<node_hash>* deletion_nodes) {
         for (size_t i = 1; i < chain.size(); ++i) {
             node_hash n = chain[i];
             nodes.erase(n);
-            node_positions.erase(n);
             next_edges.erase(n);
             prev_edges.erase(n);
             is_deletion.erase(n);  // Remove from deletion set
@@ -291,7 +225,7 @@ void LCPGraph::compressGraph(std::unordered_set<node_hash>* deletion_nodes) {
         next_edges[first].clear();
         if (auto fit = nodes.find(first); fit != nodes.end()) {
             fit->second.count = merged_count;
-            fit->second.colors = merged_colors;  // Set merged colors (includes color 2 if any node had it)
+            fit->second.colors = chain_color;  // All nodes had same color, use it
             // Track in deletion set if has color 2
             if (fit->second.hasColor(2)) {
                 is_deletion.insert(first);
@@ -309,9 +243,6 @@ void LCPGraph::compressGraph(std::unordered_set<node_hash>* deletion_nodes) {
             prev_edges[s].insert(first);
             next_edges[first].insert(s);
         }
-
-        // Store merged positions
-        node_positions[first] = std::move(merged_positions);
     }
     
     // Update deletion_nodes set if provided (after all collapses)
@@ -349,64 +280,26 @@ bool LCPGraph::isChainStart(node_hash h, const std::unordered_set<node_hash>& cl
 
     const uint32_t c = getNodeColor(h);
     const auto& out = getNextNodes(h);
-    if (out.size() != 1) return false;
+    if (out.size() != 1) return false;  // Must have exactly one next
 
     node_hash n = *out.begin();
-    if (!nodeExists(n) || getNodeColor(n) != c) return false;
+    if (!nodeExists(n) || getNodeColor(n) != c) return false;  // Next must have same color
 
     const auto& nPrev = getPrevNodes(n);
-    if (nPrev.size() != 1) return false;
-    if (*nPrev.begin() != h) return false; // robust: ensure the unique prev is h
+    if (nPrev.size() != 1) return false;  // Next must have exactly one prev
+    if (*nPrev.begin() != h) return false;  // Next's prev must be us
 
     const auto& in = getPrevNodes(h);
-    if (in.size() != 1) return true; // no unique predecessor => start
+    if (in.size() != 1) return true;  // No unique predecessor => start
 
     node_hash p = *in.begin();
-    if (!nodeExists(p) || getNodeColor(p) != c) return true;
+    if (!nodeExists(p) || getNodeColor(p) != c) return true;  // Prev has different color => start
 
     const auto& pOut = getNextNodes(p);
-    if (pOut.size() != 1) return true;
-    if (*pOut.begin() != h) return true;
+    if (pOut.size() != 1) return true;  // Prev has multiple nexts => start
+    if (*pOut.begin() != h) return true;  // Prev doesn't point to us => start
 
     // p -> h exists and p is also "chain-like", so h is not a start
     return false;
 }
 
-std::vector<PositionInfo> LCPGraph::getPositions(node_hash hash, int cell_id) const {
-    auto it = node_positions.find(hash);
-    if (it == node_positions.end()) {
-        return {};
-    }
-    
-    if (cell_id == -1) {
-        // Return all positions
-        return it->second;
-    }
-    
-    // Filter by cell_id
-    std::vector<PositionInfo> result;
-    for (const auto& pos : it->second) {
-        if (pos.cell_id == cell_id) {
-            result.push_back(pos);
-        }
-    }
-    return result;
-}
-
-std::string LCPGraph::getSequence(int cell_id, const std::string& chrom) const {
-    auto cell_it = sequences.find(cell_id);
-    if (cell_it == sequences.end()) {
-        return "";
-    }
-    
-    auto chrom_it = cell_it->second.find(chrom);
-    if (chrom_it == cell_it->second.end()) {
-        return "";
-    }
-    
-    return chrom_it->second;
-}
-
-void LCPGraph::setSequence(int cell_id, const std::string& chrom, const std::string& sequence) {
-    sequences[cell_id][chrom] = sequence;
-}

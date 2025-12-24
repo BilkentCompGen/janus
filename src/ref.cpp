@@ -1,14 +1,13 @@
-#include "vcf.h"
-#include "graph.h"
-
-#include <htslib/vcf.h>
-#include <htslib/hts.h>
-
+#include <algorithm>
+#include <string>
 #include <unordered_set>
 #include <vector>
-#include <string>
-#include <algorithm>
 
+#include <htslib/hts.h>
+#include <htslib/vcf.h>
+
+#include "graph.h"
+#include "ref.h"
 
 std::vector<DeletionRegion> parseVCFDeletions(const std::string& vcf_path) {
     std::vector<DeletionRegion> deletions;
@@ -60,36 +59,18 @@ std::vector<DeletionRegion> parseVCFDeletions(const std::string& vcf_path) {
     return deletions;
 }
 
-std::unordered_set<node_hash> findDeletionNodeHashes(const std::vector<DeletionRegion>& deletions, const LCPGraph& graph) {
+// TODO: Implement findDeletionNodeHashes when node positions are tracked
+// This function requires node position tracking which was removed.
+// Will be re-implemented when VCF functionality is fully integrated.
+std::unordered_set<node_hash> findDeletionNodeHashes(const std::vector<DeletionRegion>& /* deletions */, const LCPGraph& /* graph */) {
     std::unordered_set<node_hash> deletion_hashes;
     
-    std::unordered_map<std::string, std::vector<DeletionRegion>> deletions_by_chrom;
-    for (const auto& del : deletions) {
-        deletions_by_chrom[del.chrom].push_back(del);
-    }
-
-    for (const auto& [hash, node] : graph.nodes) {
-        auto positions = graph.getPositions(hash, 0);
-        
-        for (const auto& pos : positions) {
-            std::string core_chrom = pos.chrom;
-            if (core_chrom.rfind("chr", 0) == 0) core_chrom = core_chrom.substr(3);
-            
-            auto chrom_it = deletions_by_chrom.find(core_chrom);
-            if (chrom_it == deletions_by_chrom.end()) continue;
-            
-            for (const auto& del : chrom_it->second) {
-                uint64_t overlap_start = std::max(pos.start, del.start);
-                uint64_t overlap_end = std::min(pos.end, del.end);
-                
-                if (overlap_end > overlap_start) {
-                    deletion_hashes.insert(hash);
-                    goto next_node;
-                }
-            }
-        }
-        next_node:;
-    }
-
+    // Implementation pending - requires node position tracking
+    // for (const auto& [hash, node] : graph.nodes) {
+    //     auto positions = graph.getPositions(hash, 0);
+    //     ...
+    // }
+    
     return deletion_hashes;
 }
+
