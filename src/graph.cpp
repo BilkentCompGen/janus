@@ -388,7 +388,6 @@ std::vector<Bubble> LCPGraph::extractBubbles(const BubbleResult& bubble_markers,
         while (!q.empty()) {
             node_hash cur = q.front(); q.pop();
             if (bubble_markers.bubble_ends.count(cur)) { end_h = cur; break; }
-            if (visited.size() > 10000) break; 
             
             for (node_hash nh : getNextNodes(cur)) {
                 if (visited.count(nh)) continue;
