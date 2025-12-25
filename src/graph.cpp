@@ -358,179 +358,69 @@ bool LCPGraph::isChainStart(node_hash h, const std::unordered_set<node_hash>& cl
     return false;
 }
 
-// Helper to get occurrence for a specific seq_id
-static std::pair<uint64_t, uint64_t> getOccurrenceCoords(const Node& node, uint32_t seq_id) {
+static std::pair<uint64_t, uint64_t> get_occ(const Node& node, uint32_t seq_id) {
     for (const auto& occ : node.occurrences) {
-        if (occ.seq_id == seq_id) {
-            return {occ.start, occ.end};
-        }
+        if (occ.seq_id == seq_id) return {occ.start, occ.end};
     }
     return {UINT64_MAX, UINT64_MAX};
 }
 
-std::vector<Bubble> LCPGraph::extractBubbles(
-    const BubbleResult& bubble_markers,
-    uint32_t ref_seq_id,
-    uint32_t normal_seq_id,
-    uint32_t tumor_seq_id
-) const {
+std::vector<Bubble> LCPGraph::extractBubbles(const BubbleResult& bubble_markers, uint32_t ref_seq_id, uint32_t normal_seq_id, uint32_t tumor_seq_id) const {
     std::vector<Bubble> bubbles;
     
-    // For each bubble start, try to find corresponding bubble end
     for (node_hash start_h : bubble_markers.bubble_starts) {
-        auto start_it = nodes.find(start_h);
-        if (start_it == nodes.end()) continue;
+        auto sit = nodes.find(start_h);
+        if (sit == nodes.end()) continue;
         
-        const Node& start_node = start_it->second;
+        // Follow normal-only path to find end
+        node_hash end_h = 0;
+        std::queue<node_hash> q;
+        std::unordered_set<node_hash> visited;
         
-        // Get reference coordinates from start node
-        auto [ref_start, ref_start_end] = getOccurrenceCoords(start_node, ref_seq_id);
-        auto [tumor_start, tumor_start_end] = getOccurrenceCoords(start_node, tumor_seq_id);
-        
-        // If no ref occurrence, try normal (same as ref)
-        if (ref_start == UINT64_MAX) {
-            auto [ns, ne] = getOccurrenceCoords(start_node, normal_seq_id);
-            ref_start = ns;
-            ref_start_end = ne;
-        }
-        
-        if (ref_start == UINT64_MAX) continue;  // Can't anchor this bubble
-        
-        // BFS to find bubble end following normal-only path
-        std::vector<node_hash> normal_path_nodes;
-        std::vector<node_hash> tumor_path_nodes;
-        node_hash end_node_hash = 0;
-        
-        // Find normal-only path (nodes with color 1 set but not color 2)
-        {
-            std::queue<node_hash> q;
-            std::unordered_set<node_hash> visited;
-            
-            for (node_hash next_h : getNextNodes(start_h)) {
-                auto it = nodes.find(next_h);
-                if (it == nodes.end()) continue;
-                uint32_t c = it->second.colors;
-                // Normal-only: has normal (bit 1), no tumor (bit 2)
-                if ((c & 0x2) && !(c & 0x4)) {
-                    q.push(next_h);
-                    visited.insert(next_h);
-                }
-            }
-            
-            while (!q.empty()) {
-                node_hash cur = q.front();
-                q.pop();
-                
-                // Check if this is a bubble end
-                if (bubble_markers.bubble_ends.count(cur)) {
-                    end_node_hash = cur;
-                    break;
-                }
-                
-                normal_path_nodes.push_back(cur);
-                
-                // Continue along normal-only path
-                for (node_hash next_h : getNextNodes(cur)) {
-                    if (visited.count(next_h)) continue;
-                    
-                    auto it = nodes.find(next_h);
-                    if (it == nodes.end()) continue;
-                    
-                    // If it's a bubble end, accept it regardless of color
-                    if (bubble_markers.bubble_ends.count(next_h)) {
-                        end_node_hash = next_h;
-                        break;
-                    }
-                    
-                    uint32_t c = it->second.colors;
-                    // Continue if normal-only or shared (to reach bubble end)
-                    if (c & 0x2) {  // Has normal
-                        q.push(next_h);
-                        visited.insert(next_h);
-                    }
-                }
-                
-                if (end_node_hash != 0) break;
+        for (node_hash nh : getNextNodes(start_h)) {
+            auto it = nodes.find(nh);
+            if (it != nodes.end() && (it->second.colors & 0x2) && !(it->second.colors & 0x4)) {
+                q.push(nh);
+                visited.insert(nh);
             }
         }
         
-        if (end_node_hash == 0) continue;  // No bubble end found
-        
-        // Find tumor-only path
-        {
-            std::queue<node_hash> q;
-            std::unordered_set<node_hash> visited;
+        while (!q.empty()) {
+            node_hash cur = q.front(); q.pop();
+            if (bubble_markers.bubble_ends.count(cur)) { end_h = cur; break; }
+            if (visited.size() > 10000) break; 
             
-            for (node_hash next_h : getNextNodes(start_h)) {
-                auto it = nodes.find(next_h);
-                if (it == nodes.end()) continue;
-                uint32_t c = it->second.colors;
-                // Tumor-only: has tumor (bit 2), no normal (bit 1)
-                if ((c & 0x4) && !(c & 0x2)) {
-                    q.push(next_h);
-                    visited.insert(next_h);
-                }
-            }
-            
-            while (!q.empty()) {
-                node_hash cur = q.front();
-                q.pop();
-                
-                if (cur == end_node_hash) break;
-                
-                tumor_path_nodes.push_back(cur);
-                
-                for (node_hash next_h : getNextNodes(cur)) {
-                    if (visited.count(next_h)) continue;
-                    if (next_h == end_node_hash) break;
-                    
-                    auto it = nodes.find(next_h);
-                    if (it == nodes.end()) continue;
-                    
-                    uint32_t c = it->second.colors;
-                    if (c & 0x4) {  // Has tumor
-                        q.push(next_h);
-                        visited.insert(next_h);
-                    }
+            for (node_hash nh : getNextNodes(cur)) {
+                if (visited.count(nh)) continue;
+                auto it = nodes.find(nh);
+                if (it != nodes.end() && (it->second.colors & 0x2)) {
+                    q.push(nh); visited.insert(nh);
                 }
             }
         }
         
-        // Get end node coordinates
-        auto end_it = nodes.find(end_node_hash);
-        if (end_it == nodes.end()) continue;
+        if (!end_h) continue;
+        auto eit = nodes.find(end_h);
+        if (eit == nodes.end()) continue;
         
-        const Node& end_node = end_it->second;
-        auto [ref_end_start, ref_end] = getOccurrenceCoords(end_node, ref_seq_id);
-        auto [tumor_end_start, tumor_end] = getOccurrenceCoords(end_node, tumor_seq_id);
+        Bubble b;
+        b.start_node = start_h; b.end_node = end_h;
         
-        if (ref_end_start == UINT64_MAX) {
-            auto [ns, ne] = getOccurrenceCoords(end_node, normal_seq_id);
-            ref_end_start = ns;
-            ref_end = ne;
-        }
+        auto [rs, re] = get_occ(sit->second, ref_seq_id);
+        auto [ers, ere] = get_occ(eit->second, ref_seq_id);
+        b.ref_s = re; b.ref_e = ers;
         
-        if (ref_end == UINT64_MAX) continue;
+        auto [ns, ne] = get_occ(sit->second, normal_seq_id);
+        auto [ens, ene] = get_occ(eit->second, normal_seq_id);
+        b.norm_s = ne; b.norm_e = ens;
         
-        // Create bubble
-        Bubble bubble;
-        bubble.start_node = start_h;
-        bubble.end_node = end_node_hash;
-        bubble.ref_start = ref_start_end;    // End of start node
-        bubble.ref_end = ref_end_start;       // Start of end node
-        bubble.tumor_start = (tumor_start != UINT64_MAX) ? tumor_start_end : 0;
-        bubble.tumor_end = (tumor_end_start != UINT64_MAX) ? tumor_end_start : 0;
+        auto [ts, te] = get_occ(sit->second, tumor_seq_id);
+        auto [ets, ete] = get_occ(eit->second, tumor_seq_id);
+        b.tum_s = te; b.tum_e = ets;
         
-        bubble.normal_path.nodes = std::move(normal_path_nodes);
-        bubble.normal_path.seq_id = normal_seq_id;
-        
-        bubble.tumor_path.nodes = std::move(tumor_path_nodes);
-        bubble.tumor_path.seq_id = tumor_seq_id;
-        
-        bubbles.push_back(std::move(bubble));
+        bubbles.push_back(b);
     }
     
-    graph_logger.debug("Extracted " + std::to_string(bubbles.size()) + " complete bubbles");
-    
+    graph_logger.debug("Extracted " + std::to_string(bubbles.size()) + " bubbles");
     return bubbles;
 }

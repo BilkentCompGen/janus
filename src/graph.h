@@ -24,28 +24,11 @@ struct BubbleResult {
     std::unordered_set<node_hash> bubble_ends;
 };
 
-struct BubblePath {
-    std::vector<node_hash> nodes;  // Path'teki node hash'leri (start ve end dahil degil)
-    uint32_t seq_id = 0;           // Bu path hangi sequence'ta
-    uint64_t start_coord = 0;      // Path baslangic koordinati
-    uint64_t end_coord = 0;        // Path bitis koordinati
-};
-
 struct Bubble {
-    node_hash start_node;
-    node_hash end_node;
-    
-    // Reference koordinatlari (start/end node'larindan)
-    uint64_t ref_start;
-    uint64_t ref_end;
-    
-    // Tumor koordinatlari
-    uint64_t tumor_start;
-    uint64_t tumor_end;
-    
-    // Path'ler
-    BubblePath normal_path;  // Normal-only node'lardan olusan path
-    BubblePath tumor_path;   // Tumor-only node'lardan olusan path
+    node_hash start_node, end_node;
+    uint64_t ref_s, ref_e;
+    uint64_t norm_s, norm_e;
+    uint64_t tum_s, tum_e;
 };
 
 struct Node {
@@ -86,12 +69,7 @@ public:
     void markDeletions(const std::unordered_set<node_hash>& deletion_nodes);
     void compressGraph();
     
-    std::vector<Bubble> extractBubbles(
-        const BubbleResult& bubble_markers,
-        uint32_t ref_seq_id,
-        uint32_t normal_seq_id,
-        uint32_t tumor_seq_id
-    ) const;
+    std::vector<Bubble> extractBubbles(const BubbleResult& bubble_markers, uint32_t ref_seq_id, uint32_t normal_seq_id, uint32_t tumor_seq_id) const;
 
 private:
     bool nodeExists(node_hash h) const;
