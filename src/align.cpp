@@ -23,31 +23,24 @@ std::vector<VariantCall> alignAndCall(const std::string& n_seq, const std::strin
         uint32_t len = parasail_cigar_decode_len(c->seq[i]);
 
         if (op == 'M' || op == '=' || op == 'X') {
-            r_pos += len; n_idx += len; t_idx += len;
-        } else if (op == 'I') {
-            if (n_idx + len <= n_seq.size()) {
-                VariantCall v = {chrom, "", "", "DEL", r_pos, -(int64_t)len};
-                if (n_idx > 0) {
-                    v.pos = r_pos - 1;
-                    v.ref_allele = n_seq.substr(n_idx - 1, len + 1);
-                    v.alt_allele = n_seq.substr(n_idx - 1, 1);
-                } else {
-                    v.ref_allele = n_seq.substr(n_idx, len); v.alt_allele = ".";
+            for (uint32_t j = 0; j < len; ++j) {
+                if (n_seq[n_idx + j] != t_seq[t_idx + j]) {
+                    vars.push_back({chrom, std::string(1, n_seq[n_idx+j]), std::string(1, t_seq[t_idx+j]), "SNP", r_pos + j, 0});
                 }
-                vars.push_back(v);
+            }
+            r_pos += len; n_idx += len; t_idx += len;
+        } else if (op == 'I') { // DEL in tumor
+            if (len >= 1 && n_idx + len <= n_seq.size()) {
+                uint64_t v_pos = (n_idx > 0) ? r_pos - 1 : r_pos;
+                std::string v_ref = (n_idx > 0) ? n_seq.substr(n_idx - 1, 1) : "N";
+                vars.push_back({chrom, v_ref, "<DEL>", "DEL", v_pos, -(int64_t)len});
             }
             r_pos += len; n_idx += len;
-        } else if (op == 'D') {
-            if (t_idx + len <= t_seq.size()) {
-                VariantCall v = {chrom, "", "", "INS", r_pos, (int64_t)len};
-                if (n_idx > 0 && n_idx <= n_seq.size()) {
-                    v.pos = r_pos - 1;
-                    v.ref_allele = n_seq.substr(n_idx - 1, 1);
-                    v.alt_allele = n_seq.substr(n_idx - 1, 1) + t_seq.substr(t_idx, len);
-                } else {
-                    v.ref_allele = "N"; v.alt_allele = "N" + t_seq.substr(t_idx, len);
-                }
-                vars.push_back(v);
+        } else if (op == 'D') { // INS in tumor
+            if (len >= 1 && t_idx + len <= t_seq.size()) {
+                uint64_t v_pos = r_pos;
+                std::string v_ref = (n_idx < n_seq.size()) ? n_seq.substr(n_idx, 1) : "N";
+                vars.push_back({chrom, v_ref, "<INS>", "INS", v_pos, (int64_t)len});
             }
             t_idx += len;
         }
