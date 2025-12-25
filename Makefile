@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++20 -O3 -g -Wall -Wextra -pedantic
-LDFLAGS = -lz -llcptools -lhts
+LDFLAGS = -lz -llcptools -lhts -L$(LIBDIR)/parasail -lparasail -Wl,-rpath,$(LIBDIR)/parasail
 
 TARGET = svp
 SRCDIR = src
@@ -22,7 +22,7 @@ VPATH = .:$(SRCDIR)
 # Pattern rule for source files
 $(OBJDIR)/%.o: %.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SRCDIR)/*.hpp)
 	@mkdir -p $(OBJDIR)
-	$(CXX) $(CXXFLAGS) -I$(LIBDIR)/lcptools -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -I$(LIBDIR)/lcptools -I$(LIBDIR)/parasail -c -o $@ $<
 
 images:
 	./scripts/generate_images.sh
