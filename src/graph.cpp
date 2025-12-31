@@ -178,6 +178,41 @@ void LCPGraph::exportGFA(const std::string& output_dir, const std::string& exper
     writeCSV(csv_data, csv_path.string(), {"Name", "Colour"}, ',');
 }
 
+void LCPGraph::exportGFA(const std::string& output_dir, const std::string& experiment_name, const std::map<node_hash, uint32_t>& node_color_map) const {
+    namespace fs = std::filesystem;
+    fs::path base_dir = output_dir;
+    fs::path gfa_path = base_dir / "gfa" / (experiment_name + ".gfa");
+    fs::path csv_path = base_dir / "csv" / (experiment_name + ".csv");
+    fs::create_directories(gfa_path.parent_path()); fs::create_directories(csv_path.parent_path());
+    std::ofstream gfa_out(gfa_path); if (!gfa_out) return;
+    gfa_out << "H\tVN:Z:1.0\n";
+    std::unordered_map<node_hash, size_t> hash_to_id; size_t node_id = 1;
+    for (const auto& [hash, _] : nodes) hash_to_id[hash] = node_id++;
+    std::map<std::string, std::vector<std::string>> csv_data;
+    for (const auto& [hash, node] : nodes) {
+        size_t id = hash_to_id[hash];
+        gfa_out << "S\t" << id << "\t*\tLN:i:" << node.count << "\tCN:i:" << node.count << "\tHASH:i:" << hash;
+        for (int i = 0; i < 32; ++i) if (node.hasColor(i)) gfa_out << "\tC" << i << ":i:1";
+        gfa_out << "\n";
+        uint32_t c = 0;
+        auto it = node_color_map.find(hash);
+        if (it != node_color_map.end()) c = it->second;
+        c &= 0xFFFFFF;
+        char color_buf[9]; snprintf(color_buf, sizeof(color_buf), "#%06X", c);
+        csv_data[std::to_string(id)].push_back(color_buf);
+    }
+    for (const auto& [hash, next_set] : next_edges) {
+        size_t from_id = hash_to_id[hash];
+        for (node_hash next_hash : next_set) {
+            if (hash_to_id.count(next_hash) && next_hash != hash) {
+                size_t to_id = hash_to_id[next_hash];
+                gfa_out << "L\t" << from_id << "\t+\t" << to_id << "\t+\t0M\n";
+            }
+        }
+    }
+    writeCSV(csv_data, csv_path.string(), {"Name", "Colour"}, ',');
+}
+
 void LCPGraph::compressGraph() {
     graph_logger.debug("Starting graph compression...");
 
@@ -372,7 +407,6 @@ std::vector<Bubble> LCPGraph::extractBubbles(const BubbleResult& bubble_markers,
         auto sit = nodes.find(start_h);
         if (sit == nodes.end()) continue;
         
-        // Follow normal-only path to find end
         node_hash end_h = 0;
         std::queue<node_hash> q;
         std::unordered_set<node_hash> visited;
