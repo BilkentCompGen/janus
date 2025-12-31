@@ -1,0 +1,104 @@
+reference: './ref.fasta'
+overlap_regions: ['chr19.bed']
+
+variant_sets:
+    # ------------------------------------------------------------
+    # SNPs (1bp)
+    # ------------------------------------------------------------
+    - type: "SNP"
+      number: 2000
+      length_ranges: [[1, 1]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    # ------------------------------------------------------------
+    # Small Indels (1-50bp)
+    # ------------------------------------------------------------
+    - type: "INS"
+      number: 300
+      length_ranges: [[1, 50]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    - type: "DEL"
+      number: 300
+      length_ranges: [[1, 50]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    # ------------------------------------------------------------
+    # Medium SVs (Split ranges to avoid syntax error)
+    # ------------------------------------------------------------
+    # 50bp - 1000bp
+    - type: "INS"
+      number: 50
+      length_ranges: [[50, 1000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    - type: "DEL"
+      number: 50
+      length_ranges: [[50, 1000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    # 1000bp - 10000bp (10kb)
+    - type: "INS"
+      number: 50
+      length_ranges: [[1000, 10000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    - type: "DEL"
+      number: 50
+      length_ranges: [[1000, 10000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    # ------------------------------------------------------------
+    # Large SVs (10kb - 100kb)
+    # ------------------------------------------------------------
+    - type: "INS"
+      number: 20
+      length_ranges: [[10000, 100000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    - type: "DEL"
+      number: 20
+      length_ranges: [[10000, 100000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    # ------------------------------------------------------------
+    # Very Large SVs (100kb - 1Mb)
+    # ------------------------------------------------------------
+    - type: "INS"
+      number: 5
+      length_ranges: [[100000, 1000000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    - type: "DEL"
+      number: 5
+      length_ranges: [[100000, 1000000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    # ------------------------------------------------------------
+    # Mega SVs (1Mb - 2Mb)
+    # ------------------------------------------------------------
+    - type: "INS"
+      number: 2
+      length_ranges: [[1000000, 2000000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+    - type: "DEL"
+      number: 2
+      length_ranges: [[1000000, 2000000]]
+      overlap_mode: "contained"
+      overlap_region_type: ["chr19"]
+
+min_intersv_dist: 200
+haploid: True

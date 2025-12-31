@@ -1,4 +1,5 @@
 #include "align.h"
+
 #include <parasail.h>
 
 std::vector<VariantCall> alignAndCall(const std::string& n_seq, const std::string& t_seq, uint64_t r_start, const std::string& chrom) {
@@ -47,5 +48,32 @@ std::vector<VariantCall> alignAndCall(const std::string& n_seq, const std::strin
     }
 
     parasail_cigar_free(c); parasail_result_free(r); parasail_matrix_free(m);
-    return vars;
+
+    // Filter artifact SNPs nearby INDELs
+    std::vector<VariantCall> filtered_vars;
+    for (size_t i = 0; i < vars.size(); ++i) {
+        bool is_artifact = false;
+        if (vars[i].svtype == "SNP") {
+            for (size_t j = 0; j < vars.size(); ++j) {
+                if (i == j) continue;
+                if (vars[j].svtype == "INS" || vars[j].svtype == "DEL") {
+                    long indel_start = vars[j].pos;
+                    long indel_end = vars[j].pos;
+                    if (vars[j].svtype == "DEL") {
+                        indel_end = vars[j].pos + std::abs(vars[j].svlen);
+                    }
+                    
+                    long dist_s = std::abs((long)vars[i].pos - indel_start);
+                    long dist_e = std::abs((long)vars[i].pos - indel_end);
+                    
+                    if (dist_s <= 5 || dist_e <= 5) { // 5bp window from either end
+                        is_artifact = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!is_artifact) filtered_vars.push_back(vars[i]);
+    }
+    return filtered_vars;
 }

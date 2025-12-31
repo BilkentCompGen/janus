@@ -62,6 +62,7 @@ public:
     
     void addString(struct lps* lcp_string, int color, const char* sequence, uint32_t seq_id);
     void exportGFA(const std::string& output_dir, const std::string& experiment_name, const std::map<uint32_t, uint32_t>* color_map = nullptr) const;
+    void exportGFA(const std::string& output_dir, const std::string& experiment_name, const std::map<node_hash, uint32_t>& node_color_map) const;
     size_t nodeCount() const { return nodes.size(); }
     
     BubbleResult detectBubbles() const;
