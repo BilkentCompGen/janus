@@ -50,10 +50,35 @@ struct AnalysisResult {
         Variant truth, pred;
         double score;
     };
-    size_t truth_count = 0, pred_count = 0, tp = 0, fp = 0, fn = 0;
+    // False Positive that actually supports a Truth variant (but wasn't the best match)
+    struct FragmentedSupport {
+        Variant pred;
+        Variant target_truth;
+        double overlap;
+    };
+    // False Negative that was partially covered but not well enough to be a Match
+    struct PartialMiss {
+        Variant truth;
+        std::vector<Variant> supporting_preds;
+        double coverage;
+    };
+    // Merge Match: One prediction covers multiple GT events
+    struct MergeMatch {
+        Variant pred;
+        std::vector<Variant> covered_truths;
+        double fill_ratio;  // sum(GT lengths) / pred length
+    };
+
+    size_t truth_count = 0, pred_count = 0;
+    size_t tp_count = 0, fp_count = 0, fn_count = 0;
     double precision = 0.0, recall = 0.0, f1 = 0.0;
-    std::vector<Variant> missed, false_pos;
-    std::vector<Match> matches;
+
+    std::vector<Match> true_positives;
+    std::vector<MergeMatch> merge_matches;              // One pred -> Many GTs
+    std::vector<FragmentedSupport> fragmented_matches;  // FP but useful
+    std::vector<PartialMiss> partial_matches;           // FN but touched
+    std::vector<Variant> artifacts;                     // Pure FP (no overlap)
+    std::vector<Variant> missed;                        // Pure FN (no coverage)
 };
 
 std::vector<Variant> parseVCFForAnalysis(const std::string& path, const std::string& chrom_filter = "", const std::vector<std::string>& types = {"DEL", "INS", "SNP"});

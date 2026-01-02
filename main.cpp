@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
                         if (next_it != graph.next_edges.end()) {
                             for (node_hash nh : next_it->second) {
                                 auto nit = graph.nodes.find(nh);
-                                if (!vis.count(nh) && nh != b.end_node && nit != graph.nodes.end() && (nit->second.colors & target_bit)) { q.push(nh); vis.insert(nh); }
+                                if (!vis.count(nh) && nh != b.end_node && nit != graph.nodes.end() && (nit->second.colors & target_bit) && !(nit->second.colors & avoid_bit)) { q.push(nh); vis.insert(nh); }
                             }
                         }
                     }

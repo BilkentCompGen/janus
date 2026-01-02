@@ -40,44 +40,62 @@ void LCPGraph::addString(struct lps* lcp_string, int color, const char* sequence
 BubbleResult LCPGraph::detectBubbles() const {
     BubbleResult result;
     
+    // A shared node has both Normal (0x2) and Tumor (0x4) colors
+    auto isShared = [](uint32_t colors) -> bool {
+        return (colors & 0x2) && (colors & 0x4);
+    };
+    
+    // A non-shared node has only Normal OR only Tumor (not both)
+    auto isNonShared = [](uint32_t colors) -> bool {
+        bool has_normal = (colors & 0x2) != 0;
+        bool has_tumor = (colors & 0x4) != 0;
+        return (has_normal && !has_tumor) || (has_tumor && !has_normal);
+    };
+    
     for (const auto& [hash, node] : nodes) {
-        // Check for bubble start: out-degree > 1 and outgoing edges go to different color paths
+        // Only consider shared nodes as potential bubble boundaries
+        if (!isShared(node.colors)) continue;
+        
+        // Check for bubble start: shared node with multiple outgoing paths OR a non-shared outgoing path
         auto next_it = next_edges.find(hash);
-        if (next_it != next_edges.end() && next_it->second.size() > 1) {
-            bool has_normal_path = false;
-            bool has_tumor_path = false;
+        if (next_it != next_edges.end() && !next_it->second.empty()) {
+            bool is_bubble_start = false;
             
-            for (node_hash next_h : next_it->second) {
+            // Multiple outgoing paths = definite bubble start
+            if (next_it->second.size() > 1) {
+                is_bubble_start = true;
+            } else {
+                // Single outgoing path: check if it's non-shared
+                node_hash next_h = *next_it->second.begin();
                 auto it = nodes.find(next_h);
-                if (it != nodes.end()) {
-                    uint32_t c = it->second.colors;
-                    // Color 0 = Ref, Color 1 = Normal, Color 2 = Tumor
-                    if ((c & 0x2) && !(c & 0x4)) has_normal_path = true;  // Normal only
-                    if ((c & 0x4) && !(c & 0x2)) has_tumor_path = true;   // Tumor only
+                if (it != nodes.end() && isNonShared(it->second.colors)) {
+                    is_bubble_start = true;
                 }
             }
             
-            if (has_normal_path && has_tumor_path) {
+            if (is_bubble_start) {
                 result.bubble_starts.insert(hash);
             }
         }
         
-        // Check for bubble end: in-degree > 1 and incoming edges come from different color paths
+        // Check for bubble end: shared node with multiple incoming paths OR a non-shared incoming path
         auto prev_it = prev_edges.find(hash);
-        if (prev_it != prev_edges.end() && prev_it->second.size() > 1) {
-            bool has_normal_path = false;
-            bool has_tumor_path = false;
+        if (prev_it != prev_edges.end() && !prev_it->second.empty()) {
+            bool is_bubble_end = false;
             
-            for (node_hash prev_h : prev_it->second) {
+            // Multiple incoming paths = definite bubble end
+            if (prev_it->second.size() > 1) {
+                is_bubble_end = true;
+            } else {
+                // Single incoming path: check if it's non-shared
+                node_hash prev_h = *prev_it->second.begin();
                 auto it = nodes.find(prev_h);
-                if (it != nodes.end()) {
-                    uint32_t c = it->second.colors;
-                    if ((c & 0x2) && !(c & 0x4)) has_normal_path = true;
-                    if ((c & 0x4) && !(c & 0x2)) has_tumor_path = true;
+                if (it != nodes.end() && isNonShared(it->second.colors)) {
+                    is_bubble_end = true;
                 }
             }
             
-            if (has_normal_path && has_tumor_path) {
+            if (is_bubble_end) {
                 result.bubble_ends.insert(hash);
             }
         }
@@ -403,6 +421,13 @@ static std::pair<uint64_t, uint64_t> get_occ(const Node& node, uint32_t seq_id) 
 std::vector<Bubble> LCPGraph::extractBubbles(const BubbleResult& bubble_markers, uint32_t ref_seq_id, uint32_t normal_seq_id, uint32_t tumor_seq_id) const {
     std::vector<Bubble> bubbles;
     
+    // Helper: check if a node is non-shared (N-only or T-only)
+    auto isNonShared = [](uint32_t colors) -> bool {
+        bool has_normal = (colors & 0x2) != 0;
+        bool has_tumor = (colors & 0x4) != 0;
+        return (has_normal && !has_tumor) || (has_tumor && !has_normal);
+    };
+    
     for (node_hash start_h : bubble_markers.bubble_starts) {
         auto sit = nodes.find(start_h);
         if (sit == nodes.end()) continue;
@@ -411,23 +436,32 @@ std::vector<Bubble> LCPGraph::extractBubbles(const BubbleResult& bubble_markers,
         std::queue<node_hash> q;
         std::unordered_set<node_hash> visited;
         
+        // Start traversal from any non-shared neighbor
         for (node_hash nh : getNextNodes(start_h)) {
             auto it = nodes.find(nh);
-            if (it != nodes.end() && (it->second.colors & 0x2) && !(it->second.colors & 0x4)) {
+            if (it != nodes.end() && isNonShared(it->second.colors)) {
                 q.push(nh);
                 visited.insert(nh);
             }
         }
         
+        // BFS to find a bubble end
         while (!q.empty()) {
             node_hash cur = q.front(); q.pop();
-            if (bubble_markers.bubble_ends.count(cur)) { end_h = cur; break; }
             
+            // Check if this is a bubble end
+            if (bubble_markers.bubble_ends.count(cur)) { 
+                end_h = cur; 
+                break; 
+            }
+            
+            // Continue traversal through any node (shared or non-shared)
             for (node_hash nh : getNextNodes(cur)) {
                 if (visited.count(nh)) continue;
                 auto it = nodes.find(nh);
-                if (it != nodes.end() && (it->second.colors & 0x2)) {
-                    q.push(nh); visited.insert(nh);
+                if (it != nodes.end()) {
+                    q.push(nh); 
+                    visited.insert(nh);
                 }
             }
         }
