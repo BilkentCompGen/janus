@@ -22,7 +22,7 @@ VPATH = .:$(SRCDIR)
 # Pattern rule for source files
 $(OBJDIR)/%.o: %.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SRCDIR)/*.hpp)
 	@mkdir -p $(OBJDIR)
-	$(CXX) $(CXXFLAGS) -I$(LIBDIR)/lcptools -I$(LIBDIR)/parasail -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -I. -I$(LIBDIR)/lcptools -I$(LIBDIR)/parasail -c -o $@ $<
 
 images:
 	./scripts/generate_images.sh
