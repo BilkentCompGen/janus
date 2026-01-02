@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
 """
-Deep Analysis of Variant Calling Failures
-Focuses on: clustering, merging, positional shifts, size mismatches
+Deep Analysis Script for SVP Variant Calling Accuracy
+
+This script performs comprehensive analysis of prediction vs ground truth variants,
+identifying patterns in errors, clustering of false positives, and potential causes.
+
+Usage:
+    python3 deep_analysis.py --truth <truth.vcf> --pred <pred.vcf> --output <output_dir>
 """
 
 import argparse
-from dataclasses import dataclass, field
-from collections import defaultdict
 import re
+import os
+import json
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple, Optional, Set
+import statistics
+
+# ==============================================================================
+# Data Structures
+# ==============================================================================
 
 @dataclass
 class Variant:
@@ -17,426 +30,646 @@ class Variant:
     alt: str
     svtype: str
     svlen: int
+    end: int = 0
+    source: str = ""  # "truth" or "pred"
+    matched: bool = False
+    match_type: str = ""  # "exact", "overlap", "missed", "fp", "merged"
+    match_partner: Optional['Variant'] = None
+    merged_partners: List['Variant'] = field(default_factory=list)
     
-    @property
-    def end(self):
+    def __post_init__(self):
+        if self.end == 0:
+            if self.svtype == "DEL":
+                self.end = self.pos + abs(self.svlen)
+            else:
+                self.end = self.pos + 1
+    
+    def overlaps(self, other: 'Variant', tolerance: int = 0) -> bool:
+        """Check if two variants overlap (for DEL) or are within tolerance (for INS/SNP)"""
+        if self.chrom != other.chrom:
+            return False
+        if self.svtype != other.svtype:
+            return False
+        
         if self.svtype == "DEL":
-            return self.pos + abs(self.svlen)
-        return self.pos  # INS/SNP are point events
+            return not (self.end + tolerance < other.pos or other.end + tolerance < self.pos)
+        else:  # INS or SNP
+            return abs(self.pos - other.pos) <= tolerance
+    
+    def reciprocal_overlap(self, other: 'Variant') -> float:
+        """Calculate reciprocal overlap for DELs"""
+        if self.svtype != "DEL" or other.svtype != "DEL":
+            return 0.0
+        overlap_start = max(self.pos, other.pos)
+        overlap_end = min(self.end, other.end)
+        overlap_len = max(0, overlap_end - overlap_start)
+        
+        len_self = self.end - self.pos
+        len_other = other.end - other.pos
+        
+        if len_self == 0 or len_other == 0:
+            return 0.0
+        
+        return min(overlap_len / len_self, overlap_len / len_other)
+    
+    def size_similarity(self, other: 'Variant') -> float:
+        """Calculate size similarity"""
+        if self.svlen == 0 and other.svlen == 0:
+            return 1.0
+        len_self = abs(self.svlen) if self.svlen != 0 else 1
+        len_other = abs(other.svlen) if other.svlen != 0 else 1
+        return min(len_self, len_other) / max(len_self, len_other)
 
-def parse_vcf(path: str, chrom_filter: str = None) -> dict[str, list[Variant]]:
-    """Parse VCF and categorize by SVTYPE"""
-    variants = {"DEL": [], "INS": [], "SNP": []}
-    with open(path) as f:
+# ==============================================================================
+# Parsing Functions
+# ==============================================================================
+
+def parse_vcf(filepath: str, source: str) -> List[Variant]:
+    """Parse VCF file and return list of Variant objects"""
+    variants = []
+    with open(filepath, 'r') as f:
         for line in f:
-            if line.startswith('#'): continue
-            fields = line.strip().split('\t')
-            if len(fields) < 8: continue
+            if line.startswith('#'):
+                continue
+            parts = line.strip().split('\t')
+            if len(parts) < 8:
+                continue
             
-            chrom = fields[0]
-            if chrom_filter and chrom != chrom_filter: continue
+            chrom, pos, vid, ref, alt, qual, filt, info = parts[:8]
+            pos = int(pos)
             
-            pos = int(fields[1])
-            ref = fields[3]
-            alt = fields[4]
-            info = fields[7] if len(fields) > 7 else ""
+            # Parse INFO field
+            info_dict = {}
+            for item in info.split(';'):
+                if '=' in item:
+                    k, v = item.split('=', 1)
+                    info_dict[k] = v
             
-            # Determine type and length
-            svtype = None
+            # Determine svtype and svlen
+            svtype = info_dict.get('SVTYPE', '')
             svlen = 0
             
-            # Check INFO field
-            if "SVTYPE=DEL" in info:
-                svtype = "DEL"
-                m = re.search(r'SVLEN=(-?\d+)', info)
-                svlen = abs(int(m.group(1))) if m else len(ref) - len(alt)
-            elif "SVTYPE=INS" in info:
-                svtype = "INS"
-                m = re.search(r'SVLEN=(-?\d+)', info)
-                svlen = abs(int(m.group(1))) if m else len(alt) - len(ref)
-            elif "SVTYPE=SNP" in info or (len(ref) == 1 and len(alt) == 1 and ref != alt):
-                svtype = "SNP"
+            if 'SVLEN' in info_dict:
+                svlen = int(info_dict['SVLEN'])
+            
+            if alt == '<DEL>' or svtype == 'DEL':
+                svtype = 'DEL'
+                if svlen == 0 and 'END' in info_dict:
+                    svlen = int(info_dict['END']) - pos
+            elif alt == '<INS>' or svtype == 'INS':
+                svtype = 'INS'
+            elif len(ref) == 1 and len(alt) == 1 and ref != alt:
+                svtype = 'SNP'
                 svlen = 1
             elif len(ref) > len(alt):
-                svtype = "DEL"
+                svtype = 'DEL'
                 svlen = len(ref) - len(alt)
             elif len(alt) > len(ref):
-                svtype = "INS"
+                svtype = 'INS'
                 svlen = len(alt) - len(ref)
             else:
-                continue
-                
-            variants[svtype].append(Variant(chrom, pos, ref, alt, svtype, svlen))
+                continue  # Skip complex or unknown
+            
+            if svtype:
+                v = Variant(
+                    chrom=chrom,
+                    pos=pos,
+                    ref=ref,
+                    alt=alt,
+                    svtype=svtype,
+                    svlen=abs(svlen) if svlen else 1,
+                    source=source
+                )
+                variants.append(v)
     
-    # Sort by position
-    for k in variants:
-        variants[k].sort(key=lambda v: v.pos)
     return variants
 
-def find_clusters(variants: list[Variant], max_dist: int = 1000) -> list[list[Variant]]:
-    """Find clusters of nearby variants"""
-    if not variants:
-        return []
+# ==============================================================================
+# Analysis Functions
+# ==============================================================================
+
+def analyze_fp_clustering(fps: List[Variant], window: int = 100) -> Dict:
+    """Analyze clustering of false positives"""
+    if not fps:
+        return {
+            "clusters": [], 
+            "max_cluster_size": 0, 
+            "chatter_regions": [],
+            "num_clusters": 0,
+            "fp_in_chatter": 0,
+            "total_fp": 0
+        }
     
+    fps_sorted = sorted(fps, key=lambda v: (v.chrom, v.pos))
     clusters = []
-    current = [variants[0]]
+    current_cluster = [fps_sorted[0]]
     
-    for v in variants[1:]:
-        if v.pos - current[-1].end <= max_dist:
-            current.append(v)
+    for v in fps_sorted[1:]:
+        if v.chrom == current_cluster[-1].chrom and v.pos - current_cluster[-1].pos <= window:
+            current_cluster.append(v)
         else:
-            if len(current) > 1:
-                clusters.append(current)
-            current = [v]
+            if len(current_cluster) >= 3:
+                clusters.append(current_cluster)
+            current_cluster = [v]
     
-    if len(current) > 1:
-        clusters.append(current)
+    if len(current_cluster) >= 3:
+        clusters.append(current_cluster)
     
-    return clusters
-
-def match_variants(truth: list[Variant], pred: list[Variant], pos_tol: int = 50, size_tol: float = 0.1):
-    """Match variants with tolerance, return detailed match info"""
-    tp = []
-    fn = []
-    fp = []
-
-    # Filter TRUTH to match the user's focus on SVs (>50bp)
-    # This prevents artificial deflation of recall
-    filtered_truth = [v for v in truth if abs(v.svlen) >= 50]
-    
-    # We also keep a raw count for reference but use filtered/target for main metrics if requested or implied
-    # Since the user explicitly requested only >50bp, let's base the MAIN stats on that
-    
-    matched_pred_indices = set() # Keep track of indices in the 'pred' list
-    
-    for t in filtered_truth:
-        best_match = None
-        best_score = 0
-        best_idx = -1
+    # Find chatter regions (extremely dense FP clusters)
+    chatter_regions = []
+    for cluster in clusters:
+        start = cluster[0].pos
+        end = cluster[-1].pos
+        span = end - start + 1
+        density = len(cluster) / span if span > 0 else 0
         
-        for i, p in enumerate(pred):
-            if i in matched_pred_indices:
-                continue
-            
-            pos_diff = abs(t.pos - p.pos)
-            if pos_diff > pos_tol + max(t.svlen, 100):
-                continue
-            
-            size_ratio = min(t.svlen, p.svlen) / max(t.svlen, p.svlen) if max(t.svlen, p.svlen) > 0 else 1
-            pos_score = max(0, 1 - pos_diff / (pos_tol + 1))
-            score = (pos_score + size_ratio) / 2
-            
-            if score > best_score and size_ratio >= (1 - size_tol):
-                best_score = score
-                best_match = p
-                best_idx = i
-        
-        if best_match:
-            tp.append((t, best_match, {
-                "pos_diff": t.pos - best_match.pos,
-                "size_diff": t.svlen - best_match.svlen,
-                "size_ratio": t.svlen / best_match.svlen if best_match.svlen else float('inf')
-            }))
-            matched_pred_indices.add(best_idx)
-        else:
-            fn.append(t)
-    
-    fp = [p for i, p in enumerate(pred) if i not in matched_pred_indices]
-    return tp, fp, fn
-
-def analyze_fn_clusters(fn: list[Variant], pred: list[Variant]):
-    """Analyze if FNs are being merged into larger predictions"""
-    results = []
-    
-    for f in fn:
-        # Find any prediction that might contain this FN
-        containing = []
-        for p in pred:
-            # Check if FN falls within prediction's span
-            p_start = p.pos
-            p_end = p.pos + p.svlen if p.svtype == "DEL" else p.pos
-            f_start = f.pos
-            f_end = f.pos + f.svlen if f.svtype == "DEL" else f.pos
-            
-            # Overlaps or is contained?
-            if p_start <= f_end + 100 and p_end >= f_start - 100:
-                containing.append(p)
-        
-        if containing:
-            results.append({
-                "fn": f,
-                "overlapping_preds": containing,
-                "likely_merged": len(containing) > 0
+        if density > 0.1 or len(cluster) > 50:  # High density or large clusters
+            chatter_regions.append({
+                "chrom": cluster[0].chrom,
+                "start": start,
+                "end": end,
+                "count": len(cluster),
+                "density": density,
+                "span": span
             })
+    
+    return {
+        "clusters": clusters,
+        "num_clusters": len(clusters),
+        "max_cluster_size": max(len(c) for c in clusters) if clusters else 0,
+        "chatter_regions": chatter_regions,
+        "fp_in_chatter": sum(r["count"] for r in chatter_regions),
+        "total_fp": len(fps)
+    }
+
+def analyze_missed_variants(missed: List[Variant], all_truth: List[Variant]) -> Dict:
+    """Analyze why variants might have been missed"""
+    if not missed:
+        return {"patterns": [], "nearby_variants": []}
+    
+    patterns = defaultdict(list)
+    
+    for m in missed:
+        # Check for size patterns
+        if abs(m.svlen) > 50000:
+            patterns["very_large_sv"].append(m)
+        elif abs(m.svlen) > 10000:
+            patterns["large_sv"].append(m)
+        elif abs(m.svlen) > 1000:
+            patterns["medium_sv"].append(m)
+        elif abs(m.svlen) > 50:
+            patterns["small_sv"].append(m)
         else:
-            results.append({
-                "fn": f,
-                "overlapping_preds": [],
-                "likely_merged": False
+            patterns["tiny_sv"].append(m)
+        
+        # Check if there are nearby truth variants (potential collision/masking)
+        nearby = []
+        for t in all_truth:
+            if t.chrom == m.chrom and t != m:
+                dist = abs(t.pos - m.pos)
+                if dist < 10000 and dist > 0:  # Within 10kb
+                    nearby.append({
+                        "pos": t.pos,
+                        "svtype": t.svtype,
+                        "svlen": t.svlen,
+                        "distance": dist
+                    })
+        
+        if nearby:
+            patterns["has_nearby_variants"].append({
+                "variant": m,
+                "nearby": sorted(nearby, key=lambda x: x["distance"])[:5]
             })
+    
+    return {
+        "by_size": {k: [(v.pos, v.svlen, v.svtype) for v in vlist] for k, vlist in patterns.items() if k != "has_nearby_variants"},
+        "with_nearby": patterns.get("has_nearby_variants", []),
+        "size_distribution": {
+            "very_large_sv": len(patterns["very_large_sv"]),
+            "large_sv": len(patterns["large_sv"]),
+            "medium_sv": len(patterns["medium_sv"]),
+            "small_sv": len(patterns["small_sv"]),
+            "tiny_sv": len(patterns["tiny_sv"])
+        }
+    }
+
+def analyze_length_mismatches(matched_pairs: List[Tuple[Variant, Variant]]) -> Dict:
+    """Analyze length mismatches between matched variants"""
+    mismatches = []
+    
+    for truth, pred in matched_pairs:
+        if truth.svlen > 0 and pred.svlen > 0:
+            ratio = pred.svlen / truth.svlen
+            diff = abs(pred.svlen - truth.svlen)
+            
+            if ratio < 0.5 or ratio > 2.0 or diff > 1000:
+                mismatches.append({
+                    "truth_pos": truth.pos,
+                    "truth_len": truth.svlen,
+                    "pred_pos": pred.pos,
+                    "pred_len": pred.svlen,
+                    "ratio": ratio,
+                    "diff": diff,
+                    "svtype": truth.svtype
+                })
+    
+    return {
+        "severe_mismatches": sorted(mismatches, key=lambda x: -abs(x["diff"]))[:20],
+        "count": len(mismatches),
+        "avg_ratio": statistics.mean([m["ratio"] for m in mismatches]) if mismatches else 1.0
+    }
+
+def find_overlapping_truth_events(variants: List[Variant]) -> List[Dict]:
+    """Find truth events that overlap each other (complex regions)"""
+    overlapping = []
+    
+    for i, v1 in enumerate(variants):
+        for j, v2 in enumerate(variants[i+1:], i+1):
+            if v1.chrom == v2.chrom:
+                # Check for overlap
+                if v1.svtype == "DEL" and v2.svtype == "DEL":
+                    if not (v1.end < v2.pos or v2.end < v1.pos):
+                        overlapping.append({
+                            "v1": (v1.pos, v1.svlen, v1.svtype),
+                            "v2": (v2.pos, v2.svlen, v2.svtype),
+                            "overlap_type": "DEL-DEL"
+                        })
+                elif abs(v1.pos - v2.pos) < 1000:
+                    overlapping.append({
+                        "v1": (v1.pos, v1.svlen, v1.svtype),
+                        "v2": (v2.pos, v2.svlen, v2.svtype),
+                        "overlap_type": f"{v1.svtype}-{v2.svtype}"
+                    })
+    
+    return overlapping
+
+def check_merge_matches(truth: List[Variant], pred: List[Variant], results: Dict) -> int:
+    """
+    Check if a single prediction covers multiple ground truth variants (Merge Match).
+    Returns number of merge matches found.
+    
+    Validation criteria:
+    - Multiple GT events must be clustered (gaps <= 500bp)
+    - Total GT length must fill >= 75% of prediction length
+    """
+    merge_count = 0
+    
+    # Group truth by type
+    truth_by_chrom = defaultdict(list)
+    for t in truth:
+        if not t.matched and t.svtype == "DEL":
+            truth_by_chrom[t.chrom].append(t)
+            
+    for p in pred:
+        if p.matched or p.svtype != "DEL":
+            continue
+            
+        # Find all GT variants this prediction overlaps
+        candidates = []
+        if p.chrom in truth_by_chrom:
+            for t in truth_by_chrom[p.chrom]:
+                if not t.matched and t.overlaps(p, tolerance=100):
+                    candidates.append(t)
+        
+        # If it covers multiple close variants
+        if len(candidates) >= 2:
+            # Check if candidates are close to each other
+            candidates.sort(key=lambda x: x.pos)
+            is_valid_merge = True
+            
+            # Verify candidates are clustered
+            for i in range(len(candidates)-1):
+                if candidates[i+1].pos - candidates[i].end > 500:
+                    is_valid_merge = False
+                    break
+            
+            if is_valid_merge:
+                # Calculate fill ratio: how much of prediction is explained by GTs
+                total_gt_len = sum(abs(t.svlen) for t in candidates)
+                pred_len = abs(p.svlen)
+                fill_ratio = total_gt_len / pred_len if pred_len > 0 else 0
+                
+                # Require at least 75% fill
+                if fill_ratio >= 0.75:
+                    p.matched = True
+                    p.match_type = "merged"
+                    p.merged_partners = candidates
+                    
+                    for t in candidates:
+                        t.matched = True
+                        t.match_type = "merged_into"
+                        t.match_partner = p
+                    
+                    results["DEL"]["tp"].append(p)
+                    merge_count += 1
+
+    return merge_count
+
+def match_variants(truth: List[Variant], pred: List[Variant], tolerance: int = 50) -> Dict:
+    """Match truth and predicted variants"""
+    results = {
+        "DEL": {"tp": [], "fp": [], "fn": [], "matched_pairs": [], "merges": []},
+        "INS": {"tp": [], "fp": [], "fn": [], "matched_pairs": [], "merges": []},
+        "SNP": {"tp": [], "fp": [], "fn": [], "matched_pairs": [], "merges": []}
+    }
+    
+    truth_by_type = defaultdict(list)
+    pred_by_type = defaultdict(list)
+    
+    for v in truth:
+        truth_by_type[v.svtype].append(v)
+    for v in pred:
+        pred_by_type[v.svtype].append(v)
+    
+    for svtype in ["DEL", "INS", "SNP"]:
+        truth_list = truth_by_type[svtype]
+        pred_list = pred_by_type[svtype]
+        
+        used_pred = set()
+        
+        for t in truth_list:
+            best_match = None
+            best_score = 0
+            
+            for i, p in enumerate(pred_list):
+                if i in used_pred:
+                    continue
+                
+                if svtype == "DEL":
+                    ro = t.reciprocal_overlap(p)
+                    if ro > best_score:
+                        best_score = ro
+                        best_match = (i, p)
+                elif svtype == "SNP":
+                    if t.chrom == p.chrom and t.pos == p.pos:
+                        best_score = 1.0
+                        best_match = (i, p)
+                else:  # INS
+                    # Proportional tolerance: max(10, 30% of smaller variant size)
+                    min_len = min(abs(t.svlen), abs(p.svlen)) if t.svlen and p.svlen else 50
+                    prop_tolerance = max(10, int(min_len * 0.3))
+                    
+                    if t.chrom == p.chrom and abs(t.pos - p.pos) <= prop_tolerance:
+                        size_sim = t.size_similarity(p)
+                        if size_sim > best_score:
+                            best_score = size_sim
+                            best_match = (i, p)
+            
+            if best_match and best_score >= 0.5:
+                used_pred.add(best_match[0])
+                t.matched = True
+                best_match[1].matched = True
+                results[svtype]["tp"].append(t)
+                results[svtype]["matched_pairs"].append((t, best_match[1]))
+            else:
+                results[svtype]["fn"].append(t)
+        
+        for i, p in enumerate(pred_list):
+            if i not in used_pred:
+                results[svtype]["fp"].append(p)
+    
+    # Check for Merge Matches (Many-to-One)
+    check_merge_matches(truth, pred, results)
     
     return results
 
-def analyze_fp_near_fn(fp: list[Variant], fn: list[Variant]):
-    """Find FPs that are near FNs (potential position shifts)"""
-    results = []
-    
-    for f in fp:
-        nearby_fn = []
-        for n in fn:
-            dist = abs(f.pos - n.pos)
-            if dist < 500 and abs(f.svlen - n.svlen) / max(f.svlen, n.svlen, 1) < 0.5:
-                nearby_fn.append((n, dist))
-        
-        if nearby_fn:
-            results.append({
-                "fp": f,
-                "nearby_fns": nearby_fn,
-                "likely_shifted": True
-            })
-    
-    return results
+# ==============================================================================
+# Report Generation
+# ==============================================================================
 
-def size_bracket(svlen: int) -> str:
-    if svlen <= 10:
-        return "tiny (1-10bp)"
-    elif svlen <= 50:
-        return "small (11-50bp)"
-    elif svlen <= 500:
-        return "medium (51-500bp)"
-    elif svlen <= 5000:
-        return "large (501-5kb)"
-    elif svlen <= 50000:
-        return "very_large (5k-50kb)"
-    else:
-        return "mega (50kb+)"
+def generate_report(truth_path: str, pred_path: str, output_dir: str):
+    """Generate comprehensive analysis report"""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    print("=" * 60)
+    print("SVP Deep Analysis Report")
+    print("=" * 60)
+    
+    # Parse files
+    print("\n[1/7] Parsing VCF files...")
+    truth = parse_vcf(truth_path, "truth")
+    pred = parse_vcf(pred_path, "pred")
+    
+    print(f"    Truth variants: {len(truth)}")
+    print(f"    Pred variants: {len(pred)}")
+    
+    # Match variants
+    print("\n[2/7] Matching variants...")
+    results = match_variants(truth, pred)
+    
+    # Summary stats
+    print("\n[3/7] Computing summary statistics...")
+    summary = {}
+    for svtype in ["DEL", "INS", "SNP"]:
+        tp = len(results[svtype]["tp"])
+        fp = len(results[svtype]["fp"])
+        fn = len(results[svtype]["fn"])
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        
+        summary[svtype] = {
+            "TP": tp, "FP": fp, "FN": fn,
+            "Precision": round(precision, 4),
+            "Recall": round(recall, 4),
+            "F1": round(f1, 4)
+        }
+        print(f"    {svtype}: TP={tp}, FP={fp}, FN={fn}, P={precision:.3f}, R={recall:.3f}, F1={f1:.3f}")
+        
+        # Report Merges
+        merges = [p for p in results[svtype]["tp"] if p.match_type == "merged"]
+        if merges:
+            print(f"    + Detected {len(merges)} merged {svtype} events (One Pred covering Multiple GTs):")
+            for m in merges[:5]:
+                print(f"      Pred {m.chrom}:{m.pos} (len={m.svlen}) covers:")
+                for t in m.merged_partners:
+                    print(f"        -> GT {t.chrom}:{t.pos} (len={t.svlen})")
+    
+    # Analyze FP clustering (SNP)
+    print("\n[4/7] Analyzing FP clustering (SNP)...")
+    snp_fp_analysis = analyze_fp_clustering(results["SNP"]["fp"])
+    print(f"    Total SNP FPs: {snp_fp_analysis['total_fp']}")
+    print(f"    Num clusters (>=3 FPs each): {snp_fp_analysis['num_clusters']}")
+    print(f"    Max cluster size: {snp_fp_analysis['max_cluster_size']}")
+    print(f"    FPs in chatter regions: {snp_fp_analysis['fp_in_chatter']}")
+    
+    if snp_fp_analysis['chatter_regions']:
+        print("\n    Top chatter regions:")
+        for i, r in enumerate(sorted(snp_fp_analysis['chatter_regions'], key=lambda x: -x['count'])[:5]):
+            print(f"      {i+1}. {r['chrom']}:{r['start']}-{r['end']} ({r['count']} FPs, span={r['span']}bp, density={r['density']:.4f})")
+    
+    # Analyze missed variants
+    print("\n[5/7] Analyzing missed variants...")
+    for svtype in ["DEL", "INS"]:
+        missed = results[svtype]["fn"]
+        if missed:
+            print(f"\n    {svtype} - Completely Missed ({len(missed)}):")
+            miss_analysis = analyze_missed_variants(missed, [v for v in truth if v.svtype == svtype])
+            
+            for size_cat, count in miss_analysis["size_distribution"].items():
+                if count > 0:
+                    print(f"      {size_cat}: {count}")
+            
+            if miss_analysis["with_nearby"]:
+                print(f"\n    {svtype} variants with nearby truth variants:")
+                for item in miss_analysis["with_nearby"][:5]:
+                    v = item["variant"]
+                    print(f"      {v.chrom}:{v.pos} (len={v.svlen}) - {len(item['nearby'])} nearby variants")
+                    for n in item["nearby"][:3]:
+                        print(f"        -> {n['svtype']} at pos {n['pos']} (len={n['svlen']}, dist={n['distance']})")
+    
+    # Analyze length mismatches
+    print("\n[6/7] Analyzing length mismatches...")
+    for svtype in ["DEL", "INS"]:
+        mismatch_analysis = analyze_length_mismatches(results[svtype]["matched_pairs"])
+        if mismatch_analysis["severe_mismatches"]:
+            print(f"\n    {svtype} - Severe length mismatches ({mismatch_analysis['count']}):")
+            for m in mismatch_analysis["severe_mismatches"][:5]:
+                print(f"      pos={m['truth_pos']}: truth_len={m['truth_len']} vs pred_len={m['pred_len']} (ratio={m['ratio']:.2f})")
+    
+    # Find overlapping truth events
+    print("\n[7/7] Analyzing overlapping truth events...")
+    overlapping = find_overlapping_truth_events(truth)
+    if overlapping:
+        print(f"    Found {len(overlapping)} overlapping truth event pairs")
+        overlap_types = defaultdict(int)
+        for o in overlapping:
+            overlap_types[o["overlap_type"]] += 1
+        for ot, count in overlap_types.items():
+            print(f"      {ot}: {count}")
+    
+    # Save detailed JSON report
+    report = {
+        "summary": summary,
+        "snp_fp_clusters": {
+            "total_fp": snp_fp_analysis['total_fp'],
+            "num_clusters": snp_fp_analysis['num_clusters'],
+            "max_cluster_size": snp_fp_analysis['max_cluster_size'],
+            "chatter_regions": snp_fp_analysis['chatter_regions']
+        },
+        "missed_del": [(v.pos, v.svlen) for v in results["DEL"]["fn"]],
+        "missed_ins": [(v.pos, v.svlen) for v in results["INS"]["fn"]],
+        "overlapping_truth": overlapping[:50]
+    }
+    
+    report_path = os.path.join(output_dir, "deep_analysis.json")
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=2, default=str)
+    print(f"\n\nDetailed report saved to: {report_path}")
+    
+    # Generate position-based analysis for missed variants
+    print("\n" + "=" * 60)
+    print("DETAILED MISSED VARIANT ANALYSIS")
+    print("=" * 60)
+    
+    # Group missed by potential cause
+    print("\n### Missed DEL Analysis:")
+    missed_dels = sorted(results["DEL"]["fn"], key=lambda v: -abs(v.svlen))
+    
+    # Check for clusters of missed variants (suggests regional issue)
+    missed_del_positions = [v.pos for v in missed_dels]
+    if missed_del_positions:
+        missed_del_positions.sort()
+        
+        clusters = []
+        current = [missed_del_positions[0]]
+        for pos in missed_del_positions[1:]:
+            if pos - current[-1] < 100000:  # Within 100kb
+                current.append(pos)
+            else:
+                if len(current) >= 2:
+                    clusters.append(current)
+                current = [pos]
+        if len(current) >= 2:
+            clusters.append(current)
+        
+        if clusters:
+            print("\nMissed DEL clusters (suggests problematic regions):")
+            for cluster in clusters:
+                print(f"  Region ~{cluster[0]}-{cluster[-1]}: {len(cluster)} missed variants")
+    
+    # Look for position collision patterns
+    print("\n### Position Collision Analysis:")
+    truth_positions = {(v.chrom, v.pos): v for v in truth}
+    pred_positions = {(v.chrom, v.pos): v for v in pred}
+    
+    collision_issues = []
+    for t in truth:
+        key = (t.chrom, t.pos)
+        if key in pred_positions:
+            p = pred_positions[key]
+            if t.svtype != p.svtype:
+                collision_issues.append({
+                    "pos": t.pos,
+                    "truth_type": t.svtype,
+                    "pred_type": p.svtype,
+                    "truth_len": t.svlen,
+                    "pred_len": p.svlen
+                })
+    
+    if collision_issues:
+        print(f"\nType collisions at same position ({len(collision_issues)}):")
+        for c in collision_issues[:10]:
+            print(f"  pos={c['pos']}: truth={c['truth_type']}(len={c['truth_len']}) vs pred={c['pred_type']}(len={c['pred_len']})")
+    
+    print("\n" + "=" * 60)
+    print("RECOMMENDATIONS")
+    print("=" * 60)
+    
+    # Generate recommendations based on analysis
+    recommendations = []
+    
+    if snp_fp_analysis['fp_in_chatter'] > snp_fp_analysis['total_fp'] * 0.5:
+        recommendations.append(
+            "HIGH PRIORITY: Most SNP FPs ({:.1f}%) come from chatter regions. "
+            "Consider implementing chatter detection and fallback to size-based calling, "
+            "or filtering SNPs from regions with high variant density.".format(
+                100 * snp_fp_analysis['fp_in_chatter'] / max(1, snp_fp_analysis['total_fp'])
+            )
+        )
+    
+    if len(results["DEL"]["fn"]) > 0:
+        # Check if many missed are in clusters
+        if clusters and sum(len(c) for c in clusters) > len(missed_dels) * 0.3:
+            recommendations.append(
+                "MEDIUM PRIORITY: Multiple missed DELs cluster together, suggesting "
+                "problematic genomic regions. Consider: (1) checking bubble detection in these "
+                "regions, (2) adjusting LCP depth, or (3) implementing special handling for complex regions."
+            )
+    
+    large_missed = [v for v in results["DEL"]["fn"] if v.svlen > 5000]
+    if large_missed:
+        recommendations.append(
+            f"MEDIUM PRIORITY: {len(large_missed)} large DELs (>5kb) were completely missed. "
+            "These should be detectable via size-based calling. Check if the bubbles are being detected "
+            "and extracted correctly in these regions."
+        )
+    
+    for rec in recommendations:
+        print(f"\n• {rec}")
+    
+    print("\n" + "=" * 60)
+
+# ==============================================================================
+# Main
+# ==============================================================================
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--truth', required=True)
-    parser.add_argument('--pred', required=True)
-    parser.add_argument('--chrom', default=None)
-    parser.add_argument('--type', default='DEL', choices=['DEL', 'INS', 'SNP'])
+    parser = argparse.ArgumentParser(description='Deep analysis of SVP variant calling accuracy')
+    parser.add_argument('--truth', '-t', required=True, help='Truth VCF file')
+    parser.add_argument('--pred', '-p', required=True, help='Predicted VCF file')
+    parser.add_argument('--output', '-o', default='analysis_output', help='Output directory')
+    
     args = parser.parse_args()
     
-    truth_all = parse_vcf(args.truth, args.chrom)
-    pred_all = parse_vcf(args.pred, args.chrom)
+    if not os.path.exists(args.truth):
+        print(f"Error: Truth file not found: {args.truth}")
+        return
+    if not os.path.exists(args.pred):
+        print(f"Error: Pred file not found: {args.pred}")
+        return
     
-    truth = truth_all[args.type]
-    pred = pred_all[args.type]
-    
-    print("="*80)
-    print(f"DEEP ANALYSIS: {args.type}")
-    print("="*80)
-    print(f"Truth: {len(truth)}, Predicted: {len(pred)}")
-    print()
-    
-    # Basic matching
-    tp, fp, fn = match_variants(truth, pred)
-    
-    print(f"TP: {len(tp)}, FP: {len(fp)}, FN: {len(fn)}")
-    precision = len(tp) / len(pred) if pred else 0
-    recall = len(tp) / len(truth) if truth else 0
-    print(f"Precision: {precision:.2%}, Recall: {recall:.2%}")
-    print()
-    
-    # 1. SIZE BRACKET ANALYSIS
-    print("-"*80)
-    print("1. SIZE BRACKET ANALYSIS")
-    print("-"*80)
-    
-    fn_by_size = defaultdict(list)
-    for f in fn:
-        fn_by_size[size_bracket(f.svlen)].append(f)
-    
-    tp_by_size = defaultdict(list)
-    for t, p, _ in tp:
-        tp_by_size[size_bracket(t.svlen)].append((t, p))
-    
-    truth_by_size = defaultdict(list)
-    for t in truth:
-        truth_by_size[size_bracket(t.svlen)].append(t)
-    
-    for bracket in ["tiny (1-10bp)", "small (11-50bp)", "medium (51-500bp)", 
-                    "large (501-5kb)", "very_large (5k-50kb)", "mega (50kb+)"]:
-        total = len(truth_by_size[bracket])
-        missed = len(fn_by_size[bracket])
-        found = len(tp_by_size[bracket])
-        if total > 0:
-            print(f"  {bracket}: {found}/{total} found ({found/total:.0%}), {missed} missed")
-    print()
-    
-    # 2. CLUSTER ANALYSIS
-    print("-"*80)
-    print("2. CLUSTER ANALYSIS (nearby variants in truth)")
-    print("-"*80)
-    
-    truth_clusters = find_clusters(truth, max_dist=5000)
-    print(f"Found {len(truth_clusters)} clusters of nearby truth variants")
-    
-    cluster_fn_count = 0
-    cluster_partial_count = 0
-    
-    for i, cluster in enumerate(truth_clusters[:10]):  # Show first 10
-        cluster_fn = [c for c in cluster if c in fn]
-        cluster_tp = [c for c in cluster if c in [t for t, _, _ in tp]]
-        
-        if cluster_fn:
-            cluster_fn_count += 1
-        if cluster_fn and cluster_tp:
-            cluster_partial_count += 1
-        
-        print(f"\n  Cluster {i+1}: {len(cluster)} variants at {cluster[0].pos}-{cluster[-1].end}")
-        print(f"    Sizes: {[c.svlen for c in cluster]}")
-        print(f"    Found: {len(cluster_tp)}, Missed: {len(cluster_fn)}")
-        
-        if cluster_fn:
-            # Check if there's a prediction covering this cluster
-            cluster_start = min(c.pos for c in cluster)
-            cluster_end = max(c.end for c in cluster)
-            covering_preds = [p for p in pred if p.pos <= cluster_end + 500 and p.end >= cluster_start - 500]
-            if covering_preds:
-                print(f"    POTENTIAL MERGE: {len(covering_preds)} prediction(s) overlap cluster")
-                for p in covering_preds[:3]:
-                    print(f"      -> Pred at {p.pos}, len={p.svlen}")
-    
-    print(f"\n  Summary: {cluster_fn_count}/{len(truth_clusters)} clusters have missed variants")
-    print()
-    
-    # 3. MERGE ANALYSIS
-    print("-"*80)
-    print("3. MERGE ANALYSIS (FNs potentially absorbed by larger calls)")
-    print("-"*80)
-    
-    merge_analysis = analyze_fn_clusters(fn, pred)
-    merged_count = sum(1 for m in merge_analysis if m["likely_merged"])
-    
-    print(f"FNs with overlapping predictions: {merged_count}/{len(fn)}")
-    print("\nTop examples of likely merges:")
-    
-    for m in merge_analysis[:15]:
-        if m["overlapping_preds"]:
-            f = m["fn"]
-            preds = m["overlapping_preds"]
-            print(f"  FN at {f.pos} (len={f.svlen}) overlaps with:")
-            for p in preds[:2]:
-                print(f"    -> Pred at {p.pos} (len={p.svlen})")
-    print()
-    
-    # 4. POSITION SHIFT ANALYSIS
-    print("-"*80)
-    print("4. POSITION SHIFT ANALYSIS (FPs near FNs)")
-    print("-"*80)
-    
-    shift_analysis = analyze_fp_near_fn(fp, fn)
-    shift_count = len(shift_analysis)
-    
-    print(f"FPs with nearby FNs (potential shifts): {shift_count}/{len(fp)}")
-    print("\nTop examples of likely position shifts:")
-    
-    for s in shift_analysis[:10]:
-        f = s["fp"]
-        for n, dist in s["nearby_fns"]:
-            print(f"  FP at {f.pos} (len={f.svlen}) <-> FN at {n.pos} (len={n.svlen}), dist={dist}bp")
-    print()
-    
-    # 5. SIZE MISMATCH ANALYSIS (in TPs)
-    print("-"*80)
-    print("5. SIZE MISMATCH ANALYSIS (in matched variants)")
-    print("-"*80)
-    
-    size_mismatches = [(t, p, info) for t, p, info in tp if abs(info["size_diff"]) > 10]
-    print(f"TPs with size mismatch >10bp: {len(size_mismatches)}/{len(tp)}")
-    for t, p, info in sorted(size_mismatches, key=lambda x: -abs(x[2]["size_diff"]))[:10]:
-        print(f"  Truth {t.pos} (len={t.svlen}) vs Pred {p.pos} (len={p.svlen}), diff={info['size_diff']}")
-    print()
-    
-    # 6. ISOLATED FNs (not explained by clusters or merges)
-    print("-" * 80)
-    print("7. TARGET SV ANALYSIS (>50bp)")
-    print("-" * 80)
-    
-    target_truth = [v for v in truth_all[args.type] if abs(v.svlen) >= 50]
-    target_pred = [v for v in pred_all[args.type] if abs(v.svlen) >= 50]
-    
-    target_tp = 0
-    target_missed = []
-    
-    # Simple matching for target stats
-    for t in target_truth:
-        found = False
-        for p in target_pred:
-            if p.chrom == t.chrom and abs(p.pos - t.pos) < 500 and abs(abs(p.svlen) - abs(t.svlen)) < abs(t.svlen) * 0.5:
-                found = True
-                break
-        if found:
-            target_tp += 1
-        else:
-            target_missed.append(t)
-            
-    target_prec = 0.0
-    if len(target_pred) > 0:
-        target_prec = target_tp / len(target_pred)
-        
-    target_rec = 0.0
-    if len(target_truth) > 0:
-        target_rec = target_tp / len(target_truth)
-        
-    print(f"Target SVs (>50bp): Truth={len(target_truth)}, Pred={len(target_pred)}")
-    print(f"TP: {target_tp}, Missed: {len(target_missed)}")
-    print(f"Target Precision: {target_prec*100:.2f}%, Target Recall: {target_rec*100:.2f}%")
-    
-    if len(target_missed) > 0:
-        print("\nMissed Target SVs:")
-        for t in target_missed[:10]:
-             print(f"  -> {t.pos} (len={t.svlen})")
-        if len(target_missed) > 10:
-            print(f"  ... and {len(target_missed)-10} more")
+    generate_report(args.truth, args.pred, args.output)
 
-    print("-" * 80)
-    print("8. ISOLATED FNs (unexplained misses)")
-    print("-" * 80)
-    
-    isolated = [m for m in merge_analysis if not m["likely_merged"]]
-    print(f"Isolated FNs (no overlapping prediction): {len(isolated)}/{len(fn)}")
-    
-    # Group by size
-    isolated_by_size = defaultdict(list)
-    for m in isolated:
-        isolated_by_size[size_bracket(m["fn"].svlen)].append(m["fn"])
-    
-    for bracket, variants in isolated_by_size.items():
-        print(f"  {bracket}: {len(variants)}")
-        for v in variants[:3]:
-            print(f"    -> {v.pos} (len={v.svlen})")
-    print()
-    
-    # 7. SUMMARY & RECOMMENDATIONS
-    print("="*80)
-    print("SUMMARY & DIAGNOSIS")
-    print("="*80)
-    
-    print(f"""
-Total FNs: {len(fn)}
-
-Breakdown:
-  - Likely merged into larger calls: {merged_count} ({merged_count/len(fn)*100:.1f}%)
-  - In dense clusters: {cluster_fn_count} clusters affected
-  - Isolated misses: {len(isolated)} ({len(isolated)/len(fn)*100:.1f}%)
-
-Top Issues:
-1. VARIANT CLUSTERING: {len(truth_clusters)} regions have multiple nearby variants.
-   The aligner may be struggling to resolve them correctly.
-
-2. MERGE EFFECT: {merged_count} FNs have overlapping predictions, suggesting
-   they are being absorbed into larger, imprecise calls.
-
-3. SIZE BRACKET VULNERABILITY: Check the size bracket table above.
-   Some size ranges may be systematically underperforming.
-
-4. POSITION SHIFTS: {shift_count} FP/FN pairs suggest correct detection but
-   incorrect positioning.
-""")
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
