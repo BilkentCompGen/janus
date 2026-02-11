@@ -2,6 +2,7 @@
 #define UTILS_H
 
 #include <any>
+#include <cstdint>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -75,7 +76,7 @@ private:
     void print_help();
 };
 
-uint64_t hash_core(const struct core* c, const char* sequence = nullptr);
+uint64_t hash_string(const std::string& data, uint64_t seed = 0);
 
 void writeCSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers = {}, char separator = ',');
 

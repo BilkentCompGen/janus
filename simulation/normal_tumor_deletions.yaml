@@ -40,23 +40,6 @@ variant_sets:
       overlap_mode: "contained"
       overlap_region_type: ["chr19"]
 
-    # ------------------------------------------------------------
-    # INSERTIONS
-    # ------------------------------------------------------------
-    # Small insertions
-    # - type: "INS"
-    #   number: 50
-    #   length_ranges: [[1, 100]]
-    #   overlap_mode: "contained"
-    #   overlap_region_type: ["chr19"]
-
-    # # Medium insertions
-    # - type: "INS"
-    #   number: 30
-    #   length_ranges: [[100, 1000]]
-    #   overlap_mode: "contained"
-    #   overlap_region_type: ["chr19"]
-
 # Optional: Set minimum distance between SVs to avoid overlap
 min_intersv_dist: 50
 
