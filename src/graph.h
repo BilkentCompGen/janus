@@ -13,12 +13,6 @@
 
 typedef uint64_t node_hash;
 
-struct Occurrence {
-    uint32_t seq_id;
-    uint64_t start;
-    uint64_t end;
-};
-
 struct BubbleResult {
     std::unordered_set<node_hash> bubble_starts;
     std::unordered_set<node_hash> bubble_ends;
@@ -26,19 +20,41 @@ struct BubbleResult {
 
 struct Bubble {
     node_hash start_node, end_node;
-    uint64_t ref_s, ref_e;
-    uint64_t norm_s, norm_e;
-    uint64_t tum_s, tum_e;
+    std::string normal_seq;
+    std::string tumor_seq;
 };
 
 struct Node {
     node_hash hash;
     uint32_t colors;
-    unsigned int count;
-    std::vector<Occurrence> occurrences;
+    std::string sequence;
     
-    Node() : hash(0), colors(0), count(0) {}
-    Node(node_hash h) : hash(h), colors(0), count(0) {}
+    Node() : hash(0), colors(0) {}
+    Node(node_hash h) : hash(h), colors(0) {}
+    
+    void merge(const Node& next) { // TODO: I am gonna check this implementation for efficieny
+        const std::string& pat = next.sequence;
+        size_t n = pat.size();
+        if (n == 0) return;
+        
+        std::vector<int> pi(n);
+        for (size_t i = 1, j = 0; i < n; i++) {
+            while (j > 0 && pat[i] != pat[j]) j = pi[j - 1];
+            if (pat[i] == pat[j]) j++;
+            pi[i] = j;
+        }
+        
+        size_t m = sequence.size();
+        size_t check_len = std::min(m, n);
+        
+        size_t j = 0;
+        for (size_t i = m - check_len; i < m; i++) {
+            while (j > 0 && sequence[i] != pat[j]) j = pi[j - 1];
+            if (sequence[i] == pat[j]) j++;
+        }
+        
+        sequence += pat.substr(j);
+    }
     
     bool hasColor(int color) const {
         return (colors >> color) & 1;
@@ -61,23 +77,14 @@ public:
     ~LCPGraph() = default;
     
     void addString(struct lps* lcp_string, int color, const char* sequence, uint32_t seq_id);
-    void exportGFA(const std::string& output_dir, const std::string& experiment_name, const std::map<uint32_t, uint32_t>* color_map = nullptr) const;
-    void exportGFA(const std::string& output_dir, const std::string& experiment_name, const std::map<node_hash, uint32_t>& node_color_map) const;
+    node_hash findColoredPath(node_hash start, const BubbleResult& markers, int color_bit, Bubble& bubble) const;
     size_t nodeCount() const { return nodes.size(); }
     
     BubbleResult detectBubbles() const;
-    void markBubbles(const BubbleResult& bubbles);
-    void markDeletions(const std::unordered_set<node_hash>& deletion_nodes);
-    void compressGraph();
+    std::vector<Bubble> extractBubbles(const BubbleResult& bubble_markers) const;
     
-    std::vector<Bubble> extractBubbles(const BubbleResult& bubble_markers, uint32_t ref_seq_id, uint32_t normal_seq_id, uint32_t tumor_seq_id) const;
-
-private:
-    bool nodeExists(node_hash h) const;
-    uint32_t getNodeColor(node_hash h) const;
-    const std::unordered_set<node_hash>& getNextNodes(node_hash h) const;
-    const std::unordered_set<node_hash>& getPrevNodes(node_hash h) const;
-    bool isChainStart(node_hash h, const std::unordered_set<node_hash>& claimed) const;
+    void writeGFA(const std::string& filename) const;
+    void writeGFA(std::ostream& out) const;
 };
 
 #endif // GRAPH_H

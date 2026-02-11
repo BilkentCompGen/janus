@@ -10,3 +10,4 @@ simulation
 outputs
 lib
 __pycache__
+.clang-format
