@@ -41,13 +41,13 @@ test: $(SRC_OBJS)
 	$(CXX) $(CXXFLAGS) -I. -I$(LIBDIR)/lcptools -I$(LIBDIR)/parasail -o $(OBJDIR)/$(TEST_NAME) $(TESTDIR)/$(TEST_NAME).cpp $^ $(LDFLAGS) && ./$(OBJDIR)/$(TEST_NAME)
 
 compare:
-	@python3 scripts/compare_vcf.py $(COMPARE_ARGS)
+	@./scripts/truvari.sh $(COMPARE_ARGS)
 
 help:
 	@echo "Usage:"
 	@echo "  make              					Build the svp binary"
 	@echo "  make clean        					Remove build artifacts and outputs"
-	@echo "  make compare <simulated.vcf> <detected.vcf>		Compare VCFs (reports SNP/short-indel, DEL, INS metrics)"
+	@echo "  make compare <base.vcf> <comp.vcf> <ref.fa>		Compare VCFs with truvari bench"
 	@echo "  make test <name>  					Build and run a test from tests/"
 	@echo "  make help         					Show this help message"
 

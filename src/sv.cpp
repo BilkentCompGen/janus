@@ -1,13 +1,135 @@
 #include <parasail.h>
 #include <algorithm>
+#include <climits>
 #include <cstdint>
+#include <unordered_set>
 
+#include "ref.h"
 #include "utils.h"
 #include "sv.h"
 
 using namespace std;
 
 static Logger sv_logger("sv");
+
+namespace {
+
+bool isNormalOnly(const Node& n) {
+    return (n.colors & 0x1) && !(n.colors & 0x2);
+}
+
+bool isTumorOnly(const Node& n) {
+    return (n.colors & 0x2) && !(n.colors & 0x1);
+}
+
+bool isShared(const Node& n) {
+    return (n.colors & 0x3) == 0x3;
+}
+
+struct EdgeColorCounts { int normal_only = 0, tumor_only = 0, shared = 0; };
+
+EdgeColorCounts countSuccessorColors(const LCPGraph& graph, node_hash h) {
+    EdgeColorCounts c;
+    auto it = graph.next_edges.find(h);
+    if (it == graph.next_edges.end()) return c;
+    for (node_hash nh : it->second) {
+        auto nit = graph.nodes.find(nh);
+        if (nit == graph.nodes.end()) continue;
+        if (isNormalOnly(nit->second)) c.normal_only++;
+        else if (isTumorOnly(nit->second)) c.tumor_only++;
+        else if (isShared(nit->second)) c.shared++;
+    }
+    return c;
+}
+
+EdgeColorCounts countPredecessorColors(const LCPGraph& graph, node_hash h) {
+    EdgeColorCounts c;
+    auto it = graph.prev_edges.find(h);
+    if (it == graph.prev_edges.end()) return c;
+    for (node_hash ph : it->second) {
+        auto pit = graph.nodes.find(ph);
+        if (pit == graph.nodes.end()) continue;
+        if (isNormalOnly(pit->second)) c.normal_only++;
+        else if (isTumorOnly(pit->second)) c.tumor_only++;
+        else if (isShared(pit->second)) c.shared++;
+    }
+    return c;
+}
+
+struct AnchoredCandidate {
+    node_hash hash;
+    int64_t ref_start, ref_end;
+};
+
+vector<SVCall> detectFlippedDUPs(
+    const LCPGraph& graph,
+    const RefIndex& ref_index,
+    const BubbleResult& markers,
+    const unordered_set<string>& bubble_pairs)
+{
+    // Step 1: Filter bubble starts/ends to those with unique ref anchors
+    // Step 2: Classify by T=1 S>=1 N=0 pattern
+    vector<AnchoredCandidate> dup_starts, dup_ends;
+
+    for (node_hash h : markers.bubble_starts) {
+        int64_t rs = -1, re = -1;
+        if (!ref_index.anchorSpan(h, rs, re)) continue;
+        EdgeColorCounts c = countSuccessorColors(graph, h);
+        if (c.tumor_only >= 1 && c.shared >= 1 && c.normal_only == 0)
+            dup_starts.push_back({h, rs, re});
+    }
+
+    for (node_hash h : markers.bubble_ends) {
+        int64_t rs = -1, re = -1;
+        if (!ref_index.anchorSpan(h, rs, re)) continue;
+        EdgeColorCounts c = countPredecessorColors(graph, h);
+        if (c.tumor_only >= 1 && c.shared >= 1 && c.normal_only == 0)
+            dup_ends.push_back({h, rs, re});
+    }
+
+    // Step 3: Merge starts and ends into one sorted event list, pair E→S in order
+    struct Event {
+        int64_t ref_start;
+        node_hash hash;
+        bool is_start; // true = bubble start (near GT DUP end), false = bubble end (near GT DUP start)
+    };
+    vector<Event> events;
+    for (const auto& ds : dup_starts) events.push_back({ds.ref_start, ds.hash, true});
+    for (const auto& de : dup_ends) events.push_back({de.ref_start, de.hash, false});
+    sort(events.begin(), events.end(), [](const Event& a, const Event& b) { return a.ref_start < b.ref_start; });
+
+    vector<SVCall> calls;
+    int64_t pending_end_pos = -1;
+    node_hash pending_end_hash = 0;
+
+    for (const auto& ev : events) {
+        if (!ev.is_start) {
+            // Bubble end (near DUP start) — remember it
+            pending_end_pos = ev.ref_start;
+            pending_end_hash = ev.hash;
+        } else if (pending_end_pos >= 0) {
+            // Bubble start (near DUP end) — pair with pending end
+            string pair_key = to_string(ev.hash) + ":" + to_string(pending_end_hash);
+            if (!bubble_pairs.count(pair_key)) {
+                int64_t pos = pending_end_pos;
+                int64_t svlen = ev.ref_start - pending_end_pos;
+                if (svlen > 0) {
+                    calls.emplace_back("", "", "DUP", 0, svlen, pos);
+                }
+            }
+            pending_end_pos = -1;
+            pending_end_hash = 0;
+        }
+    }
+
+    sv_logger.debug("detectFlippedDUPs: candidate_starts=" + to_string(dup_starts.size())
+        + " candidate_ends=" + to_string(dup_ends.size())
+        + " paired=" + to_string(calls.size()));
+
+    return calls;
+}
+
+} // namespace
 
 SVCall::SVCall(const string& normal_seq, const string& tumor_seq, const string& svtype, int64_t start, int64_t length, int64_t ref_pos) : normal_seq(normal_seq), tumor_seq(tumor_seq), svtype(svtype), start(start), length(length), ref_pos(ref_pos) {}
 
@@ -166,4 +288,35 @@ vector<SVCall> callSV(const Bubble& bubble, int64_t ref_offset) {
     }
     if (region.call == "multi") return callMulti(normal_seq, tumor_seq, region, ref_offset);
     return {};
+}
+
+vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_index, const BubbleResult& markers) {
+    vector<SVCall> calls;
+    vector<Bubble> bubbles = graph.extractBubbles(markers);
+
+    unordered_set<string> bubble_pairs;
+    for (const auto& b : bubbles) {
+        bubble_pairs.insert(to_string(b.start_node) + ":" + to_string(b.end_node));
+    }
+
+    int anchored_bubbles = 0;
+    for (const auto& b : bubbles) {
+        int64_t ref_offset = ref_index.anchorBubble(b, graph);
+        if (ref_offset < 0) continue;
+        anchored_bubbles++;
+        vector<SVCall> bubble_calls = callSV(b, ref_offset);
+        calls.insert(calls.end(), bubble_calls.begin(), bubble_calls.end());
+    }
+
+    vector<SVCall> dup_calls = detectFlippedDUPs(graph, ref_index, markers, bubble_pairs);
+    calls.insert(calls.end(), dup_calls.begin(), dup_calls.end());
+
+    sv_logger.debug(
+        "extractAndCallSVs: bubbles=" + to_string(bubbles.size())
+        + " anchored_bubbles=" + to_string(anchored_bubbles)
+        + " flipped_dups=" + to_string(dup_calls.size())
+        + " total_calls=" + to_string(calls.size())
+    );
+
+    return calls;
 }

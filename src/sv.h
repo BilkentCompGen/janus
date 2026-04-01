@@ -7,6 +7,8 @@
 
 #include "graph.h"
 
+class RefIndex;
+
 struct SVRegion { int64_t start; int64_t length; std::string call;};
 
 class SVCall {
@@ -23,5 +25,6 @@ public:
 
 SVRegion detectSV(const std::string& sequence, const std::string& query);
 std::vector<SVCall> callSV(const Bubble& bubble, int64_t ref_offset);
+std::vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_index, const BubbleResult& markers);
 
 #endif
