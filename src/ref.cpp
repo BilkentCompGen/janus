@@ -25,6 +25,15 @@ int64_t RefIndex::anchor(node_hash h) const {
     return cores[it->second[0]].start;
 }
 
+bool RefIndex::anchorSpan(node_hash h, int64_t& start, int64_t& end) const {
+    auto it = index.find(h);
+    if (it == index.end() || it->second.size() != 1) return false;
+    const RefCore& c = cores[it->second[0]];
+    start = static_cast<int64_t>(c.start);
+    end = static_cast<int64_t>(c.end);
+    return true;
+}
+
 int64_t RefIndex::anchorBubble(const Bubble& bubble, const LCPGraph& graph) const {
     node_hash start = bubble.start_node;
     
