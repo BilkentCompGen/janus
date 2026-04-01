@@ -16,6 +16,7 @@ class RefIndex {
 public:
     void addString(struct lps* l, const char* seq);
     int64_t anchor(node_hash h) const;
+    bool anchorSpan(node_hash h, int64_t& start, int64_t& end) const;
     int64_t anchorBubble(const Bubble& bubble, const LCPGraph& graph) const;
 private:
     std::vector<RefCore> cores;

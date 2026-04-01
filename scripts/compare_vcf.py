@@ -7,7 +7,20 @@ Reports separate metrics for:
   - Overall
 """
 
+import re
 import sys
+
+
+def parse_info(info_str):
+    """Parse INFO field into a dict."""
+    d = {}
+    for entry in info_str.split(";"):
+        if "=" in entry:
+            k, v = entry.split("=", 1)
+            d[k] = v
+        else:
+            d[entry] = True
+    return d
 
 
 def parse_vcf(filename):
@@ -24,16 +37,44 @@ def parse_vcf(filename):
             pos = int(fields[1])
             ref = fields[3]
             alt = fields[4]
-            # Classify by size: max of ref/alt allele length difference
-            ref_len = len(ref) if ref != "." else 0
-            alt_len = len(alt) if alt != "." else 0
-            size = max(ref_len, alt_len, abs(ref_len - alt_len))
+            info = parse_info(fields[7]) if len(fields) > 7 else {}
+
+            svtype = info.get("SVTYPE", "").upper()
+            svlen = int(info["SVLEN"]) if "SVLEN" in info else None
+
+            is_symbolic = alt.startswith("<") and alt.endswith(">")
+
+            if is_symbolic and svlen is not None:
+                size = abs(svlen)
+                if svtype == "DEL":
+                    sv_class = "del"
+                elif svtype == "INS":
+                    sv_class = "ins"
+                else:
+                    sv_class = "del" if svtype == "DEL" else "ins"
+            else:
+                ref_len = len(ref) if ref not in (".", "N") else 0
+                alt_len = len(alt) if alt not in (".", "N") else 0
+                size = max(ref_len, alt_len, abs(ref_len - alt_len))
+                if svtype in ("DEL", "INS"):
+                    sv_class = svtype.lower()
+                elif ref_len > alt_len:
+                    sv_class = "del"
+                elif alt_len > ref_len:
+                    sv_class = "ins"
+                else:
+                    sv_class = "snp"
+
             variants.append({
                 "chrom": chrom,
                 "pos": pos,
                 "ref": ref,
                 "alt": alt,
                 "size": size,
+                "svtype": svtype,
+                "svlen": svlen,
+                "sv_class": sv_class,
+                "is_symbolic": is_symbolic,
             })
     return variants
 
@@ -42,9 +83,7 @@ def classify(variant):
     """Classify variant as 'small', 'del', or 'ins'."""
     if variant["size"] < 50:
         return "small"
-    ref_len = len(variant["ref"]) if variant["ref"] != "." else 0
-    alt_len = len(variant["alt"]) if variant["alt"] != "." else 0
-    return "del" if ref_len >= alt_len else "ins"
+    return "del" if variant["sv_class"] == "del" else "ins"
 
 
 def compare_variants(simulated, detected, tolerance=50):
@@ -65,16 +104,39 @@ def compare_variants(simulated, detected, tolerance=50):
             pos_diff = abs(dv["pos"] - sv["pos"])
             if pos_diff > tolerance:
                 continue
-            # For entries with actual sequences, require allele match
-            if dv["ref"] not in (".", "N") and sv["ref"] not in (".", "N"):
-                if dv["ref"].upper() == sv["ref"].upper() and dv["alt"].upper() == sv["alt"].upper():
+
+            dv_cat = classify(dv)
+            sv_cat = classify(sv)
+
+            # Categories must match
+            if dv_cat != sv_cat:
+                continue
+
+            if dv_cat == "small":
+                # For small variants with actual sequences, require allele match
+                if dv["ref"] not in (".", "N") and sv["ref"] not in (".", "N"):
+                    if dv["ref"].upper() == sv["ref"].upper() and dv["alt"].upper() == sv["alt"].upper():
+                        matched_sim.add(si)
+                        matched_det.add(di)
+                        break
+                else:
                     matched_sim.add(si)
                     matched_det.add(di)
                     break
             else:
-                matched_sim.add(si)
-                matched_det.add(di)
-                break
+                # For SVs, match by type and allow size tolerance (50%)
+                dv_size = dv["size"]
+                sv_size = sv["size"]
+                if dv_size > 0 and sv_size > 0:
+                    ratio = min(dv_size, sv_size) / max(dv_size, sv_size)
+                    if ratio >= 0.5:
+                        matched_sim.add(si)
+                        matched_det.add(di)
+                        break
+                else:
+                    matched_sim.add(si)
+                    matched_det.add(di)
+                    break
 
     # Categorize results
     categories = {"small": {"tp": 0, "fp": 0, "fn": 0}, "del": {"tp": 0, "fp": 0, "fn": 0}, "ins": {"tp": 0, "fp": 0, "fn": 0}}

@@ -30,41 +30,53 @@ void LCPGraph::addString(struct lps* l, int color, const char* seq, uint32_t) {
 
 BubbleResult LCPGraph::detectBubbles() const {
     BubbleResult result;
-    
+
     for (const auto& [hash, node] : nodes) {
-        if ((node.colors & 0x3) != 0x3) continue;
-        
+        bool node_has_normal = (node.colors & 0x1) != 0;
+        bool node_has_tumor = (node.colors & 0x2) != 0;
+        if (!(node_has_normal && node_has_tumor)) continue;
+
         auto next_it = next_edges.find(hash);
         if (next_it != next_edges.end()) {
             for (node_hash nh : next_it->second) {
                 auto it = nodes.find(nh);
-                if (it != nodes.end() && (it->second.colors & 0x3) != 0x3) {
+                if (it == nodes.end()) continue;
+                bool has_normal = (it->second.colors & 0x1) != 0;
+                bool has_tumor = (it->second.colors & 0x2) != 0;
+                if (!(has_normal && has_tumor)) {
                     result.bubble_starts.insert(hash);
                     break;
                 }
             }
         }
-        
+
         auto prev_it = prev_edges.find(hash);
         if (prev_it != prev_edges.end()) {
             for (node_hash ph : prev_it->second) {
                 auto it = nodes.find(ph);
-                if (it != nodes.end() && (it->second.colors & 0x3) != 0x3) {
+                if (it == nodes.end()) continue;
+                bool has_normal = (it->second.colors & 0x1) != 0;
+                bool has_tumor = (it->second.colors & 0x2) != 0;
+                if (!(has_normal && has_tumor)) {
                     result.bubble_ends.insert(hash);
                     break;
                 }
             }
         }
     }
-    
-    graph_logger.debug("Detected " + std::to_string(result.bubble_starts.size()) + " bubble starts, " + std::to_string(result.bubble_ends.size()) + " bubble ends");
+
+    graph_logger.debug(
+        "Detected "
+        + std::to_string(result.bubble_starts.size()) + " bubble starts, "
+        + std::to_string(result.bubble_ends.size()) + " bubble ends"
+    );
     return result;
 }
 
 node_hash LCPGraph::findColoredPath(node_hash start, const BubbleResult& markers, int color_bit, Bubble& bubble) const {
     uint32_t target = 1 << color_bit, avoid = 1 << (1 - color_bit);
     std::queue<std::pair<node_hash, Node>> q;
-    
+
     auto it_start = next_edges.find(start);
     if (it_start == next_edges.end()) return 0;
 
@@ -96,7 +108,11 @@ node_hash LCPGraph::findColoredPath(node_hash start, const BubbleResult& markers
                     size_t before = acc.sequence.size();
                     acc.merge(nodes.at(n));
                     size_t end_overlap = nodes.at(n).sequence.size() - (acc.sequence.size() - before);
-                    (color_bit == 0 ? bubble.normal_seq : bubble.tumor_seq) = acc.sequence.substr(start_len, before - start_len - end_overlap);
+                    if (before >= start_len + end_overlap) {
+                        (color_bit == 0 ? bubble.normal_seq : bubble.tumor_seq) = acc.sequence.substr(start_len, before - start_len - end_overlap);
+                    } else {
+                        (color_bit == 0 ? bubble.normal_seq : bubble.tumor_seq) = "";
+                    }
                     return n;
                 }
                 auto it_n = nodes.find(n);

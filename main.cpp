@@ -1,5 +1,7 @@
+#include <parasail.h>
 #include <any>
 #include <cstdint>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -85,34 +87,82 @@ int main(int argc, char** argv) {
     processGenome(normal_file, 0, normal_seq_id, normal_sequence, graph, chr_str, depth);  // Normal = bit 0 (0x1)
     processGenome(tumor_file, 1, tumor_seq_id, tumor_sequence, graph, chr_str, depth);     // Tumor = bit 1 (0x2)
 
-    BubbleResult bubbles = graph.detectBubbles();
-    auto extracted_bubbles = graph.extractBubbles(bubbles);
+    BubbleResult boundaries = graph.detectBubbles();
+    auto calls = extractAndCallSVs(graph, ref_index, boundaries);
 
     // Call SVs and write VCF
     string vcf_file = (vcf_dir / (output_prefix + ".vcf")).string();
     ofstream vcf(vcf_file);
     vcf << "##fileformat=VCFv4.2\n"
         << "##source=svp\n"
+        << "##contig=<ID=" << chr_str << ",length=" << ref_sequence.size() << ">\n"
+        << "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the variant\">\n"
         << "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type of structural variant\">\n"
         << "##INFO=<ID=SVLEN,Number=1,Type=Integer,Description=\"Length of variant\">\n"
+        << "##INFO=<ID=INSSEQ,Number=1,Type=String,Description=\"Inserted sequence\">\n"
         << "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n";
 
-    main_logger.debug("Calling SVs on " + to_string(extracted_bubbles.size()) + " bubbles");
-    int sv_count = 0, anchored = 0;
-    for (const auto& b : extracted_bubbles) {
-        int64_t ref_offset = ref_index.anchorBubble(b, graph);
-        if (ref_offset < 0) continue;
-        anchored++;
+    main_logger.debug("Writing " + to_string(calls.size()) + " SV calls");
+    constexpr int64_t INS_DUP_MAX_BP = 2000;
+    constexpr double INS_DUP_SW_THRESHOLD = 0.70;
+    constexpr int64_t INS_DUP_WINDOW_PAD = 300;
 
-        for (const auto& c : callSV(b, ref_offset)) {
-            sv_count++;
-            string ref_allele = c.normal_seq.empty() ? "." : c.normal_seq;
-            string alt_allele = c.tumor_seq.empty() ? "." : c.tumor_seq;
-            vcf << "chr" << chr_str << "\t" << c.ref_pos << "\t.\t" << ref_allele << "\t" << alt_allele << "\t.\tPASS\t" << "SVTYPE=" << c.svtype << ";SVLEN=" << c.length << "\n";
+    int sw_match = 2, sw_mismatch = -4, sw_gap_open = 5, sw_gap_extend = 1;
+    parasail_matrix_t* sw_matrix = parasail_matrix_create("ACGT", sw_match, sw_mismatch);
+
+    int sv_count = 0;
+    int ins_retyped_as_dup = 0;
+    for (auto c : calls) {
+        if (c.svtype == "INS" && c.length > 0 && c.length < INS_DUP_MAX_BP && !c.tumor_seq.empty()) {
+            int64_t pad = std::max(INS_DUP_WINDOW_PAD, 2 * static_cast<int64_t>(c.tumor_seq.size()));
+            int64_t win_start = std::max<int64_t>(0, c.ref_pos - pad);
+            int64_t win_end = std::min<int64_t>(static_cast<int64_t>(ref_sequence.size()), c.ref_pos + pad);
+            string window = ref_sequence.substr(static_cast<size_t>(win_start), static_cast<size_t>(win_end - win_start));
+
+            parasail_result_t* sw_result = parasail_sw(
+                c.tumor_seq.c_str(), static_cast<int>(c.tumor_seq.size()),
+                window.c_str(), static_cast<int>(window.size()),
+                sw_gap_open, sw_gap_extend, sw_matrix);
+
+            int perfect_score = static_cast<int>(c.tumor_seq.size()) * sw_match;
+            double normalized = (perfect_score > 0) ? static_cast<double>(sw_result->score) / perfect_score : 0.0;
+            parasail_result_free(sw_result);
+
+            if (normalized >= INS_DUP_SW_THRESHOLD) {
+                c.svtype = "DUP";
+                c.length = static_cast<int64_t>(c.tumor_seq.size());
+                ins_retyped_as_dup++;
+            }
         }
+
+        sv_count++;
+        string ref_allele, alt_allele, info;
+        if (c.svtype == "DEL") {
+            ref_allele = "N";
+            alt_allele = "<DEL>";
+            int64_t end_pos = c.ref_pos + c.length;
+            info = "END=" + to_string(end_pos) + ";SVTYPE=DEL;SVLEN=" + to_string(c.length);
+        } else if (c.svtype == "INS") {
+            ref_allele = "N";
+            alt_allele = "<INS>";
+            info = "END=" + to_string(c.ref_pos) + ";SVTYPE=INS;SVLEN=" + to_string(c.length);
+            if (!c.tumor_seq.empty()) info += ";INSSEQ=" + c.tumor_seq;
+        } else if (c.svtype == "DUP") {
+            ref_allele = "N";
+            alt_allele = "<DUP>";
+            int64_t interval_len = std::max<int64_t>(1, c.length >= 0 ? c.length : -c.length);
+            int64_t end_pos = c.ref_pos + interval_len;
+            info = "END=" + to_string(end_pos) + ";SVTYPE=DUP;SVLEN=" + to_string(c.length);
+        } else {
+            ref_allele = c.normal_seq.empty() ? "." : c.normal_seq;
+            alt_allele = c.tumor_seq.empty() ? "." : c.tumor_seq;
+            info = "SVTYPE=" + c.svtype + ";SVLEN=" + to_string(c.length);
+        }
+        vcf << chr_str << "\t" << c.ref_pos << "\t.\t" << ref_allele << "\t" << alt_allele << "\t.\tPASS\t" << info << "\n";
     }
     vcf.close();
-    main_logger.debug("Anchored " + to_string(anchored) + "/" + to_string(extracted_bubbles.size()) + " bubbles, called " + to_string(sv_count) + " SVs → " + vcf_file);
+    parasail_matrix_free(sw_matrix);
+    main_logger.debug("Wrote " + to_string(sv_count) + " SVs (" + to_string(ins_retyped_as_dup) + " INS→DUP by local alignment) → " + vcf_file);
 
     string gfa_file = (gfa_dir / (output_prefix + "_graph.gfa")).string();
     main_logger.debug("Writing GFA to " + gfa_file);
