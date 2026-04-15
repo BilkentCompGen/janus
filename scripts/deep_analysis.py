@@ -187,4 +187,5 @@ analyze("DEL-only", "outputs/vcf/bench_del.vcf", "simulation/deletion_simulation
 analyze("INS-only", "outputs/vcf/bench_ins.vcf", "simulation/insertion_simulation.vcf")
 analyze("SNP-only", "outputs/vcf/bench_snp.vcf", "simulation/snp_simulation.vcf")
 analyze("DUP-only", "outputs/vcf/bench_dup.vcf", "simulation/duplication_simulation.vcf")
+analyze("INV-only", "outputs/vcf/bench_inv.vcf", "simulation/inversion_simulation.vcf")
 analyze("Mixed", "outputs/vcf/bench_mixed.vcf", "simulation/mixed.vcf")
