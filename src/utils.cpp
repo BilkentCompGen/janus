@@ -287,6 +287,22 @@ uint64_t hash_string(const std::string& data, uint64_t seed) {
     return MurmurHash3_64(data.data(), data.size(), seed);
 }
 
+//////////////////////////////////////////////////////// Reverse Complement ///////////////////////////////////////////////////
+
+string reverse_complement(const string& seq) {
+    string result(seq.size(), 'N');
+    for (size_t i = 0; i < seq.size(); ++i) {
+        switch (seq[seq.size() - 1 - i]) {
+            case 'A': case 'a': result[i] = 'T'; break;
+            case 'T': case 't': result[i] = 'A'; break;
+            case 'C': case 'c': result[i] = 'G'; break;
+            case 'G': case 'g': result[i] = 'C'; break;
+            default: result[i] = 'N'; break;
+        }
+    }
+    return result;
+}
+
 //////////////////////////////////////////////////////// CSV Export ///////////////////////////////////////////////////////////
 
 void writeCSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers, char separator) {
