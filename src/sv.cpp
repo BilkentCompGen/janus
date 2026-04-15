@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdint>
+#include <fstream>
 #include <unordered_set>
 
 #include "ref.h"
@@ -274,9 +275,102 @@ vector<SVCall> callMulti(const string& normal_seq, const string& tumor_seq, cons
     return calls;
 }
 
+// Post-process callMulti results: reclassify SNP clusters as INV where
+// reverse-complement alignment confirms an inversion.
+// Handles both multi-SNP clusters (small INVs) and single large SNP blocks (medium INVs).
+static void reclassifySnpAsInv(vector<SVCall>& calls,
+    const string& normal_seq, const string& tumor_seq, int64_t ref_offset) {
+
+    constexpr int64_t MAX_GAP = 10;
+    constexpr int64_t MIN_SPAN = 35;
+    constexpr double INV_THRESHOLD = 0.80;
+
+    // Collect SNP indices sorted by ref_pos
+    vector<size_t> snp_idx;
+    for (size_t i = 0; i < calls.size(); i++)
+        if (calls[i].svtype == "SNP") snp_idx.push_back(i);
+    if (snp_idx.empty()) return;
+
+    sort(snp_idx.begin(), snp_idx.end(),
+         [&](size_t a, size_t b) { return calls[a].ref_pos < calls[b].ref_pos; });
+
+    // Build clusters (gap <= MAX_GAP between consecutive SNP calls)
+    struct Cluster { vector<size_t> indices; int64_t ref_start, ref_end; };
+    vector<Cluster> clusters;
+    Cluster cur;
+    cur.indices.push_back(snp_idx[0]);
+    cur.ref_start = calls[snp_idx[0]].ref_pos;
+    cur.ref_end = calls[snp_idx[0]].ref_pos + calls[snp_idx[0]].length;
+
+    for (size_t i = 1; i < snp_idx.size(); i++) {
+        auto& c = calls[snp_idx[i]];
+        if (c.ref_pos - cur.ref_end <= MAX_GAP) {
+            cur.indices.push_back(snp_idx[i]);
+            cur.ref_end = max(cur.ref_end, c.ref_pos + c.length);
+        } else {
+            if (cur.ref_end - cur.ref_start >= MIN_SPAN) clusters.push_back(cur);
+            cur = {};
+            cur.indices.push_back(snp_idx[i]);
+            cur.ref_start = c.ref_pos;
+            cur.ref_end = c.ref_pos + c.length;
+        }
+    }
+    if (cur.ref_end - cur.ref_start >= MIN_SPAN) clusters.push_back(cur);
+
+    // Verify each cluster with revcomp alignment
+    unordered_set<size_t> remove_set;
+    vector<SVCall> inv_calls;
+
+    int sw_match = 2, sw_mismatch = -4, sw_gap_open = 5, sw_gap_extend = 1;
+    parasail_matrix_t* matrix = parasail_matrix_create("ACGT", sw_match, sw_mismatch);
+
+    for (auto& cl : clusters) {
+        int64_t local_start = cl.ref_start - ref_offset;
+        int64_t local_end = cl.ref_end - ref_offset;
+        if (local_start < 0 || local_end > (int64_t)normal_seq.size()
+            || local_end > (int64_t)tumor_seq.size()) continue;
+
+        string norm_region = normal_seq.substr(local_start, local_end - local_start);
+        string tum_region = tumor_seq.substr(local_start, local_end - local_start);
+        if (norm_region.empty() || tum_region.empty()) continue;
+
+        string rc = reverse_complement(norm_region);
+        parasail_result_t* result = parasail_sw(
+            tum_region.c_str(), (int)tum_region.size(),
+            rc.c_str(), (int)rc.size(),
+            sw_gap_open, sw_gap_extend, matrix);
+
+        int perfect = (int)min(tum_region.size(), rc.size()) * sw_match;
+        double score = (perfect > 0) ? (double)result->score / perfect : 0.0;
+        parasail_result_free(result);
+
+        if (score >= INV_THRESHOLD) {
+            for (size_t idx : cl.indices) remove_set.insert(idx);
+            int64_t span = cl.ref_end - cl.ref_start;
+            inv_calls.emplace_back(norm_region, tum_region, "INV",
+                                   local_start, span, cl.ref_start);
+            sv_logger.debug("SNP cluster → INV: pos=" + to_string(cl.ref_start)
+                + " len=" + to_string(span) + " sw=" + to_string(score)
+                + " snps=" + to_string(cl.indices.size()));
+        }
+    }
+
+    parasail_matrix_free(matrix);
+
+    if (!remove_set.empty()) {
+        vector<SVCall> filtered;
+        for (size_t i = 0; i < calls.size(); i++)
+            if (!remove_set.count(i)) filtered.push_back(calls[i]);
+        filtered.insert(filtered.end(), inv_calls.begin(), inv_calls.end());
+        calls = filtered;
+    }
+}
+
 vector<SVCall> callSV(const Bubble& bubble, int64_t ref_offset) {
     const string& normal_seq = bubble.normal_seq;
     const string& tumor_seq = bubble.tumor_seq;
+
+    constexpr int64_t MAX_ALIGN_SIZE = 5000;
 
     SVRegion region = (normal_seq.size() >= tumor_seq.size()) ? detectSV(normal_seq, tumor_seq) : detectSV(tumor_seq, normal_seq);
     if (region.start == -1) return {};
@@ -286,11 +380,20 @@ vector<SVCall> callSV(const Bubble& bubble, int64_t ref_offset) {
         if (normal_seq.size() > tumor_seq.size()) return { SVCall(normal_seq.substr(region.start, region.length), "", "DEL", region.start, region.length, ref_offset + region.start) };
         else return { SVCall("", tumor_seq.substr(region.start, region.length), "INS", region.start, region.length, ref_offset + region.start) };
     }
-    if (region.call == "multi") return callMulti(normal_seq, tumor_seq, region, ref_offset);
+    if (region.call == "multi") {
+        // Skip parasail alignment for huge bubbles — NW on >5kb uses O(N*M) memory
+        if ((int64_t)normal_seq.size() <= MAX_ALIGN_SIZE && (int64_t)tumor_seq.size() <= MAX_ALIGN_SIZE) {
+            auto results = callMulti(normal_seq, tumor_seq, region, ref_offset);
+            reclassifySnpAsInv(results, normal_seq, tumor_seq, ref_offset);
+            return results;
+        }
+        return {};
+    }
     return {};
 }
 
-vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_index, const BubbleResult& markers) {
+vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_index, const BubbleResult& markers,
+    const vector<SVCall>& large_inv_regions) {
     vector<SVCall> calls;
     vector<Bubble> bubbles = graph.extractBubbles(markers);
 
@@ -300,10 +403,32 @@ vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_inde
     }
 
     int anchored_bubbles = 0;
+    int skipped_in_inv = 0;
     for (const auto& b : bubbles) {
         int64_t ref_offset = ref_index.anchorBubble(b, graph);
         if (ref_offset < 0) continue;
         anchored_bubbles++;
+
+        // Skip bubbles inside core-index detected large INV regions
+        // Padding accounts for core boundary offset between tumor and reference coordinates
+        constexpr int64_t INV_SKIP_PAD = 500;
+        bool inside_large_inv = false;
+        for (const auto& li : large_inv_regions) {
+            if (ref_offset >= li.ref_pos - INV_SKIP_PAD && ref_offset <= li.ref_pos + li.length + INV_SKIP_PAD) {
+                inside_large_inv = true;
+                break;
+            }
+        }
+        // Also skip bubbles where both sequences are large — likely undetected INV
+        // or merged variant that would blow up parasail O(N*M)
+        constexpr int64_t MAX_BUBBLE_SEQ = 5000;
+        if (!inside_large_inv
+            && (int64_t)b.normal_seq.size() > MAX_BUBBLE_SEQ
+            && (int64_t)b.tumor_seq.size() > MAX_BUBBLE_SEQ)
+            inside_large_inv = true;
+
+        if (inside_large_inv) skipped_in_inv++;
+
         vector<SVCall> bubble_calls = callSV(b, ref_offset);
         calls.insert(calls.end(), bubble_calls.begin(), bubble_calls.end());
     }
@@ -313,10 +438,168 @@ vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_inde
 
     sv_logger.debug(
         "extractAndCallSVs: bubbles=" + to_string(bubbles.size())
-        + " anchored_bubbles=" + to_string(anchored_bubbles)
+        + " anchored=" + to_string(anchored_bubbles)
+        + " skipped_in_inv=" + to_string(skipped_in_inv)
         + " flipped_dups=" + to_string(dup_calls.size())
         + " total_calls=" + to_string(calls.size())
     );
 
+    return calls;
+}
+
+vector<SVCall> detectLargeINVs(const string& tumor_seq, int depth,
+    const unordered_set<uint64_t>& ref_hashes,
+    const unordered_set<uint64_t>& rcref_hashes,
+    const RefIndex& ref_index) {
+
+    // Extract tumor LCP cores
+    struct lps lcp;
+    init_lps(&lcp, tumor_seq.c_str(), tumor_seq.size());
+    lps_deepen(&lcp, depth);
+
+    // Classify each tumor core
+    // 0=neither, 1=ref_only, 2=rcref_only, 3=both
+    struct ClassifiedCore { uint64_t start, end; uint8_t cls; node_hash hash; };
+    vector<ClassifiedCore> cores(lcp.size);
+    for (int i = 0; i < lcp.size; ++i) {
+        string region(tumor_seq.c_str() + lcp.cores[i].start, lcp.cores[i].end - lcp.cores[i].start);
+        uint64_t h = hash_string(region, 0);
+        bool in_ref = ref_hashes.count(h) > 0;
+        bool in_rcref = rcref_hashes.count(h) > 0;
+        uint8_t cls = 0;
+        if (in_ref && in_rcref) cls = 3;
+        else if (in_ref) cls = 1;
+        else if (in_rcref) cls = 2;
+        cores[i] = {lcp.cores[i].start, lcp.cores[i].end, cls, h};
+    }
+    free_lps(&lcp);
+
+    // Find runs of rcref-only cores (gap-tolerant)
+    constexpr int MAX_GAP = 3;
+    constexpr int MIN_RCREF_CORES = 5;
+    constexpr int64_t MIN_INV_BP = 500;
+
+    // Collect raw runs of rcref-only cores
+    struct InvRun { size_t core_start, core_end; int rcref_count; };
+    vector<InvRun> runs;
+
+    size_t i = 0;
+    while (i < cores.size()) {
+        if (cores[i].cls != 2) { i++; continue; }
+
+        size_t run_start = i;
+        int rcref_count = 0;
+        int gap = 0;
+        size_t run_end = i;
+
+        while (i < cores.size()) {
+            if (cores[i].cls == 2) {
+                rcref_count++;
+                gap = 0;
+                run_end = i;
+                i++;
+            } else {
+                gap++;
+                if (gap > MAX_GAP) break;
+                i++;
+            }
+        }
+
+        if (rcref_count >= MIN_RCREF_CORES) {
+            runs.push_back({run_start, run_end, rcref_count});
+        }
+    }
+
+    // Merge adjacent runs only if gap cores are NOT ref-only (i.e. the gap is
+    // ambiguous "both" or "neither" cores, not clearly forward-ref sequence)
+    // If gap has any ref_only cores, it's a real break between separate inversions.
+    bool merged = true;
+    while (merged) {
+        merged = false;
+        for (size_t r = 0; r + 1 < runs.size(); r++) {
+            size_t gap_start = runs[r].core_end + 1;
+            size_t gap_end = runs[r+1].core_start;
+            if (gap_start >= gap_end) {
+                // Overlapping or adjacent runs — always merge
+                runs[r].core_end = runs[r+1].core_end;
+                runs[r].rcref_count += runs[r+1].rcref_count;
+                runs.erase(runs.begin() + r + 1);
+                merged = true;
+                break;
+            }
+
+            // Count gap core classifications
+            int gap_ref_only = 0, gap_total = 0;
+            for (size_t g = gap_start; g < gap_end; g++) {
+                gap_total++;
+                if (cores[g].cls == 1) gap_ref_only++;
+            }
+
+            // Merge if no ref-only cores in the gap (all are both/neither/rcref)
+            if (gap_ref_only == 0) {
+                runs[r].core_end = runs[r+1].core_end;
+                runs[r].rcref_count += runs[r+1].rcref_count;
+                runs.erase(runs.begin() + r + 1);
+                merged = true;
+                break;
+            }
+        }
+    }
+
+    // Convert runs to calls, anchoring to reference coordinates
+    // Find flanking ref-only cores to map tumor positions → ref positions
+    vector<SVCall> calls;
+    for (const auto& run : runs) {
+        int64_t tumor_span = (int64_t)cores[run.core_end].end - (int64_t)cores[run.core_start].start;
+        if (tumor_span < MIN_INV_BP) continue;
+
+        // Look left for nearest ref-only core with unique ref anchor
+        int64_t ref_start = -1;
+        for (int k = (int)run.core_start - 1; k >= 0; k--) {
+            if (cores[k].cls == 1 || cores[k].cls == 3) {
+                ref_start = ref_index.anchor(cores[k].hash);
+                if (ref_start >= 0) break;
+            }
+        }
+
+        // Look right for nearest ref-only core with unique ref anchor
+        int64_t ref_end = -1;
+        for (size_t k = run.core_end + 1; k < cores.size(); k++) {
+            if (cores[k].cls == 1 || cores[k].cls == 3) {
+                ref_end = ref_index.anchor(cores[k].hash);
+                if (ref_end >= 0) break;
+            }
+        }
+
+        if (ref_start < 0 && ref_end < 0) {
+            sv_logger.debug("Large INV skipped (no ref anchor): tumor_pos=" + to_string(cores[run.core_start].start)
+                + " tumor_span=" + to_string(tumor_span));
+            continue;
+        }
+
+        SVCall call;
+        call.svtype = "INV";
+        if (ref_start >= 0 && ref_end >= 0) {
+            call.ref_pos = ref_start;
+            call.length = ref_end - ref_start;
+        } else if (ref_start >= 0) {
+            call.ref_pos = ref_start;
+            call.length = tumor_span;
+        } else {
+            call.ref_pos = ref_end - tumor_span;
+            call.length = tumor_span;
+        }
+
+        if (call.length < MIN_INV_BP) continue;
+
+        sv_logger.debug("Large INV detected via core-index: ref_pos=" + to_string(call.ref_pos)
+            + " len=" + to_string(call.length) + " rcref_cores=" + to_string(run.rcref_count)
+            + " (tumor_pos=" + to_string(cores[run.core_start].start) + ")");
+        calls.push_back(call);
+    }
+
+    sv_logger.debug("detectLargeINVs: " + to_string(cores.size()) + " tumor cores, "
+        + to_string(runs.size()) + " runs after merge, "
+        + to_string(calls.size()) + " large INVs detected");
     return calls;
 }

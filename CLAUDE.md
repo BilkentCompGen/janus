@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-SVP (Structural Variant Pipeline) detects somatic structural variants (DEL, INS, DUP, SNP) by building a Locally Consistent Parsing (LCP) graph from reference, normal, and tumor genomes, then finding divergent paths (bubbles) between them.
+SVP (Structural Variant Pipeline) detects somatic structural variants (DEL, INS, DUP, INV, SNP) by building a Locally Consistent Parsing (LCP) graph from reference, normal, and tumor genomes, then finding divergent paths (bubbles) between them.
 
 ## Build & Run
 
@@ -13,7 +13,7 @@ make                # build the `svp` binary (g++, C++20, -O3)
 make clean          # remove build artifacts
 
 # run
-./svp --ref ref.fa --normal normal.fa --tumor tumor.fa --depth 3 --chr chr19 --output out.vcf
+./svp --ref ref.fa --normal normal.fa --tumor tumor.fa --depth 5 --chr 19 --output out
 
 # tests (each is a standalone C++ file in tests/)
 make test findpath          # build & run a single test
@@ -29,6 +29,8 @@ python scripts/compare_vcf.py sim.vcf detected.vcf   # position-tolerant VCF dif
 python scripts/deep_analysis.py                       # position-level cross-reference with type checking
 ```
 
+`tests/` also contains diagnostic/trace files (e.g. `trace_bfs.cpp`, `dup_diag.cpp`, `flank_test.cpp`) — these are investigative tools, not regression tests.
+
 **Dependencies:** g++20, zlib (`-lz`), htslib (`-lhts`), parasail (`-lparasail`), lcptools (`-llcptools` — bundled in `lib/lcptools/`).
 
 ## Algorithm & Complexity
@@ -43,19 +45,21 @@ See [ALGORITHM.md](ALGORITHM.md) for a detailed breakdown of every pipeline phas
 
 - **graph.h/cpp** — `LCPGraph` and `Node`. Nodes carry color bits: `0x1` = normal, `0x2` = tumor, `0x3` = shared. Key methods: `addString()`, `detectBubbles()`, `extractBubbles()`, `findColoredPath()` (BFS with KMP-based sequence merging), `writeGFA()`.
 - **ref.h/cpp** — `RefIndex`. Maps LCP core hashes to reference positions. `anchorBubble()` walks backward/forward through predecessors to find a unique reference anchor for each bubble.
-- **sv.h/cpp** — `SVCall` and SV calling logic. `detectSV()` does quick classification; `callMulti()` uses parasail Needleman-Wunsch alignment + CIGAR parsing for complex variants; `extractAndCallSVs()` orchestrates the full pipeline including cycle detection for duplications.
-- **utils.h/cpp** — `Logger` (debug macro), `FastaStreamer` (gzip-aware FASTA iterator), `ArgParser`, `hash_string()`.
+- **sv.h/cpp** — `SVCall` and SV calling logic. `callSV()` checks for INV (reverse-complement identity ≥0.90) first, then `detectSV()` does quick classification; `callMulti()` uses parasail Needleman-Wunsch alignment + CIGAR parsing for complex variants; `extractAndCallSVs()` orchestrates the full pipeline including flipped DUP detection. `detectLargeINVs()` is a separate core-index pipeline for inversions too large for bubble-based detection — classifies tumor cores against forward-ref and revcomp-ref hash sets, finds runs of rcref-only cores (≥5 cores, ≥500bp).
+- **utils.h/cpp** — `Logger` (debug macro), `FastaStreamer` (gzip-aware FASTA iterator), `ArgParser`, `hash_string()`, `reverse_complement()`.
 
 ### Key concepts
 
 - **Bubbles**: Divergent paths in the graph where normal and tumor sequences differ. Detected by shared→divergent→shared node color transitions.
 - **Anchoring**: Mapping bubble positions back to reference genome coordinates via LCP core hashes. Walks through graph predecessors/successors to find uniquely-mapped cores.
-- **INS→DUP conversion**: Insertions with ≥90% flank similarity to adjacent reference are reclassified as duplications.
-- **Cycle detection**: BFS for tumor-only paths looping back through shared nodes, called as DUP.
+- **INV detection (bubble-based)**: Bubbles where `tumor_seq ≈ reverse_complement(normal_seq)` (SW score ≥0.90, min 10bp) are classified as inversions. Uses Smith-Waterman local alignment to handle LCP core boundary shifts.
+- **INV detection (core-index)**: For large inversions that don't form clean bubbles. Classifies each tumor LCP core as forward-ref-only (cls=1), rcref-only (cls=2), both (cls=3), or novel (cls=0). Runs of rcref-only cores (gap-tolerant, MAX_GAP=3, ≥5 rcref cores, ≥500bp span) are called as INVs. Anchors to reference via flanking ref-only cores. Runs before bubble extraction; overlapping bubble calls are suppressed.
+- **INS→DUP conversion**: Insertions with ≥70% Smith-Waterman similarity to adjacent reference are reclassified as duplications.
+- **Flipped DUP detection**: Medium/large DUPs produce bubble starts near the DUP end and ends near the DUP start (positions flipped). Detected by the `T≥1 S≥1 N=0` successor/predecessor color pattern on anchored bubble boundaries.
 
 ### main.cpp
 
-Parses CLI args, loads FASTAs, builds RefIndex + LCPGraph (coloring normal 0x1, tumor 0x2), detects/extracts bubbles, calls SVs, writes VCF and GFA.
+Parses CLI args (`--chr` defaults to 19), loads FASTAs, builds RefIndex + LCPGraph (coloring normal 0x1, tumor 0x2). Runs two INV detection pipelines: (1) `detectLargeINVs` via core-index (ref + revcomp-ref hash sets, before bubble detection), (2) bubble-based SW alignment in `callSV`. Bubble calls overlapping large INV regions are suppressed (500bp padding). INS→DUP reclassification via SW local alignment also happens here. Writes VCF and GFA.
 
 ## Simulations (insilicoSV)
 
@@ -75,7 +79,8 @@ mv sim.fa <type>_simulation.fa && mv sim.vcf <type>_simulation.vcf
 - `normal_tumor_insertions.yaml` → `insertion_simulation.{fa,vcf}`
 - `normal_tumor_duplications.yaml` → `duplication_simulation.{fa,vcf}`
 - `normal_tumor_snps.yaml` → `snp_simulation.{fa,vcf}`
-- `normal_tumor_mixed.yaml` → `mixed.{fa,vcf}` (DEL + INS + DUP + SNP)
+- `normal_tumor_inversions.yaml` → `inversion_simulation.{fa,vcf}`
+- `normal_tumor_mixed.yaml` → `mixed.{fa,vcf}` (DEL + INS + DUP + INV + SNP)
 
 **Creating a new simulation type:**
 1. Create a YAML config in `simulation/` following existing configs as templates.
@@ -90,7 +95,7 @@ mv sim.fa <type>_simulation.fa && mv sim.vcf <type>_simulation.vcf
 
 Three complementary tools:
 
-- **`scripts/compare_vcf.py`** — Position-tolerant (50bp) VCF diff. Reports TP/FP/FN by category (small <50bp, del >=50bp, ins >=50bp). Does not understand DUP type.
+- **`scripts/compare_vcf.py`** — Position-tolerant (50bp) VCF diff. Reports TP/FP/FN by category (small <50bp, del >=50bp, ins >=50bp, inv >=50bp). Does not understand DUP type.
 - **`scripts/deep_analysis.py`** — Position-level (200bp) cross-reference with strict type matching. Reports correct-type, wrong-type, ghost FPs, missed FNs with size breakdowns. The primary accuracy analysis tool.
 - **`scripts/truvari.sh`** — [Truvari](https://github.com/ACEnglish/truvari) benchmark for SV-level comparison (>=50bp). Reports TP/FP/FN with precision/recall/F1. Requires `bcftools`, `bgzip`, `tabix`, `truvari` (install via `pip install truvari` or use project venv).
 

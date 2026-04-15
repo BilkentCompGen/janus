@@ -78,6 +78,8 @@ private:
 
 uint64_t hash_string(const std::string& data, uint64_t seed = 0);
 
+std::string reverse_complement(const std::string& seq);
+
 void writeCSV(const std::map<std::string, std::vector<std::string>>& data, const std::string& filename, const std::vector<std::string>& headers = {}, char separator = ',');
 
 #endif // UTILS_H

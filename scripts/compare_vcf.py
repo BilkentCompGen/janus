@@ -50,6 +50,8 @@ def parse_vcf(filename):
                     sv_class = "del"
                 elif svtype == "INS":
                     sv_class = "ins"
+                elif svtype == "INV":
+                    sv_class = "inv"
                 else:
                     sv_class = "del" if svtype == "DEL" else "ins"
             else:
@@ -58,6 +60,8 @@ def parse_vcf(filename):
                 size = max(ref_len, alt_len, abs(ref_len - alt_len))
                 if svtype in ("DEL", "INS"):
                     sv_class = svtype.lower()
+                elif svtype == "INV":
+                    sv_class = "inv"
                 elif ref_len > alt_len:
                     sv_class = "del"
                 elif alt_len > ref_len:
@@ -80,9 +84,11 @@ def parse_vcf(filename):
 
 
 def classify(variant):
-    """Classify variant as 'small', 'del', or 'ins'."""
+    """Classify variant as 'small', 'del', 'ins', or 'inv'."""
     if variant["size"] < 50:
         return "small"
+    if variant["sv_class"] == "inv":
+        return "inv"
     return "del" if variant["sv_class"] == "del" else "ins"
 
 
@@ -139,7 +145,7 @@ def compare_variants(simulated, detected, tolerance=50):
                     break
 
     # Categorize results
-    categories = {"small": {"tp": 0, "fp": 0, "fn": 0}, "del": {"tp": 0, "fp": 0, "fn": 0}, "ins": {"tp": 0, "fp": 0, "fn": 0}}
+    categories = {"small": {"tp": 0, "fp": 0, "fn": 0}, "del": {"tp": 0, "fp": 0, "fn": 0}, "ins": {"tp": 0, "fp": 0, "fn": 0}, "inv": {"tp": 0, "fp": 0, "fn": 0}}
 
     for di, dv in enumerate(detected):
         cat = classify(dv)
@@ -191,15 +197,16 @@ def main():
 
     cats = compare_variants(simulated, detected, tolerance=50)
 
-    s, d, i = cats["small"], cats["del"], cats["ins"]
-    total_tp = s["tp"] + d["tp"] + i["tp"]
-    total_fp = s["fp"] + d["fp"] + i["fp"]
-    total_fn = s["fn"] + d["fn"] + i["fn"]
+    s, d, i, inv = cats["small"], cats["del"], cats["ins"], cats["inv"]
+    total_tp = s["tp"] + d["tp"] + i["tp"] + inv["tp"]
+    total_fp = s["fp"] + d["fp"] + i["fp"] + inv["fp"]
+    total_fn = s["fn"] + d["fn"] + i["fn"] + inv["fn"]
 
     print("Results:")
     print_section("SNP + short indel (<50bp)", s["tp"], s["fp"], s["fn"])
     print_section("Deletions (>=50bp)", d["tp"], d["fp"], d["fn"])
     print_section("Insertions (>=50bp)", i["tp"], i["fp"], i["fn"])
+    print_section("Inversions (>=50bp)", inv["tp"], inv["fp"], inv["fn"])
     print_section("Overall", total_tp, total_fp, total_fn)
     print()
 

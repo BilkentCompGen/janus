@@ -145,6 +145,27 @@ CIGAR parsing then groups operations into **variant blocks** separated by anchor
 
 ---
 
+## Phase 7b: Inversion Detection
+
+Before the expensive `detectSV` + `callMulti` path, `callSV` checks whether the bubble represents an **inversion**. An inversion of `ref[A:B]` replaces the forward sequence with its reverse complement, creating a bubble where the tumor path contains revcomp cores that hash differently from forward cores.
+
+**Algorithm** (`callSV` in `sv.cpp`):
+
+1. Both `normal_seq` and `tumor_seq` must be non-empty and >= 10bp (`MIN_INV_SIZE`).
+2. Length ratio `min/max >= 0.80` (inversions preserve length, with minor breakpoint variation).
+3. Compute `reverse_complement(normal_seq)`.
+4. Run **parasail Smith-Waterman** local alignment of `tumor_seq` against `revcomp(normal_seq)`. Scoring: match=2, mismatch=-4, gap_open=5, gap_extend=1.
+5. Compute normalized score = sw_score / (min(len_normal, len_tumor) * match_score).
+6. If normalized >= 0.90 (`INV_THRESHOLD`): emit a single INV call. Otherwise, fall through to existing `detectSV`/`callMulti` logic.
+
+Local alignment is used instead of character-by-character comparison because LCP core boundary differences between forward and reverse-complement paths cause the extracted bubble sequences to be shifted relative to each other. Smith-Waterman handles this offset correctly.
+
+**O(L_n · L_t) time and space** — same cost as `callMulti` NW alignment. Mitigated by parasail SIMD vectorization.
+
+**Why INV bubbles are not caught by DUP detection**: The `detectFlippedDUPs` function requires successor pattern `T>=1 S>=1 N=0`. For inversion bubbles, the shared start node has both normal-only successors (forward cores) and tumor-only successors (revcomp cores), giving `N>=1` which fails the DUP filter.
+
+---
+
 ## Phase 8: Duplication Detection
 
 Tandem duplications are detected through two complementary mechanisms: **pattern-based flipped DUP detection** for medium/large DUPs, and **Smith-Waterman INS→DUP reclassification** for small DUPs.
@@ -203,6 +224,7 @@ The Smith-Waterman local alignment finds the best matching substring regardless 
 | Path finding | `extractBubbles` | O(sum of path lengths) | O(L_max) |
 | Anchoring | `anchorBubble` (×B) | O(B) typical, O(B·C_d) worst | O(V) for BFS |
 | SV calling (simple) | `detectSV` + emit | O(L) per bubble | O(1) |
+| INV detection | `reverse_complement` + SW alignment | **O(L_n · L_t)** per bubble | O(L_n · L_t) |
 | SV calling (complex) | `callMulti` (NW alignment) | **O(L_n · L_t)** per bubble | O(L_n · L_t) |
 | Flipped DUP detection | `detectFlippedDUPs` | O(S_dup · E_dup) | O(S_dup + E_dup) |
 | INS→DUP check | SW local alignment | O(1) per INS call | O(window) |
@@ -218,55 +240,4 @@ The Smith-Waterman local alignment finds the best matching substring regardless 
 
 ---
 
-## Benchmark Results (depth=5, chr19, 2026-03-26)
-
-### All variants (deep_analysis.py — strict type matching, 200bp tolerance)
-
-| Type | Sim | Detected | TP | Wrong type | Ghost FP | FN | Precision | Recall | F1 |
-|------|-----|----------|-----|-----------|----------|-----|-----------|--------|--------|
-| DEL | 195 | 187 | 187 | 0 | 0 | 8 | 1.0000 | 0.9590 | 0.9791 |
-| INS | 195 | 192 | 181 | 10 | 1 | 4 | 0.9427 | 0.9784 | 0.9602 |
-| SNP | 200 | 199 | 199 | 0 | 0 | 1 | 1.0000 | 0.9950 | 0.9975 |
-| DUP | 195 | 167 | 149 | 18 | 0 | 28 | 0.8922 | 0.8418 | 0.8663 |
-| Mixed | 3281 | 3103 | 3030 | 71 | 2 | 180 | 0.9765 | 0.9439 | 0.9599 |
-
-### SVs only (>=50bp, deep_analysis.py)
-
-| Type | GT SVs | Det SVs | TP | FP | FN | Precision | Recall | F1 |
-|------|--------|---------|-----|-----|-----|-----------|--------|--------|
-| DEL | 143 | 135 | 135 | 0 | 8 | 1.0000 | 0.9441 | 0.9712 |
-| INS | 147 | 147 | 146 | 1 | 1 | 0.9932 | 0.9932 | 0.9932 |
-| DUP | 142 | 121 | 109 | 12 | 23 | 0.9008 | 0.8258 | 0.8617 |
-| Mixed | 394 | 391 | 369 | 22 | 23 | 0.9437 | 0.9413 | 0.9425 |
-
-### Truvari Results (SV-level, >=50bp)
-
-| Type | TP | FP | FN | Precision | Recall | F1 |
-|------|-----|-----|-----|-----------|--------|--------|
-| DEL | 135 | 1 | 8 | 0.9926 | 0.9441 | 0.9677 |
-| INS | 145 | 2 | 2 | 0.9864 | 0.9864 | 0.9864 |
-| DUP | 28 | 94 | 114 | 0.2295 | 0.1972 | 0.2121 |
-| Mixed | 288 | 105 | 106 | 0.7328 | 0.7310 | 0.7319 |
-
-### Key observations
-
-- **DEL, INS, SNP**: Excellent accuracy. DEL and INS SV-level F1 > 0.97. SNP F1 = 0.998. Zero ghost false positives for DEL and SNP.
-- **DUP deep_analysis F1 = 0.87**: The flipped DUP detection catches 92 medium/large DUPs. The SW-based INS→DUP reclassification catches 57 small DUPs. 18 DUPs remain misclassified as INS (SW score below 0.70 threshold). 28 DUPs are completely missed (25 of those are <50bp and produce no bubble at all).
-- **DUP truvari F1 = 0.21**: Truvari uses different matching logic that does not handle the DUP↔INS type ambiguity well. The deep_analysis results are more representative of actual detection accuracy.
-- **Mixed**: 3030/3281 correct type calls. The 71 wrong-type calls include 50 real INS falsely reclassified as DUP (SW local alignment matches reference by chance for small insertions), 18 real DUPs still called as INS, and 3 spurious long-range DUP pairings (SVLEN > 3M) that matched near SNP sites.
-- **INS→DUP false reclassifications**: 10 real insertions in the INS-only run are reclassified as DUP (all <25bp). At the SV level (>=50bp), this noise disappears — INS SV F1 = 0.993.
-
-### DUP detection breakdown by mechanism
-
-| Mechanism | DUP-only run | Mixed run |
-|-----------|-------------|-----------|
-| Flipped DUP detection (medium/large) | 92 | 123 |
-| INS→DUP reclassification (small) | 57 | 74 |
-| Still called as INS (should be DUP) | 18 | 18 |
-| Not detected at all | 28 | 135 (132 are <50bp) |
-
-### Known issues
-
-1. **Spurious long-range DUP pairings**: The greedy nearest-match in `detectFlippedDUPs` can pair distant `T=1 S=1` bubble endpoints, producing DUP calls with SVLEN in the millions. 3 such calls in the mixed run. A max-distance cap would fix this.
-2. **Small INS→DUP false positives**: The 0.70 SW threshold catches small insertions that happen to match nearby reference by chance. Affects ~10 calls in the INS-only run, all <25bp.
-3. **Small DUPs (<50bp) missed**: 25 of 28 missed DUPs in the DUP-only run are <50bp. These produce no bubble at all — the LCP core tiling at depth 5 does not create divergent paths for variants smaller than a single core.
+Benchmark results have been moved to [BENCHMARKS.md](BENCHMARKS.md).
