@@ -11,3 +11,6 @@ outputs
 lib
 __pycache__
 .clang-format
+benchmarks/real/samples
+benchmarks/real/results
+benchmarks/rivals/*/results
