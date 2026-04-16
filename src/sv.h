@@ -34,4 +34,13 @@ std::vector<SVCall> detectLargeINVs(const std::string& tumor_seq, int depth,
     const std::unordered_set<uint64_t>& rcref_hashes,
     const RefIndex& ref_index);
 
+std::vector<SVCall> detectLargeDELs(const RefIndex& ref_index,
+    const std::unordered_set<uint64_t>& tumor_hashes,
+    const std::vector<SVCall>& large_inv_regions);
+
+std::vector<SVCall> detectLargeINS(const std::string& tumor_seq, int depth,
+    const std::unordered_set<uint64_t>& ref_hashes,
+    const std::unordered_set<uint64_t>& rcref_hashes,
+    const RefIndex& ref_index);
+
 #endif
