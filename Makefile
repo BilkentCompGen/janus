@@ -14,7 +14,9 @@ TESTDIR = tests
 DIAGDIR = tests/diagnostics
 SRC_OBJS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(wildcard $(SRCDIR)/*.cpp)))
 
-.PHONY: all clean compare test diag help
+TOOLDIR = tools
+
+.PHONY: all clean compare test diag help svp_clean
 
 # When 'compare' or 'test' is invoked, treat the extra args as no-op targets
 ifeq (compare,$(firstword $(MAKECMDGOALS)))
@@ -47,6 +49,9 @@ test: $(SRC_OBJS)
 
 diag: $(SRC_OBJS)
 	$(CXX) $(CXXFLAGS) -I. -I$(LIBDIR)/lcptools -I$(LIBDIR)/parasail -o $(OBJDIR)/$(DIAG_NAME) $(DIAGDIR)/$(DIAG_NAME).cpp $^ $(LDFLAGS) && ./$(OBJDIR)/$(DIAG_NAME)
+
+svp_clean: $(SRC_OBJS)
+	$(CXX) $(CXXFLAGS) -I. -I$(LIBDIR)/lcptools -I$(LIBDIR)/parasail -o svp_clean $(TOOLDIR)/svp_clean.cpp $^ $(LDFLAGS)
 
 compare:
 	@./scripts/truvari.sh $(COMPARE_ARGS)

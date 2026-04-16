@@ -13,4 +13,7 @@ __pycache__
 .clang-format
 benchmarks/real/samples
 benchmarks/real/results
+benchmarks/real/ground_truth
 benchmarks/rivals/*/results
+benchmarks/rivals/comparison_summary.txt
+svp_clean

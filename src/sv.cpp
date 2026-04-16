@@ -5,6 +5,7 @@
 #include <fstream>
 #include <unordered_set>
 
+#include "diag.h"
 #include "ref.h"
 #include "utils.h"
 #include "sv.h"
@@ -282,8 +283,8 @@ static void reclassifySnpAsInv(vector<SVCall>& calls,
     const string& normal_seq, const string& tumor_seq, int64_t ref_offset) {
 
     constexpr int64_t MAX_GAP = 10;
-    constexpr int64_t MIN_SPAN = 35;
-    constexpr double INV_THRESHOLD = 0.80;
+    constexpr int64_t MIN_SPAN = 10;
+    constexpr double INV_THRESHOLD = 0.65;
 
     // Collect SNP indices sorted by ref_pos
     vector<size_t> snp_idx;
@@ -404,9 +405,26 @@ vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_inde
 
     int anchored_bubbles = 0;
     int skipped_in_inv = 0;
+    int unanchored_bubbles = 0;
+    auto& diag = DiagLog::instance();
+
     for (const auto& b : bubbles) {
         int64_t ref_offset = ref_index.anchorBubble(b, graph);
-        if (ref_offset < 0) continue;
+
+        if (ref_offset < 0) {
+            unanchored_bubbles++;
+            if (diag.enabled()) {
+                DiagBubble db;
+                db.start_hash = b.start_node; db.end_hash = b.end_node;
+                db.anchor_pos = -1; db.anchor_method = "failed";
+                db.normal_seq_len = b.normal_seq.size();
+                db.tumor_seq_len = b.tumor_seq.size();
+                db.skip_reason = "anchor_failed";
+                db.calls_emitted = 0;
+                diag.addBubble(db);
+            }
+            continue;
+        }
         anchored_bubbles++;
 
         // Skip bubbles inside core-index detected large INV regions
@@ -422,14 +440,40 @@ vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_inde
         // Also skip bubbles where both sequences are large — likely undetected INV
         // or merged variant that would blow up parasail O(N*M)
         constexpr int64_t MAX_BUBBLE_SEQ = 5000;
+        bool too_large = false;
         if (!inside_large_inv
             && (int64_t)b.normal_seq.size() > MAX_BUBBLE_SEQ
-            && (int64_t)b.tumor_seq.size() > MAX_BUBBLE_SEQ)
+            && (int64_t)b.tumor_seq.size() > MAX_BUBBLE_SEQ) {
             inside_large_inv = true;
+            too_large = true;
+        }
 
         if (inside_large_inv) skipped_in_inv++;
 
         vector<SVCall> bubble_calls = callSV(b, ref_offset);
+
+        if (diag.enabled()) {
+            DiagBubble db;
+            db.start_hash = b.start_node; db.end_hash = b.end_node;
+            db.anchor_pos = ref_offset; db.anchor_method = "ok";
+            db.normal_seq_len = b.normal_seq.size();
+            db.tumor_seq_len = b.tumor_seq.size();
+            db.skip_reason = inside_large_inv ? (too_large ? "too_large_>5kb" : "inside_large_inv") : "";
+            db.calls_emitted = (int)bubble_calls.size();
+            string types;
+            for (const auto& c : bubble_calls) {
+                if (!types.empty()) types += ",";
+                types += c.svtype;
+            }
+            db.call_types = types;
+            diag.addBubble(db);
+
+            for (const auto& c : bubble_calls) {
+                diag.addCall({c.svtype, c.ref_pos, c.length, "bubble",
+                    "nlen=" + to_string(b.normal_seq.size()) + " tlen=" + to_string(b.tumor_seq.size())});
+            }
+        }
+
         calls.insert(calls.end(), bubble_calls.begin(), bubble_calls.end());
     }
 
@@ -439,10 +483,24 @@ vector<SVCall> extractAndCallSVs(const LCPGraph& graph, const RefIndex& ref_inde
     sv_logger.debug(
         "extractAndCallSVs: bubbles=" + to_string(bubbles.size())
         + " anchored=" + to_string(anchored_bubbles)
+        + " unanchored=" + to_string(unanchored_bubbles)
         + " skipped_in_inv=" + to_string(skipped_in_inv)
         + " flipped_dups=" + to_string(dup_calls.size())
         + " total_calls=" + to_string(calls.size())
     );
+
+    if (diag.enabled()) {
+        diag.addStat("total_bubbles", to_string(bubbles.size()));
+        diag.addStat("anchored_bubbles", to_string(anchored_bubbles));
+        diag.addStat("unanchored_bubbles", to_string(unanchored_bubbles));
+        diag.addStat("skipped_in_inv", to_string(skipped_in_inv));
+        diag.addStat("flipped_dups", to_string(dup_calls.size()));
+        diag.addStat("total_calls", to_string(calls.size()));
+
+        for (const auto& dc : dup_calls) {
+            diag.addCall({dc.svtype, dc.ref_pos, dc.length, "flipped_dup", "."});
+        }
+    }
 
     return calls;
 }
@@ -601,5 +659,277 @@ vector<SVCall> detectLargeINVs(const string& tumor_seq, int depth,
     sv_logger.debug("detectLargeINVs: " + to_string(cores.size()) + " tumor cores, "
         + to_string(runs.size()) + " runs after merge, "
         + to_string(calls.size()) + " large INVs detected");
+
+    if (DiagLog::instance().enabled()) {
+        // Core classification counts
+        int cls0 = 0, cls1 = 0, cls2 = 0, cls3 = 0;
+        for (const auto& c : cores) {
+            if (c.cls == 0) cls0++;
+            else if (c.cls == 1) cls1++;
+            else if (c.cls == 2) cls2++;
+            else cls3++;
+        }
+        DiagLog::instance().addStat("large_inv_tumor_cores", to_string(cores.size()));
+        DiagLog::instance().addStat("large_inv_cls0_novel", to_string(cls0));
+        DiagLog::instance().addStat("large_inv_cls1_ref_only", to_string(cls1));
+        DiagLog::instance().addStat("large_inv_cls2_rcref_only", to_string(cls2));
+        DiagLog::instance().addStat("large_inv_cls3_both", to_string(cls3));
+        DiagLog::instance().addStat("large_inv_runs", to_string(runs.size()));
+        DiagLog::instance().addStat("large_inv_calls", to_string(calls.size()));
+
+        for (const auto& c : calls) {
+            DiagLog::instance().addCall({c.svtype, c.ref_pos, c.length, "large_inv",
+                "rcref_core_pipeline"});
+        }
+    }
+
+    return calls;
+}
+
+// ---------------------------------------------------------------------------
+// Large DEL detection via ref-core absence in tumor
+// ---------------------------------------------------------------------------
+vector<SVCall> detectLargeDELs(const RefIndex& ref_index,
+    const unordered_set<uint64_t>& tumor_hashes,
+    const vector<SVCall>& large_inv_regions) {
+
+    constexpr int MAX_GAP = 3;
+    constexpr int MIN_ABSENT_CORES = 5;
+    constexpr int64_t MIN_DEL_BP = 500;
+    constexpr int64_t INV_OVERLAP_PAD = 500;
+
+    // Classify each reference core:
+    // 0 = ambiguous (non-unique hash), 1 = present in tumor, 2 = absent
+    const auto& ref_cores = ref_index.cores;
+    vector<uint8_t> cls(ref_cores.size());
+    int n_present = 0, n_absent = 0, n_ambig = 0;
+
+    for (size_t i = 0; i < ref_cores.size(); i++) {
+        auto it = ref_index.index.find(ref_cores[i].hash);
+        if (it == ref_index.index.end() || it->second.size() != 1) {
+            cls[i] = 0; n_ambig++;
+        } else if (tumor_hashes.count(ref_cores[i].hash)) {
+            cls[i] = 1; n_present++;
+        } else {
+            cls[i] = 2; n_absent++;
+        }
+    }
+
+    // Find gap-tolerant runs of absent cores
+    // Key: present (cls=1) cores are HARD boundaries — always split
+    //      ambiguous (cls=0) are soft gaps — allow up to MAX_GAP consecutive
+    struct DelRun { size_t core_start, core_end; int absent_count; };
+    vector<DelRun> runs;
+
+    size_t i = 0;
+    while (i < ref_cores.size()) {
+        if (cls[i] != 2) { i++; continue; }
+
+        size_t run_start = i;
+        int absent_count = 0;
+        int soft_gap = 0;
+        size_t run_end = i;
+
+        while (i < ref_cores.size()) {
+            if (cls[i] == 2) {
+                absent_count++;
+                soft_gap = 0;
+                run_end = i;
+                i++;
+            } else if (cls[i] == 1) {
+                break; // hard boundary
+            } else {
+                soft_gap++;
+                if (soft_gap > MAX_GAP) break;
+                i++;
+            }
+        }
+
+        if (absent_count >= MIN_ABSENT_CORES) {
+            runs.push_back({run_start, run_end, absent_count});
+        }
+    }
+
+    // Filter out runs overlapping large INV regions
+    vector<DelRun> filtered_runs;
+    for (const auto& run : runs) {
+        int64_t run_start_bp = (int64_t)ref_cores[run.core_start].start;
+        int64_t run_end_bp = (int64_t)ref_cores[run.core_end].end;
+        bool overlaps_inv = false;
+        for (const auto& inv : large_inv_regions) {
+            if (run_start_bp < inv.ref_pos + inv.length + INV_OVERLAP_PAD &&
+                run_end_bp > inv.ref_pos - INV_OVERLAP_PAD) {
+                overlaps_inv = true;
+                break;
+            }
+        }
+        if (!overlaps_inv) filtered_runs.push_back(run);
+    }
+
+    // Convert to SVCalls using flanking present cores for boundaries
+    vector<SVCall> calls;
+    for (const auto& run : filtered_runs) {
+        int64_t ref_start = (int64_t)ref_cores[run.core_start].start;
+        int64_t ref_end = (int64_t)ref_cores[run.core_end].end;
+        int64_t span = ref_end - ref_start;
+        if (span < MIN_DEL_BP) continue;
+
+        SVCall call;
+        call.svtype = "DEL";
+        call.ref_pos = ref_start;
+        call.length = span;
+
+        sv_logger.debug("Large DEL detected via core-index: ref_pos=" + to_string(call.ref_pos)
+            + " len=" + to_string(call.length) + " absent_cores=" + to_string(run.absent_count));
+        calls.push_back(call);
+    }
+
+    sv_logger.debug("detectLargeDELs: " + to_string(ref_cores.size()) + " ref cores, "
+        + to_string(n_present) + " present, " + to_string(n_absent) + " absent, "
+        + to_string(n_ambig) + " ambiguous, "
+        + to_string(runs.size()) + " raw runs, "
+        + to_string(filtered_runs.size()) + " after INV filter, "
+        + to_string(calls.size()) + " large DELs detected");
+
+    if (DiagLog::instance().enabled()) {
+        DiagLog::instance().addStat("large_del_ref_cores", to_string(ref_cores.size()));
+        DiagLog::instance().addStat("large_del_present", to_string(n_present));
+        DiagLog::instance().addStat("large_del_absent", to_string(n_absent));
+        DiagLog::instance().addStat("large_del_ambiguous", to_string(n_ambig));
+        DiagLog::instance().addStat("large_del_raw_runs", to_string(runs.size()));
+        DiagLog::instance().addStat("large_del_after_inv_filter", to_string(filtered_runs.size()));
+        DiagLog::instance().addStat("large_del_calls", to_string(calls.size()));
+        for (const auto& c : calls) {
+            DiagLog::instance().addCall({c.svtype, c.ref_pos, c.length, "large_del",
+                "absent_core_pipeline"});
+        }
+    }
+
+    return calls;
+}
+
+// ---------------------------------------------------------------------------
+// Large INS detection via novel tumor core runs
+// ---------------------------------------------------------------------------
+vector<SVCall> detectLargeINS(const string& tumor_seq, int depth,
+    const unordered_set<uint64_t>& ref_hashes,
+    const unordered_set<uint64_t>& rcref_hashes,
+    const RefIndex& ref_index) {
+
+    constexpr int MAX_GAP = 3;
+    constexpr int MIN_NOVEL_CORES = 5;
+    constexpr int64_t MIN_INS_BP = 500;
+
+    // Extract tumor LCP cores
+    struct lps lcp;
+    init_lps(&lcp, tumor_seq.c_str(), tumor_seq.size());
+    lps_deepen(&lcp, depth);
+
+    // Classify each tumor core:
+    // 0 = novel, 1 = ref-only, 2 = rcref-only, 3 = both
+    struct ClassifiedCore { uint64_t start, end; uint8_t cls; node_hash hash; };
+    vector<ClassifiedCore> cores(lcp.size);
+    for (int ci = 0; ci < lcp.size; ++ci) {
+        string region(tumor_seq.c_str() + lcp.cores[ci].start, lcp.cores[ci].end - lcp.cores[ci].start);
+        uint64_t h = hash_string(region, 0);
+        bool in_ref = ref_hashes.count(h) > 0;
+        bool in_rcref = rcref_hashes.count(h) > 0;
+        uint8_t c = 0;
+        if (in_ref && in_rcref) c = 3;
+        else if (in_ref) c = 1;
+        else if (in_rcref) c = 2;
+        cores[ci] = {(uint64_t)lcp.cores[ci].start, (uint64_t)lcp.cores[ci].end, c, h};
+    }
+    free_lps(&lcp);
+
+    // Find gap-tolerant runs of novel cores (cls=0)
+    // ref-matching (cls=1) cores are hard boundaries
+    struct InsRun { size_t core_start, core_end; int novel_count; };
+    vector<InsRun> runs;
+
+    size_t i = 0;
+    while (i < cores.size()) {
+        if (cores[i].cls != 0) { i++; continue; }
+
+        size_t run_start = i;
+        int novel_count = 0;
+        int gap = 0;
+        size_t run_end = i;
+
+        while (i < cores.size()) {
+            if (cores[i].cls == 0) {
+                novel_count++;
+                gap = 0;
+                run_end = i;
+                i++;
+            } else if (cores[i].cls == 1) {
+                break; // ref-matching = hard boundary
+            } else {
+                gap++;
+                if (gap > MAX_GAP) break;
+                i++;
+            }
+        }
+
+        if (novel_count >= MIN_NOVEL_CORES) {
+            runs.push_back({run_start, run_end, novel_count});
+        }
+    }
+
+    // Convert runs to calls, anchor via flanking ref-matching cores
+    vector<SVCall> calls;
+    for (const auto& run : runs) {
+        int64_t tumor_span = (int64_t)cores[run.core_end].end - (int64_t)cores[run.core_start].start;
+        if (tumor_span < MIN_INS_BP) continue;
+
+        // Look left for nearest ref-matching core with unique ref anchor
+        int64_t ref_pos = -1;
+        for (int k = (int)run.core_start - 1; k >= 0; k--) {
+            if (cores[k].cls == 1 || cores[k].cls == 3) {
+                ref_pos = ref_index.anchor(cores[k].hash);
+                if (ref_pos >= 0) break;
+            }
+        }
+
+        // Try right if left failed
+        if (ref_pos < 0) {
+            for (size_t k = run.core_end + 1; k < cores.size(); k++) {
+                if (cores[k].cls == 1 || cores[k].cls == 3) {
+                    ref_pos = ref_index.anchor(cores[k].hash);
+                    if (ref_pos >= 0) break;
+                }
+            }
+        }
+
+        if (ref_pos < 0) {
+            sv_logger.debug("Large INS skipped (no ref anchor): tumor_pos=" + to_string(cores[run.core_start].start)
+                + " tumor_span=" + to_string(tumor_span));
+            continue;
+        }
+
+        SVCall call;
+        call.svtype = "INS";
+        call.ref_pos = ref_pos;
+        call.length = tumor_span;
+
+        sv_logger.debug("Large INS detected via core-index: ref_pos=" + to_string(call.ref_pos)
+            + " len=" + to_string(call.length) + " novel_cores=" + to_string(run.novel_count)
+            + " (tumor_pos=" + to_string(cores[run.core_start].start) + ")");
+        calls.push_back(call);
+    }
+
+    sv_logger.debug("detectLargeINS: " + to_string(cores.size()) + " tumor cores, "
+        + to_string(runs.size()) + " novel runs, "
+        + to_string(calls.size()) + " large INSs detected");
+
+    if (DiagLog::instance().enabled()) {
+        DiagLog::instance().addStat("large_ins_novel_runs", to_string(runs.size()));
+        DiagLog::instance().addStat("large_ins_calls", to_string(calls.size()));
+        for (const auto& c : calls) {
+            DiagLog::instance().addCall({c.svtype, c.ref_pos, c.length, "large_ins",
+                "novel_core_pipeline"});
+        }
+    }
+
     return calls;
 }

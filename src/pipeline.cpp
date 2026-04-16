@@ -76,3 +76,20 @@ unordered_set<uint64_t> buildRcrefHashes(const string& ref_sequence, int depth) 
     pipeline_logger.debug("Built rcref hash set: " + to_string(rcref_hashes.size()) + " unique hashes");
     return rcref_hashes;
 }
+
+unordered_set<uint64_t> buildTumorHashes(const string& tumor_sequence, int depth) {
+    struct lps tumor_lcp;
+    init_lps(&tumor_lcp, tumor_sequence.c_str(), tumor_sequence.size());
+    lps_deepen(&tumor_lcp, depth);
+
+    unordered_set<uint64_t> tumor_hashes;
+    for (int i = 0; i < tumor_lcp.size; ++i) {
+        string region(tumor_sequence.c_str() + tumor_lcp.cores[i].start,
+                      tumor_lcp.cores[i].end - tumor_lcp.cores[i].start);
+        tumor_hashes.insert(hash_string(region, 0));
+    }
+    free_lps(&tumor_lcp);
+
+    pipeline_logger.debug("Built tumor hash set: " + to_string(tumor_hashes.size()) + " unique hashes");
+    return tumor_hashes;
+}
