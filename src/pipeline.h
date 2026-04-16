@@ -19,4 +19,7 @@ std::unordered_set<uint64_t> buildRefHashes(
 std::unordered_set<uint64_t> buildRcrefHashes(
     const std::string& ref_sequence, int depth);
 
+std::unordered_set<uint64_t> buildTumorHashes(
+    const std::string& tumor_sequence, int depth);
+
 #endif
