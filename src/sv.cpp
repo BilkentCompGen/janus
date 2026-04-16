@@ -766,11 +766,30 @@ vector<SVCall> detectLargeDELs(const RefIndex& ref_index,
         if (!overlaps_inv) filtered_runs.push_back(run);
     }
 
-    // Convert to SVCalls using flanking present cores for boundaries
+    // Convert to SVCalls — tighten boundaries using flanking present cores
+    // to avoid overestimating deletion size (absent core run extends past
+    // actual breakpoints due to boundary-spanning cores whose hash changed)
     vector<SVCall> calls;
     for (const auto& run : filtered_runs) {
+        // Default to outer boundaries of absent core run
         int64_t ref_start = (int64_t)ref_cores[run.core_start].start;
         int64_t ref_end = (int64_t)ref_cores[run.core_end].end;
+
+        // Tighten left: use end of last present core before the run
+        for (int k = (int)run.core_start - 1; k >= 0; k--) {
+            if (cls[k] == 1) {
+                ref_start = (int64_t)ref_cores[k].end;
+                break;
+            }
+        }
+        // Tighten right: use start of first present core after the run
+        for (size_t k = run.core_end + 1; k < ref_cores.size(); k++) {
+            if (cls[k] == 1) {
+                ref_end = (int64_t)ref_cores[k].start;
+                break;
+            }
+        }
+
         int64_t span = ref_end - ref_start;
         if (span < MIN_DEL_BP) continue;
 
@@ -876,30 +895,34 @@ vector<SVCall> detectLargeINS(const string& tumor_seq, int depth,
         }
     }
 
-    // Convert runs to calls, anchor via flanking ref-matching cores
+    // Convert runs to calls — tighten boundaries using flanking ref-matching
+    // cores to avoid overestimating insertion size
     vector<SVCall> calls;
     for (const auto& run : runs) {
-        int64_t tumor_span = (int64_t)cores[run.core_end].end - (int64_t)cores[run.core_start].start;
-        if (tumor_span < MIN_INS_BP) continue;
+        // Default to outer boundaries of novel core run
+        int64_t tumor_start = (int64_t)cores[run.core_start].start;
+        int64_t tumor_end = (int64_t)cores[run.core_end].end;
 
-        // Look left for nearest ref-matching core with unique ref anchor
+        // Tighten left: use end of last ref-matching core before the run
         int64_t ref_pos = -1;
         for (int k = (int)run.core_start - 1; k >= 0; k--) {
             if (cores[k].cls == 1 || cores[k].cls == 3) {
-                ref_pos = ref_index.anchor(cores[k].hash);
-                if (ref_pos >= 0) break;
+                tumor_start = (int64_t)cores[k].end;
+                if (ref_pos < 0) ref_pos = ref_index.anchor(cores[k].hash);
+                break;
+            }
+        }
+        // Tighten right: use start of first ref-matching core after the run
+        for (size_t k = run.core_end + 1; k < cores.size(); k++) {
+            if (cores[k].cls == 1 || cores[k].cls == 3) {
+                tumor_end = (int64_t)cores[k].start;
+                if (ref_pos < 0) ref_pos = ref_index.anchor(cores[k].hash);
+                break;
             }
         }
 
-        // Try right if left failed
-        if (ref_pos < 0) {
-            for (size_t k = run.core_end + 1; k < cores.size(); k++) {
-                if (cores[k].cls == 1 || cores[k].cls == 3) {
-                    ref_pos = ref_index.anchor(cores[k].hash);
-                    if (ref_pos >= 0) break;
-                }
-            }
-        }
+        int64_t tumor_span = tumor_end - tumor_start;
+        if (tumor_span < MIN_INS_BP) continue;
 
         if (ref_pos < 0) {
             sv_logger.debug("Large INS skipped (no ref anchor): tumor_pos=" + to_string(cores[run.core_start].start)
