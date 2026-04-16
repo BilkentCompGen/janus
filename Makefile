@@ -11,9 +11,10 @@ SOURCES = main.cpp $(wildcard $(SRCDIR)/*.cpp)
 OBJECTS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(SOURCES)))
 
 TESTDIR = tests
+DIAGDIR = tests/diagnostics
 SRC_OBJS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(notdir $(wildcard $(SRCDIR)/*.cpp)))
 
-.PHONY: all clean compare test help
+.PHONY: all clean compare test diag help
 
 # When 'compare' or 'test' is invoked, treat the extra args as no-op targets
 ifeq (compare,$(firstword $(MAKECMDGOALS)))
@@ -23,6 +24,10 @@ endif
 ifeq (test,$(firstword $(MAKECMDGOALS)))
   TEST_NAME := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
   $(eval $(TEST_NAME):;@:)
+endif
+ifeq (diag,$(firstword $(MAKECMDGOALS)))
+  DIAG_NAME := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  $(eval $(DIAG_NAME):;@:)
 endif
 
 all: $(TARGET)
@@ -40,6 +45,9 @@ $(OBJDIR)/%.o: %.cpp $(wildcard $(SRCDIR)/*.h) $(wildcard $(SRCDIR)/*.hpp)
 test: $(SRC_OBJS)
 	$(CXX) $(CXXFLAGS) -I. -I$(LIBDIR)/lcptools -I$(LIBDIR)/parasail -o $(OBJDIR)/$(TEST_NAME) $(TESTDIR)/$(TEST_NAME).cpp $^ $(LDFLAGS) && ./$(OBJDIR)/$(TEST_NAME)
 
+diag: $(SRC_OBJS)
+	$(CXX) $(CXXFLAGS) -I. -I$(LIBDIR)/lcptools -I$(LIBDIR)/parasail -o $(OBJDIR)/$(DIAG_NAME) $(DIAGDIR)/$(DIAG_NAME).cpp $^ $(LDFLAGS) && ./$(OBJDIR)/$(DIAG_NAME)
+
 compare:
 	@./scripts/truvari.sh $(COMPARE_ARGS)
 
@@ -49,6 +57,7 @@ help:
 	@echo "  make clean        					Remove build artifacts and outputs"
 	@echo "  make compare <base.vcf> <comp.vcf> <ref.fa>		Compare VCFs with truvari bench"
 	@echo "  make test <name>  					Build and run a test from tests/"
+	@echo "  make diag <name>  					Build and run a diagnostic from tests/diagnostics/"
 	@echo "  make help         					Show this help message"
 
 clean:

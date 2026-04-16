@@ -23,19 +23,21 @@ make test svcall
 make test node
 make test hash
 
+# diagnostic/trace tools (in tests/diagnostics/, not regression tests)
+make diag trace_bfs
+make diag dup_diag
+
 # VCF comparison
 make compare base.vcf comp.vcf ref.fa    # runs truvari via scripts/truvari.sh
 python scripts/compare_vcf.py sim.vcf detected.vcf   # position-tolerant VCF diff
 python scripts/deep_analysis.py                       # position-level cross-reference with type checking
 ```
 
-`tests/` also contains diagnostic/trace files (e.g. `trace_bfs.cpp`, `dup_diag.cpp`, `flank_test.cpp`) — these are investigative tools, not regression tests.
-
 **Dependencies:** g++20, zlib (`-lz`), htslib (`-lhts`), parasail (`-lparasail`), lcptools (`-llcptools` — bundled in `lib/lcptools/`).
 
 ## Algorithm & Complexity
 
-See [ALGORITHM.md](ALGORITHM.md) for a detailed breakdown of every pipeline phase, the algorithms used (LCP parsing, KMP merging, Needleman-Wunsch alignment, BFS cycle detection), and their time/space complexity. Overall: **O(N + B·L² + S·K)**.
+See [docs/ALGORITHM.md](docs/ALGORITHM.md) for a detailed breakdown of every pipeline phase, the algorithms used (LCP parsing, KMP merging, Needleman-Wunsch alignment, BFS cycle detection), and their time/space complexity. Overall: **O(N + B·L² + S·K)**.
 
 ## Architecture
 
@@ -46,6 +48,8 @@ See [ALGORITHM.md](ALGORITHM.md) for a detailed breakdown of every pipeline phas
 - **graph.h/cpp** — `LCPGraph` and `Node`. Nodes carry color bits: `0x1` = normal, `0x2` = tumor, `0x3` = shared. Key methods: `addString()`, `detectBubbles()`, `extractBubbles()`, `findColoredPath()` (BFS with KMP-based sequence merging), `writeGFA()`.
 - **ref.h/cpp** — `RefIndex`. Maps LCP core hashes to reference positions. `anchorBubble()` walks backward/forward through predecessors to find a unique reference anchor for each bubble.
 - **sv.h/cpp** — `SVCall` and SV calling logic. `callSV()` checks for INV (reverse-complement identity ≥0.90) first, then `detectSV()` does quick classification; `callMulti()` uses parasail Needleman-Wunsch alignment + CIGAR parsing for complex variants; `extractAndCallSVs()` orchestrates the full pipeline including flipped DUP detection. `detectLargeINVs()` is a separate core-index pipeline for inversions too large for bubble-based detection — classifies tumor cores against forward-ref and revcomp-ref hash sets, finds runs of rcref-only cores (≥5 cores, ≥500bp).
+- **pipeline.h/cpp** — `processGenome()` (FASTA→LCP→graph), `buildRefHashes()` (reference core hash set + RefIndex population), `buildRcrefHashes()` (reverse-complement reference hash set for large INV detection).
+- **vcf.h/cpp** — `writeVCF()`. VCF output formatting and INS→DUP Smith-Waterman reclassification.
 - **utils.h/cpp** — `Logger` (debug macro), `FastaStreamer` (gzip-aware FASTA iterator), `ArgParser`, `hash_string()`, `reverse_complement()`.
 
 ### Key concepts
@@ -59,7 +63,7 @@ See [ALGORITHM.md](ALGORITHM.md) for a detailed breakdown of every pipeline phas
 
 ### main.cpp
 
-Parses CLI args (`--chr` defaults to 19), loads FASTAs, builds RefIndex + LCPGraph (coloring normal 0x1, tumor 0x2). Runs two INV detection pipelines: (1) `detectLargeINVs` via core-index (ref + revcomp-ref hash sets, before bubble detection), (2) bubble-based SW alignment in `callSV`. Bubble calls overlapping large INV regions are suppressed (500bp padding). INS→DUP reclassification via SW local alignment also happens here. Writes VCF and GFA.
+Thin orchestrator: parses CLI args (`--chr` defaults to 19), calls `buildRefHashes()` / `buildRcrefHashes()` / `processGenome()`, runs `detectLargeINVs()` + `extractAndCallSVs()`, then `writeVCF()` and `writeGFA()`.
 
 ## Simulations (insilicoSV)
 
@@ -93,7 +97,7 @@ mv sim.fa <type>_simulation.fa && mv sim.vcf <type>_simulation.vcf
 
 ## Benchmarking
 
-Three complementary tools:
+### SVP benchmarking tools
 
 - **`scripts/compare_vcf.py`** — Position-tolerant (50bp) VCF diff. Reports TP/FP/FN by category (small <50bp, del >=50bp, ins >=50bp, inv >=50bp). Does not understand DUP type.
 - **`scripts/deep_analysis.py`** — Position-level (200bp) cross-reference with strict type matching. Reports correct-type, wrong-type, ghost FPs, missed FNs with size breakdowns. The primary accuracy analysis tool.
@@ -112,8 +116,34 @@ python scripts/compare_vcf.py <simulated.vcf> <detected.vcf>
 python scripts/deep_analysis.py
 ```
 
+### Rival callers
+
+`benchmarks/rivals/` holds scripts and results for other SV callers (Delly, Manta, etc.) run on the same simulation data. See `benchmarks/rivals/README.md`.
+
+### Real-data benchmarks
+
+`benchmarks/real/` holds real genome samples, ground truth VCFs (GIAB, PCAWG), and SVP results. See `benchmarks/real/README.md`. Sample FASTAs are gitignored.
+
+Historical benchmark results are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
 ## Output
 
 - VCF files in `outputs/vcf/`
 - GFA graph files in `outputs/gfa/`
 - Truvari benchmark results in `outputs/truvari/`
+
+## Directory layout
+
+```
+main.cpp              # thin orchestrator
+src/                  # core modules (graph, ref, sv, pipeline, vcf, utils)
+tests/                # unit/integration tests (make test <name>)
+tests/diagnostics/    # investigative trace/debug tools (make diag <name>)
+scripts/              # production benchmarking scripts
+scripts/archive/      # one-off investigative scripts
+docs/                 # ALGORITHM.md, BENCHMARKS.md
+simulation/           # insilicoSV configs + generated data
+benchmarks/rivals/    # rival SV caller comparison
+benchmarks/real/      # real-data benchmarks
+lib/                  # bundled dependencies (lcptools, parasail, insilicoSV)
+```
