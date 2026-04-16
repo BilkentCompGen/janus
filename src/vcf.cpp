@@ -1,4 +1,3 @@
-#include <parasail.h>
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -25,37 +24,19 @@ void writeVCF(const string& vcf_path, vector<SVCall>& calls,
 
     vcf_logger.debug("Writing " + to_string(calls.size()) + " SV calls");
 
-    constexpr int64_t INS_DUP_MAX_BP = 2000;
-    constexpr double INS_DUP_SW_THRESHOLD = 0.70;
-    constexpr int64_t INS_DUP_WINDOW_PAD = 300;
-
-    int sw_match = 2, sw_mismatch = -4, sw_gap_open = 5, sw_gap_extend = 1;
-    parasail_matrix_t* sw_matrix = parasail_matrix_create("ACGT", sw_match, sw_mismatch);
+    // Reclassify all DUP calls as INS — standard truth sets (GIAB v5.0q)
+    // represent tandem duplications as insertions, and the flipped-DUP detector
+    // produces too many false DUP calls on real data
+    int dup_to_ins = 0;
+    for (auto& c : calls) {
+        if (c.svtype == "DUP") {
+            c.svtype = "INS";
+            dup_to_ins++;
+        }
+    }
 
     int sv_count = 0;
-    int ins_retyped_as_dup = 0;
     for (auto& c : calls) {
-        if (c.svtype == "INS" && c.length > 0 && c.length < INS_DUP_MAX_BP && !c.tumor_seq.empty()) {
-            int64_t pad = std::max(INS_DUP_WINDOW_PAD, 2 * static_cast<int64_t>(c.tumor_seq.size()));
-            int64_t win_start = std::max<int64_t>(0, c.ref_pos - pad);
-            int64_t win_end = std::min<int64_t>(static_cast<int64_t>(ref_sequence.size()), c.ref_pos + pad);
-            string window = ref_sequence.substr(static_cast<size_t>(win_start), static_cast<size_t>(win_end - win_start));
-
-            parasail_result_t* sw_result = parasail_sw(
-                c.tumor_seq.c_str(), static_cast<int>(c.tumor_seq.size()),
-                window.c_str(), static_cast<int>(window.size()),
-                sw_gap_open, sw_gap_extend, sw_matrix);
-
-            int perfect_score = static_cast<int>(c.tumor_seq.size()) * sw_match;
-            double normalized = (perfect_score > 0) ? static_cast<double>(sw_result->score) / perfect_score : 0.0;
-            parasail_result_free(sw_result);
-
-            if (normalized >= INS_DUP_SW_THRESHOLD) {
-                c.svtype = "DUP";
-                c.length = static_cast<int64_t>(c.tumor_seq.size());
-                ins_retyped_as_dup++;
-            }
-        }
 
         sv_count++;
         string ref_allele, alt_allele, info;
@@ -88,7 +69,6 @@ void writeVCF(const string& vcf_path, vector<SVCall>& calls,
         vcf << chr_str << "\t" << c.ref_pos << "\t.\t" << ref_allele << "\t" << alt_allele << "\t.\tPASS\t" << info << "\n";
     }
     vcf.close();
-    parasail_matrix_free(sw_matrix);
 
-    vcf_logger.debug("Wrote " + to_string(sv_count) + " SVs (" + to_string(ins_retyped_as_dup) + " INS->DUP by local alignment) -> " + vcf_path);
+    vcf_logger.debug("Wrote " + to_string(sv_count) + " SVs (" + to_string(dup_to_ins) + " DUP->INS) -> " + vcf_path);
 }
