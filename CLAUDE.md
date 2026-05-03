@@ -10,6 +10,8 @@ SVP (Structural Variant Pipeline) detects somatic structural variants (DEL, INS,
 
 ```bash
 make                # build the `svp` binary (g++, C++20, -O3)
+make svp_clean      # build the `svp_clean` preprocessor binary (tools/svp_clean.cpp)
+make help           # print available make targets
 make clean          # remove build artifacts
 
 # run
@@ -31,13 +33,22 @@ make diag dup_diag
 make compare base.vcf comp.vcf ref.fa    # runs truvari via scripts/truvari.sh
 python scripts/compare_vcf.py sim.vcf detected.vcf   # position-tolerant VCF diff
 python scripts/deep_analysis.py                       # position-level cross-reference with type checking
+
+# GFA visualisation: build/compress/strip via Docker odgi
+./scripts/odgi.sh <graph_name>   # reads outputs/gfa/<graph_name>_graph.gfa
 ```
+
+The `make` machinery treats trailing words as build targets, so `make test foo` builds and runs `tests/foo.cpp` (and likewise `make diag bar` for `tests/diagnostics/bar.cpp`). Test source files are standalone — they include the same `src/` modules and link the same libs as `svp` itself.
 
 **Dependencies:** g++20, zlib (`-lz`), htslib (`-lhts`), parasail (`-lparasail`), lcptools (`-llcptools` — bundled in `lib/lcptools/`).
 
 ## Algorithm & Complexity
 
 See [docs/ALGORITHM.md](docs/ALGORITHM.md) for a detailed breakdown of every pipeline phase, the algorithms used (LCP parsing, KMP merging, Needleman-Wunsch alignment, BFS cycle detection), and their time/space complexity. Overall: **O(N + B·L² + S·K)**.
+
+## Background reading
+
+[docs/GRAPH_MODELS.md](docs/GRAPH_MODELS.md) — conceptual reference on de Bruijn graphs and variation graphs: formal definitions, the variant families (compacted / colored / succinct / bidirected DBGs; vg, minigraph, minigraph-cactus, pggb VGs), the GFA format, the formal DBG↔VG relationship, and the wider pangenomics ecosystem. No project-specific content; pure background for choosing or migrating between graph models.
 
 ## Architecture
 
@@ -50,7 +61,9 @@ See [docs/ALGORITHM.md](docs/ALGORITHM.md) for a detailed breakdown of every pip
 - **sv.h/cpp** — `SVCall` and SV calling logic. `callSV()` checks for INV (reverse-complement identity ≥0.90) first, then `detectSV()` does quick classification; `callMulti()` uses parasail Needleman-Wunsch alignment + CIGAR parsing for complex variants; `extractAndCallSVs()` orchestrates the full pipeline including flipped DUP detection. `detectLargeINVs()` is a separate core-index pipeline for inversions too large for bubble-based detection — classifies tumor cores against forward-ref and revcomp-ref hash sets, finds runs of rcref-only cores (≥5 cores, ≥500bp).
 - **pipeline.h/cpp** — `processGenome()` (FASTA→LCP→graph), `buildRefHashes()` (reference core hash set + RefIndex population), `buildRcrefHashes()` (reverse-complement reference hash set for large INV detection).
 - **vcf.h/cpp** — `writeVCF()`. VCF output formatting and INS→DUP Smith-Waterman reclassification.
-- **utils.h/cpp** — `Logger` (debug macro), `FastaStreamer` (gzip-aware FASTA iterator), `ArgParser`, `hash_string()`, `reverse_complement()`.
+- **diag.h/cpp** — `DiagLog`, `DiagBubble`, `DiagCall`. Optional per-bubble / per-call TSV trace, gated on `--debug`. Writes anchor method, skip reasons, emitted call types — used for post-hoc analysis when accuracy regresses.
+- **utils.h/cpp** — `Logger` (debug macro), `FastaStreamer` (gzip-aware FASTA iterator built on `zstr.hpp`), `ArgParser`, `hash_string()`, `reverse_complement()`.
+- **zstr.hpp** — bundled header-only gzip stream wrapper around zlib; consumed by `FastaStreamer` so `.fa` and `.fa.gz` work transparently.
 
 ### Key concepts
 
@@ -64,6 +77,16 @@ See [docs/ALGORITHM.md](docs/ALGORITHM.md) for a detailed breakdown of every pip
 ### main.cpp
 
 Thin orchestrator: parses CLI args (`--chr` defaults to 19), calls `buildRefHashes()` / `buildRcrefHashes()` / `processGenome()`, runs `detectLargeINVs()` + `extractAndCallSVs()`, then `writeVCF()` and `writeGFA()`.
+
+### tools/svp_clean.cpp
+
+Standalone two-stage preprocessor for **real-data SV calling** (built via `make svp_clean`). The LCP graph is sensitive to single-base noise: a real tumor genome has thousands of SNPs / small indels that fragment cores and inflate the bubble count. `svp_clean` strips them out before `svp` runs.
+
+Algorithm: divide ref and tumor into fixed-size windows (FNV-1a hashed), match identical windows as anchors, then for each gap between anchors, replace the tumor gap with the ref gap when their sizes differ by ≤ `max_indel` bp (i.e. SNP / small-indel). Larger gaps are preserved unchanged so `svp` can still see them as SVs. Fixed windows beat LCP cores here because LCP boundaries shift around any nearby SNP — fixed windows have stable boundaries.
+
+### Experimental sibling: `svp2/`
+
+`svp2/` holds an alternative **6-stage modular pipeline** (s1_lcp → s2_graph → s3_bubbles → s4_simple.py → s5_align.py → s6_finalize.py) developed on the `experimental/modular-pipeline` branch. The full implementation, extractors (`chain_rt`, `chain_3w`, `bfs`, `bulge`, `superbubble`), aligners (`wfa`, `wfa_rc`, `edlib`, `parasail`, `mappy`), grid-search infrastructure, and per-sim F1 numbers live there. **`svp2/STATUS.md` is the authoritative entry point** — read it before touching that directory. On `main` the directory is largely a stub; the populated tree lives on the experimental branch.
 
 ## Simulations (insilicoSV)
 
@@ -116,15 +139,13 @@ python scripts/compare_vcf.py <simulated.vcf> <detected.vcf>
 python scripts/deep_analysis.py
 ```
 
-### Rival callers
-
-`benchmarks/rivals/` holds scripts and results for other SV callers (Delly, Manta, etc.) run on the same simulation data. See `benchmarks/rivals/README.md`.
-
 ### Real-data benchmarks
 
-`benchmarks/real/` holds real genome samples, ground truth VCFs (GIAB, PCAWG), and SVP results. See `benchmarks/real/README.md`. Sample FASTAs are gitignored.
+`benchmarks/real/` holds real-genome benchmarks (COLO829 tumor/normal cell line is the primary somatic SV truth set). `download.sh` fetches truth VCFs and demo data; `prepare.sh` indexes the reference and assembles HiFi BAMs into FASTA via hifiasm; `run_svp.sh` runs SVP on the prepared sample. See `benchmarks/real/README.md` for the full flow and disk/RAM requirements (full COLO829 needs ~120 GB disk and ~64 GB RAM for assembly). Sample FASTAs are gitignored.
 
-Historical benchmark results are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Rival-caller comparisons (Delly, Manta, etc.) referenced from `benchmarks/real/README.md` live in a sibling `benchmarks/rivals/` tree on branches where it was wired up — that directory is not present on `main`.
+
+Historical benchmark results are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). A presentation summary lives in [docs/PRESENTATION.md](docs/PRESENTATION.md) (`SVP_Presentation.pptx` is the slide deck).
 
 ## Output
 
@@ -135,15 +156,16 @@ Historical benchmark results are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 ## Directory layout
 
 ```
-main.cpp              # thin orchestrator
-src/                  # core modules (graph, ref, sv, pipeline, vcf, utils)
+main.cpp              # thin orchestrator for the `svp` binary
+src/                  # core modules (graph, ref, sv, pipeline, vcf, diag, utils, zstr.hpp)
+tools/                # standalone tools (svp_clean.cpp — real-data SNP/indel scrubber)
 tests/                # unit/integration tests (make test <name>)
 tests/diagnostics/    # investigative trace/debug tools (make diag <name>)
-scripts/              # production benchmarking scripts
-scripts/archive/      # one-off investigative scripts
-docs/                 # ALGORITHM.md, BENCHMARKS.md
-simulation/           # insilicoSV configs + generated data
-benchmarks/rivals/    # rival SV caller comparison
-benchmarks/real/      # real-data benchmarks
+scripts/              # production helpers (truvari.sh, compare_vcf.py, deep_analysis.py, odgi.sh)
+docs/                 # ALGORITHM.md, BENCHMARKS.md, PRESENTATION.md, slide deck
+simulation/           # insilicoSV configs + generated truth data (chr19)
+benchmarks/real/      # real-data benchmarks (COLO829 etc., gitignored FASTAs)
+svp2/                 # experimental 6-stage modular pipeline — see svp2/STATUS.md (lives on `experimental/modular-pipeline`)
 lib/                  # bundled dependencies (lcptools, parasail, insilicoSV)
+outputs/              # gitignored: vcf/, gfa/, og/, truvari/
 ```
