@@ -15,6 +15,11 @@ NORMAL ?= simulation/ref.fasta
 svp: $(OBJ)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $^ $(LDFLAGS)
 
+# Analysis-only binary: reuses io / cores / MurmurHash3 objects from build/
+ANALYZE_DEPS := $(BUILD)/io.o $(BUILD)/cores.o $(BUILD)/MurmurHash3.o
+tools/analyze_cores: tools/analyze_cores.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INC) -c $< -o $@
 
@@ -45,13 +50,33 @@ run-list:
 	@echo "  e.g. make run-mixed LEVEL=4 FLANK=20"
 	@echo "  e.g. make run-mixed NORMAL=simulation/truth/germline/out.fa"
 
-install-deps:
+install-deps: install-deps-lcptools install-deps-pbsim3 install-deps-ccs
+
+install-deps-lcptools:
 	$(MAKE) -C lib/lcptools
+
+# pbsim3 ships generated autotools but the bundled config.guess/config.sub are
+# absent — autoreconf -fi installs them, then standard configure+make.
+install-deps-pbsim3: lib/pbsim3/src/pbsim
+lib/pbsim3/src/pbsim:
+	@if [ ! -d lib/pbsim3 ]; then \
+	    echo ">> cloning pbsim3"; \
+	    git clone --depth 1 https://github.com/yukiteruono/pbsim3.git lib/pbsim3; \
+	fi
+	cd lib/pbsim3 && autoreconf -fi && ./configure && $(MAKE)
+
+install-deps-ccs: lib/ccs/ccs
+lib/ccs/ccs:
+	@mkdir -p lib/ccs
+	@echo ">> downloading PacBio ccs v6.4.0 static binary"
+	cd lib/ccs && wget -q https://github.com/PacificBiosciences/ccs/releases/download/v6.4.0/ccs.tar.gz && tar xzf ccs.tar.gz && rm -f ccs.tar.gz
+	@./lib/ccs/ccs --version
 
 clean:
 	mkdir -p /home/yuio/trash/svp-make-clean && \
 	mv -f $(BUILD) svp $(OUT) /home/yuio/trash/svp-make-clean/ 2>/dev/null || true
 
-.PHONY: install-deps clean run-list $(addprefix run-,$(SIMS))
+.PHONY: install-deps install-deps-lcptools install-deps-pbsim3 install-deps-ccs \
+        clean run-list $(addprefix run-,$(SIMS))
 
 -include $(OBJ:.o=.d)

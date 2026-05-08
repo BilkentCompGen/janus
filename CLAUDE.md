@@ -74,16 +74,54 @@ simulation/
   beds/{chr19,genome}.bed   yaml's overlap_regions decides scope
   configs/<id>.yaml      insilicoSV config (id == filename stem)
   truth/<id>/            generated: out.fa, out.fa.fai, out.vcf, [novel.fa]
+  reads/<id>/            generated: hifi.fastq.gz, pbsim.maf.gz, ccs_report.txt
+  reads/normal/          generated from ref.fasta
 ```
 
 Common targets: `make -C simulation <id>` (or `all`), `make -C simulation list`, `make -C simulation index`, `make -C simulation clean-<id>`. Whether a sim is chr19-only or whole-genome depends solely on which BED its yaml points at — there are no separate folders per scope.
 
 Truvari benchmark: `make -C simulation bench/<id> CALL=path/to/detected.vcf` (uses `scripts/truvari.sh`). Note: svp's flat-buffer bubble TSV is **not** a VCF — Truvari benchmarking requires a downstream coordinate-mapper that does not yet exist on this branch.
 
+## HiFi read simulation (pbsim3 + ccs)
+
+`scripts/sim_reads.sh` wraps a two-step pipeline: pbsim3 multi-pass CLR (`--pass-num 10`) → ccs consensus → HiFi FASTQ. Defaults reproduce realistic 30x PacBio Sequel HiFi (`--length-mean 15000 --accuracy-mean 0.85 --difference-ratio 22:45:33`). One ZMW per ~15 kb subread, ccs collapses 10 passes to ~Q30 consensus.
+
+```
+make -C simulation reads-<id>     # tumor reads from truth/<id>/out.fa
+make -C simulation reads-normal   # reads from ref.fasta
+make -C simulation reads          # all six tumors + normal
+make -C simulation reads-list     # parameter knobs + per-id presence
+```
+
+Knobs (env or `VAR=...`): `REGION` (default `19_hapA`; extracted via `samtools faidx` before pbsim because whole-genome multi-pass produces one BAM per record), `REGION_REF` (default `19`, used for `reads-normal`), `DEPTH`, `LEN_MEAN`, `LEN_SD`, `ACCURACY`, `PASS_NUM`, `DIFF_RATIO`, `THREADS`, `KEEP_BAM=1` to retain the intermediate subreads BAM.
+
+**Per-`reads/<id>/` outputs:** `hifi.fastq.gz`, `pbsim.maf.gz` (ground-truth alignments — pbsim emits one MAF entry per simulated read, useful for downstream evaluation), `ccs_report.txt` (ZMW pass/fail breakdown), `pbsim.log`. Subreads BAM is removed unless `KEEP_BAM=1`.
+
+**Measured baseline (chr19, `DEPTH=2`, `THREADS=4`):** pbsim 261s elapsed (CPU 46s); ccs ~14 min; 7656 ZMWs in → 7516 HiFi reads (98.17% pass), mean length 15031bp, rq 0.9952–0.9989; output 111 MB gzipped FASTQ; peak intermediate subreads BAM 853 MB before deletion. 30x scaling not yet measured — pbsim grows linearly with `DEPTH`, ccs grows with subread count.
+
+**Long runs — survive disconnect:** wrap in detached screen so the session is independent of any client connection.
+
+```sh
+cd simulation
+screen -dmS svp-reads-mixed bash -c '
+  set -o pipefail
+  cd /home/yuio/svp/simulation
+  echo "[start] $(date \"+%F %T\")"
+  /usr/bin/time -v make reads-mixed DEPTH=30 THREADS=0 2>&1 | tee reads-mixed.log
+  echo "[end rc=$? ] $(date \"+%F %T\")" | tee -a reads-mixed.log
+  sleep 600
+'
+# attach:    screen -r svp-reads-mixed
+# tail log:  tail -f simulation/reads-mixed.log
+# alive?     screen -ls
+```
+
 ## Dependencies
 
 - `lib/lcptools` — locally consistent parsing core extraction. Build with `make install-deps`. The static lib is stale-prone; if you see segfaults on struct fields after a `git pull` of `lib/`, rebuild it.
 - `lib/insilicoSV` — truth simulator (driven by `simulation/Makefile`).
+- `lib/pbsim3` — long-read simulator (autotools build via `make install-deps-pbsim3`; needs `autoreconf -fi` to regenerate `config.guess`/`config.sub`). Multi-pass `--pass-num 10` mode emits subreads BAMs that ccs consumes.
+- `lib/ccs` — PacBio CCS v6.4.0 static binary (`make install-deps-ccs` downloads `ccs.tar.gz` from the GitHub release). Outputs HiFi FASTQ at `--min-rq 0.99` by default.
 - `zlib` — for `gzopen`/`gzgets` FASTA reading.
 - `truvari` — for VCF-level benchmarking (when a VCF emitter exists).
 
