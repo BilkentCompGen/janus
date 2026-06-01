@@ -49,6 +49,48 @@ So `main` bubbles miss **small DEL/INS** (median 28–31 bp, all below the ~85 b
 
 This is the design the clean re-implementation targets: LCP cores → colored graph → **permissive** Cortex bubble decomposition, verified at 99.1% / 3,683 bubbles before any typing is added.
 
+## Whole-genome read-based result (lcp-cortex-merged, 2026-06-01)
+
+The chr19 numbers above were on **assemblies** (`ref_chr19.fa` vs `tumor_chr19.fa`, two linear
+sequences with exact positions). The caller has since migrated to **reads only** (FASTQ in,
+no assembly, no positions) — graph nodes are signatures pooled across the read set, edges
+are within-read adjacencies. The bubble decomposition is the same algorithm (plain BFS of
+non-shared connected components, no anchor convergence), now measured on the WG sim.
+
+Inputs: `simulation/reads/{normal,wgs}/hifi.fastq.gz` (30× HiFi, pbsim3+ccs, 29 GB each).
+GT oracle: `simulation/ref.fasta` (germline) vs `simulation/truth/wgs/out.fa` (insilicoSV
+tumor, 18,002 truth variants).
+
+| metric (WG, level=5, flank=10, min_mult=3, 8 threads on 9950X) | value |
+|---|---|
+| wall clock (lcp + graph + bubbles) | **12:02** |
+| peak RAM | 129 GB |
+| bubbles total | 112,977 (57,001 I-somatic / 55,976 D-normal / 0 C-mixed) |
+| truth somatic sigs \|S\| | 96,903 |
+| called somatic sigs \|C\| (n=0, t≥3) | 122,948 |
+| \|C ∩ S\| | 96,532 |
+| **sig RECALL** | **99.62%** |
+| **sig PRECISION** | **78.51%** |
+| **bubble PRECISION** (I-bubbles with ≥1 sig ∈ S) | **63.00%** (35,911 / 57,001) |
+
+**Algorithm note:** between the chr19 (assembly) and WG (reads) measurements, a 2026-06-01
+session replaced the plain BFS with a chain + union-find-by-shared-anchor merge intended to
+fuse "split alleles" of the same locus. The merge instead over-fused unrelated adjacent loci
+and dropped sig recall to ~93-96% with ~half the bubble count. `lcp-cortex-merged` (commit
+`eafcc71`) reverts to plain BFS and recovers the 99.62%/78.51% numbers above
+(see [feedback_bubble_decomposition](../../.claude/projects/-home-yuio-svp/memory/feedback_bubble_decomposition.md)).
+
+**Why bubble-precision (63%) trails sig-precision (78.5%):** residual-error sigs that survive
+the `min_mult=3` prune typically form small 1-2 node singleton bubbles; each adds 1 to the
+bubble denominator while contributing only a handful of FP sigs. The fix is upstream
+(reverse-complement signature canonicalization to fold strand-pair sigs into one node,
+~halving the bubble count; tighter min_mult; or a small per-bubble node-count filter), **not**
+a chain merge that re-introduces the over-merge artifact.
+
+Tool to reproduce these numbers: `make tools/bubble_recall && tools/bubble_recall
+outputs/svp/wgs/{counts,graph}.bin simulation/ref.fasta simulation/truth/wgs/out.fa
+--level 5 --flank 10 --min-mult 3` (~5 min, 21 GB peak).
+
 ## Provenance
 
 - Benchmark: `tools/bubble_recall.py` (position-coverage recall/precision, W sweep, miss analysis). GT: `outputs/gfa/chr19_gt_sv.tsv`.
