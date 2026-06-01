@@ -1,59 +1,64 @@
-#include "svp.h"
+// svp (lcp-cortex): somatic SV caller over a 2-colour LCP-core graph built FROM READS
+// (normal vs tumor HiFi reads). READS ONLY; no assembly in the pipeline. Runs as three
+// resumable, checkpointed stages so the expensive LCP pass is paid once:
+//   svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir>   -> dir/counts.bin, dir/edges.bin
+//   svp graph   <dir>                                -> dir/graph.bin   (--min-mult K)
+//   svp bubbles <dir>                                -> dir/bubbles.tsv
+//   svp run     <normal.fq.gz> <tumor.fq.gz> <dir>   -> all, skipping completed stages
+#include "graph.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 extern "C" {
 #include "encoding.h"
 }
 
-static int parse_int(const char* s, const char* name) {
-    char* end;
-    const long v = std::strtol(s, &end, 10);
-    if (*end || v <= 0 || v > 1000000) { std::fprintf(stderr, "[FATAL] bad %s: %s\n", name, s); std::abort(); }
-    return (int)v;
+static bool exists(const std::string& p) { FILE* f = std::fopen(p.c_str(), "rb"); if (f) { std::fclose(f); return true; } return false; }
+
+static void usage() {
+    std::fprintf(stderr,
+        "usage:\n"
+        "  svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5] [--flank 10] [--margin 10] [--threads 16]\n"
+        "  svp graph   <dir> [--min-mult 3]\n"
+        "  svp bubbles <dir> [--out <dir>/bubbles.tsv]\n"
+        "  svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   (skips completed stages)\n");
 }
 
 int main(int argc, char** argv) {
-    if (argc < 4) { std::fprintf(stderr, "usage: svp <normal.fa[.gz]> <tumor.fa[.gz]> <out.tsv> [--level N=5] [--flank M=10]\n"); return 2; }
-    int level = 5, flank = 10;
-    for (int i = 4; i < argc; i++) {
-        const bool is_level = std::strcmp(argv[i], "--level") == 0;
-        const bool is_flank = std::strcmp(argv[i], "--flank") == 0;
-        if (!(is_level || is_flank) || i + 1 >= argc) { std::fprintf(stderr, "[FATAL] unknown arg: %s\n", argv[i]); std::abort(); }
-        const int v = parse_int(argv[i + 1], is_level ? "level" : "flank");
-        if (is_level) level = v; else flank = v;
-        i++;
+    if (argc < 2) { usage(); return 2; }
+    const std::string cmd = argv[1];
+    int level = 5, flank = 10, margin = 10, min_mult = 3, threads = 16;
+    std::string out;
+    std::vector<std::string> pos;
+    for (int i = 2; i < argc; i++) {
+        std::string a = argv[i];
+        if (a.rfind("--", 0) != 0) { pos.push_back(a); continue; }
+        if (i + 1 >= argc) { std::fprintf(stderr, "[FATAL] missing value for %s\n", a.c_str()); std::abort(); }
+        const char* v = argv[++i];
+        if (a == "--level") level = std::atoi(v);
+        else if (a == "--flank") flank = std::atoi(v);
+        else if (a == "--margin") margin = std::atoi(v);
+        else if (a == "--min-mult") min_mult = std::atoi(v);
+        else if (a == "--threads") threads = std::atoi(v);
+        else if (a == "--out") out = v;
+        else { std::fprintf(stderr, "[FATAL] arg: %s\n", a.c_str()); std::abort(); }
     }
-
     LCP_INIT();
-    std::string N, T;
-    std::vector<uint64_t> n_rs, n_re, t_rs, t_re;
-    read_fasta_flat(argv[1], flank, N, n_rs, n_re);
-    read_fasta_flat(argv[2], flank, T, t_rs, t_re);
-    std::fprintf(stderr, "[INFO] N=%lu (%lu rec)  T=%lu (%lu rec)\n", N.size(), n_rs.size(), T.size(), t_rs.size());
 
-    std::vector<Core> ncs, tcs;
-    extract_cores(N, n_rs, n_re, level, ncs);
-    extract_cores(T, t_rs, t_re, level, tcs);
-    std::fprintf(stderr, "[INFO] cores N=%lu T=%lu\n", ncs.size(), tcs.size());
-
-    std::vector<uint64_t> nsig, tsig;
-    compute_sigs(N, ncs, flank, nsig);
-    compute_sigs(T, tcs, flank, tsig);
-
-    std::vector<Anchor> anchors;
-    unique_anchors(nsig, tsig, anchors);
-    std::fprintf(stderr, "[INFO] anchors=%lu\n", anchors.size());
-
-    std::vector<int> kept;
-    chain(anchors, kept);
-    std::fprintf(stderr, "[INFO] chain=%lu\n", kept.size());
-
-    std::vector<Bubble> bubs;
-    emit_bubbles(N, ncs, T, tcs, anchors, kept, bubs);
-    std::fprintf(stderr, "[INFO] bubbles=%lu\n", bubs.size());
-
-    write_bubbles(argv[3], bubs);
+    if (cmd == "lcp" && pos.size() == 3) run_lcp(pos[0], pos[1], pos[2], level, flank, margin, threads);
+    else if (cmd == "graph" && pos.size() == 1) run_graph(pos[0], min_mult);
+    else if (cmd == "bubbles" && pos.size() == 1) run_bubbles(pos[0], out.empty() ? pos[0] + "/bubbles.tsv" : out);
+    else if (cmd == "run" && pos.size() == 3) {
+        const std::string& dir = pos[2];
+        if (exists(dir + "/counts.bin") && exists(dir + "/edges.bin")) std::fprintf(stderr, "[skip] lcp: %s/counts.bin exists\n", dir.c_str());
+        else run_lcp(pos[0], pos[1], dir, level, flank, margin, threads);
+        if (exists(dir + "/graph.bin")) std::fprintf(stderr, "[skip] graph: %s/graph.bin exists\n", dir.c_str());
+        else run_graph(dir, min_mult);
+        run_bubbles(dir, out.empty() ? dir + "/bubbles.tsv" : out);
+    } else { usage(); return 2; }
     return 0;
 }

@@ -1,0 +1,395 @@
+#include "graph.h"
+#include "MurmurHash3.h"
+
+extern "C" void extract_fast(const char *str, int len, uint64_t offset, int target_level,
+                             int *n_out, const uint64_t **starts_out,
+                             const uint64_t **ends_out, const uint32_t **labels_out);
+
+#include <zlib.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <algorithm>
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <mutex>
+#include <queue>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace {
+struct SigCount { uint64_t sig; uint32_t n, t; };   // counts.bin record (16 B, packed)
+using SEdge = std::pair<uint64_t, uint64_t>;        // signature edge (edges.bin record)
+using IEdge = std::pair<uint32_t, uint32_t>;        // node-id edge (graph.bin record)
+struct SigCol { uint64_t sig; uint32_t col; };      // per-emission record collected by workers
+                                                     // (col 0=normal, 1=tumor); reduced by sort.
+
+// ---- fail-fast binary checkpoint IO ----
+FILE* xopen(const std::string& p, const char* m) { FILE* f = std::fopen(p.c_str(), m); if (!f) { std::fprintf(stderr, "[FATAL] fopen %s\n", p.c_str()); std::abort(); } return f; }
+void wr(FILE* f, const void* p, size_t n) { if (n && std::fwrite(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] fwrite\n"); std::abort(); } }
+void rd(FILE* f, void* p, size_t n) { if (n && std::fread(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] truncated checkpoint\n"); std::abort(); } }
+void atomic_close(FILE* f, const std::string& tmp, const std::string& dst) { std::fclose(f); if (std::rename(tmp.c_str(), dst.c_str())) { std::fprintf(stderr, "[FATAL] rename %s\n", dst.c_str()); std::abort(); } }   // never leave a half-written checkpoint resume would trust
+
+// One read -> interior signatures + within-read adjacent-signature edges.
+// Bypasses extract_cores/compute_sigs intermediate vectors; reads the SoA
+// arrays exposed by extract_fast and inlines the flank-window murmur64.
+void process_read(std::string& s, int col, int level, int flank, int margin,
+                  std::vector<SigCol>& lsigs, std::vector<SEdge>& ledges) {
+    for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
+    const uint64_t len = s.size();
+    if (len < (uint64_t)(2 * margin + 4)) return;
+    int n; const uint64_t *st, *en; const uint32_t *lb;
+    extract_fast(s.data(), (int)len, 0, level, &n, &st, &en, &lb);
+    const uint64_t mu = (uint64_t)flank, mg = (uint64_t)margin;
+    uint64_t prev = 0; bool have = false;
+    for (int i = 0; i < n; i++) {
+        if (st[i] < mg || en[i] + mg > len) continue;
+        const uint64_t L = st[i] > mu ? st[i] - mu : 0;
+        const uint64_t R = en[i] + mu < len ? en[i] + mu : len;
+        const uint64_t g = murmur64(s.data() + L, (int)(R - L), lb[i]);
+        lsigs.push_back({g, (uint32_t)col});
+        if (have && prev != g) ledges.push_back(prev < g ? SEdge(prev, g) : SEdge(g, prev));
+        prev = g; have = true;
+    }
+}
+
+// A sample input is a directory of FASTQ shards (read in parallel) or a single file.
+std::vector<std::string> collect_shards(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) { std::fprintf(stderr, "[FATAL] no input %s\n", path.c_str()); std::abort(); }
+    if (!S_ISDIR(st.st_mode)) return {path};
+    std::vector<std::string> v;
+    DIR* d = opendir(path.c_str());
+    if (!d) { std::fprintf(stderr, "[FATAL] opendir %s\n", path.c_str()); std::abort(); }
+    for (struct dirent* e = readdir(d); e; e = readdir(d)) {
+        const std::string n = e->d_name;
+        if (n.find(".fastq") != std::string::npos || n.find(".fq") != std::string::npos) v.push_back(path + "/" + n);
+    }
+    closedir(d);
+    if (v.empty()) { std::fprintf(stderr, "[FATAL] no .fastq/.fq shards in %s\n", path.c_str()); std::abort(); }
+    std::sort(v.begin(), v.end());
+    return v;
+}
+
+struct Shard { std::string path; int col; };
+struct Batch { std::vector<std::string> seqs; int col; };
+
+// Reader/worker split with both samples in one pool: 1 reader per shard (so both .fastq.gz
+// inflate in parallel CPUs) + N workers consuming colour-tagged batches. The reader is a
+// block-based FASTQ parser (1 MB gzread + manual \n scan) — line-by-line gzgets was 3-5x
+// slower per reader thread (zlib state crossing + string ops dominated).
+void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin, int threads,
+              std::vector<SigCol>& all_sigs, std::mutex& smtx,
+              std::vector<SEdge>& all_edges, std::mutex& emtx,
+              uint64_t& reads_n_out, uint64_t& reads_t_out) {
+    const int nshards = (int)shards.size();
+    const int nrd = std::min(nshards, std::max(2, threads / 4));   // ≥2 so both samples decompress in parallel
+    const int nw  = std::max(1, threads - nrd);
+    std::atomic<size_t> next{0}, done{0};
+    std::atomic<uint64_t> nr_n{0}, nr_t{0};
+    std::atomic<int> readers_left{nrd};
+    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
+    std::queue<Batch> q;
+    constexpr size_t Q_CAP = 256, BATCH = 64;
+    constexpr unsigned BLOCK = 1u << 20;
+    auto reader = [&]() {
+        std::vector<char> buf(BLOCK);
+        std::vector<std::string> batch; batch.reserve(BATCH);
+        std::string carry; int col_local = 0;
+        auto flush = [&]() {
+            if (batch.empty()) return;
+            std::unique_lock<std::mutex> lk(qmtx);
+            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
+            q.push(Batch{std::move(batch), col_local}); cv_empty.notify_one();
+            batch.clear(); batch.reserve(BATCH);
+        };
+        size_t si;
+        while ((si = next.fetch_add(1)) < shards.size()) {
+            col_local = shards[si].col;
+            gzFile f = gzopen(shards[si].path.c_str(), "rb");
+            if (!f) { std::fprintf(stderr, "[FATAL] gzopen %s\n", shards[si].path.c_str()); std::abort(); }
+            gzbuffer(f, 1u << 20);
+            int line_no = 0; carry.clear();
+            int got;
+            while ((got = gzread(f, buf.data(), BLOCK)) > 0) {
+                const char* base = buf.data(); const char* end = base + got; const char* start = base;
+                for (const char* p = base; p < end; p++) if (*p == '\n') {
+                    const size_t n = (size_t)(p - start);
+                    if (line_no == 1) {
+                        if (carry.empty()) batch.emplace_back(start, n);
+                        else { carry.append(start, n); batch.push_back(std::move(carry)); carry.clear(); }
+                        if (batch.size() >= BATCH) flush();
+                    } else if (!carry.empty()) carry.clear();
+                    line_no = (line_no + 1) & 3; start = p + 1;
+                }
+                if (start < end && line_no == 1) carry.append(start, end - start);
+            }
+            gzclose(f);
+            std::fprintf(stderr, "[lcp] shard %zu/%d done (col=%d)\n", (size_t)done.fetch_add(1) + 1, nshards, col_local);
+        }
+        flush();
+        if (readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(qmtx); cv_empty.notify_all(); }
+    };
+    auto worker = [&]() {
+        std::vector<SEdge> ledges; std::vector<SigCol> lsigs;
+        lsigs.reserve(1u << 22); ledges.reserve(1u << 22);
+        uint64_t lnr_n = 0, lnr_t = 0;
+        while (true) {
+            Batch b;
+            {
+                std::unique_lock<std::mutex> lk(qmtx);
+                cv_empty.wait(lk, [&]{ return !q.empty() || readers_left.load() == 0; });
+                if (q.empty()) break;
+                b = std::move(q.front()); q.pop(); cv_full.notify_one();
+            }
+            for (auto& s : b.seqs) { process_read(s, b.col, level, flank, margin, lsigs, ledges); (b.col == 0 ? lnr_n : lnr_t)++; }
+        }
+        { std::lock_guard<std::mutex> lk(emtx); all_edges.insert(all_edges.end(), ledges.begin(), ledges.end()); }
+        { std::lock_guard<std::mutex> lk(smtx); all_sigs.insert(all_sigs.end(), lsigs.begin(), lsigs.end()); }
+        nr_n += lnr_n; nr_t += lnr_t;
+    };
+    std::vector<std::thread> rds, wks;
+    for (int i = 0; i < nrd; i++) rds.emplace_back(reader);
+    for (int i = 0; i < nw;  i++) wks.emplace_back(worker);
+    for (auto& t : rds) t.join();
+    for (auto& t : wks) t.join();
+    std::fprintf(stderr, "[lcp] pool: %d reader(s) + %d worker(s) on %d shard(s)\n", nrd, nw, nshards);
+    reads_n_out = nr_n.load(); reads_t_out = nr_t.load();
+}
+
+// LSB radix sort over the .sig field (8 passes × 256 buckets). Output overwrites src.
+void radix_sort_sigs(std::vector<SigCol>& sigs) {
+    const size_t N = sigs.size();
+    if (N == 0) return;
+    std::vector<SigCol> tmp(N);
+    SigCol *src = sigs.data(), *dst = tmp.data();
+    uint32_t hist[256];
+    for (int pass = 0; pass < 8; pass++) {
+        std::memset(hist, 0, sizeof(hist));
+        const int sh = pass * 8;
+        for (size_t i = 0; i < N; i++) hist[(src[i].sig >> sh) & 0xFFu]++;
+        uint32_t acc = 0;
+        for (int b = 0; b < 256; b++) { uint32_t c = hist[b]; hist[b] = acc; acc += c; }
+        for (size_t i = 0; i < N; i++) {
+            const uint32_t bk = (uint32_t)((src[i].sig >> sh) & 0xFFu);
+            dst[hist[bk]++] = src[i];
+        }
+        SigCol *t = src; src = dst; dst = t;
+    }
+    if (src != sigs.data()) std::memcpy(sigs.data(), src, N * sizeof(SigCol));
+}
+
+// LSB radix sort over (a, b) treated as a 16-byte key: 8 passes on .second, then 8 on .first.
+void radix_sort_edges(std::vector<SEdge>& edges) {
+    const size_t M = edges.size();
+    if (M == 0) return;
+    std::vector<SEdge> tmp(M);
+    SEdge *src = edges.data(), *dst = tmp.data();
+    uint32_t hist[256];
+    for (int key = 0; key < 2; key++) for (int pass = 0; pass < 8; pass++) {
+        std::memset(hist, 0, sizeof(hist));
+        const int sh = pass * 8;
+        for (size_t i = 0; i < M; i++) { const uint64_t k = key == 0 ? src[i].second : src[i].first; hist[(k >> sh) & 0xFFu]++; }
+        uint32_t acc = 0;
+        for (int b = 0; b < 256; b++) { uint32_t c = hist[b]; hist[b] = acc; acc += c; }
+        for (size_t i = 0; i < M; i++) {
+            const uint64_t k = key == 0 ? src[i].second : src[i].first;
+            const uint32_t bk = (uint32_t)((k >> sh) & 0xFFu);
+            dst[hist[bk]++] = src[i];
+        }
+        SEdge *t = src; src = dst; dst = t;
+    }
+    if (src != edges.data()) std::memcpy((void*)edges.data(), (void*)src, M * sizeof(SEdge));
+}
+
+// Reduce sorted SigCols into per-signature {n,t} count records (run-length merge).
+void reduce_sigs(const std::vector<SigCol>& sigs, std::vector<SigCount>& nodes) {
+    nodes.reserve(sigs.size() / 2 + 1);
+    for (size_t i = 0; i < sigs.size();) {
+        uint64_t g = sigs[i].sig; uint32_t n = 0, t = 0;
+        for (; i < sigs.size() && sigs[i].sig == g; i++) (sigs[i].col == 0 ? n : t)++;
+        nodes.push_back({g, n, t});
+    }
+}
+
+// Classify by per-colour node count: (n_n, n_t) → D, I, P, S, C.
+//   n_t=0      → D (DEL)        n_n=0      → I (INS)
+//   n_n=n_t=1  → P (SNP)        n_n=n_t>1  → S (SUB, balanced multi-base)
+//   otherwise (both >0, unbalanced) → C (CPLX, true complex)
+inline char classify_bubble(uint32_t nn, uint32_t nt) {
+    if (nt == 0) return 'D';
+    if (nn == 0) return 'I';
+    if (nn == 1 && nt == 1) return 'P';
+    if (nn == nt) return 'S';
+    return 'C';
+}
+
+// Cortex-style bubble: BFS chains of non-shared (colour != 3) nodes, then group chains by
+// the SET of color=3 anchors they touch. Two chains sharing the same anchor set are two
+// alleles of the same locus → merge. Per-bubble sig lists are populated for the base-pair
+// variant caller (tools/call). Topology-only type is just a sketch — real type comes from
+// the call tool's prefix/suffix-trimmed diff of allele sequences.
+void decompose(const std::vector<std::vector<int32_t>>& adj, const std::vector<uint8_t>& color,
+               const std::vector<uint32_t>& ncov, const std::vector<uint32_t>& tcov,
+               const std::vector<uint64_t>& sigs, std::vector<CortexBubble>& out) {
+    const uint32_t K = (uint32_t)color.size();
+    std::vector<char> vis(K, 0);
+    struct Chain { uint64_t nc = 0, tc = 0; std::vector<uint32_t> n_ids, t_ids, anchors; };
+    std::vector<Chain> chains; chains.reserve(K / 4 + 1);
+    std::queue<uint32_t> q;
+    for (uint32_t s = 0; s < K; s++) {
+        if (color[s] == 3 || vis[s]) continue;
+        q.push(s); vis[s] = 1;
+        Chain c;
+        while (!q.empty()) {
+            const uint32_t u = q.front(); q.pop();
+            (color[u] == 1 ? c.n_ids : c.t_ids).push_back(u);
+            c.nc += ncov[u]; c.tc += tcov[u];
+            for (int32_t v : adj[u]) {
+                if (color[v] == 3) c.anchors.push_back((uint32_t)v);
+                else if (!vis[v]) { vis[v] = 1; q.push((uint32_t)v); }
+            }
+        }
+        std::sort(c.anchors.begin(), c.anchors.end());
+        c.anchors.erase(std::unique(c.anchors.begin(), c.anchors.end()), c.anchors.end());
+        chains.push_back(std::move(c));
+    }
+    out.clear();
+    auto emit = [&](const std::vector<size_t>& idxs) {
+        uint64_t nc = 0, tc = 0; std::vector<uint64_t> sn, st_; std::vector<uint32_t> aids;
+        for (size_t i : idxs) {
+            const Chain& c = chains[i]; nc += c.nc; tc += c.tc;
+            for (uint32_t id : c.n_ids) sn.push_back(sigs[id]);
+            for (uint32_t id : c.t_ids) st_.push_back(sigs[id]);
+            aids.insert(aids.end(), c.anchors.begin(), c.anchors.end());
+        }
+        std::sort(aids.begin(), aids.end()); aids.erase(std::unique(aids.begin(), aids.end()), aids.end());
+        std::vector<uint64_t> asig; asig.reserve(aids.size());
+        for (uint32_t id : aids) asig.push_back(sigs[id]);
+        const uint32_t nn = (uint32_t)sn.size(), nt = (uint32_t)st_.size();
+        out.push_back({classify_bubble(nn, nt), nn, nt, nc, tc, std::move(asig), std::move(sn), std::move(st_)});
+    };
+    // Union-find over chains by shared anchors: any two chains touching at least one common
+    // anchor merge into a single bubble. The earlier exact-set keying split a real variant's
+    // normal-allele chain (anchor set {A,B,C}) from its tumor-allele chain (anchor set
+    // {A,B,D}) into two single-colour bubbles whenever an LCP boundary core near the variant
+    // edge ended up single-coloured itself (so the two chains touch slightly different
+    // anchors). Partial-overlap merge fixes the artifact split.
+    std::vector<size_t> parent(chains.size());
+    for (size_t i = 0; i < chains.size(); i++) parent[i] = i;
+    auto root = [&](size_t x) -> size_t {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    std::unordered_map<uint32_t, size_t> first_for_anchor;
+    for (size_t i = 0; i < chains.size(); i++) {
+        for (uint32_t a : chains[i].anchors) {
+            auto it = first_for_anchor.find(a);
+            if (it == first_for_anchor.end()) first_for_anchor.emplace(a, i);
+            else { size_t ra = root(i), rb = root(it->second); if (ra != rb) parent[ra] = rb; }
+        }
+    }
+    std::map<size_t, std::vector<size_t>> groups;
+    uint64_t stand = 0;
+    for (size_t i = 0; i < chains.size(); i++) {
+        if (chains[i].anchors.empty()) { emit({i}); stand++; }
+        else groups[root(i)].push_back(i);
+    }
+    for (auto& kv : groups) emit(kv.second);
+    std::fprintf(stderr, "[bubbles] %zu chains -> %zu anchor-merged groups + %lu anchorless\n",
+                 chains.size(), groups.size(), (unsigned long)stand);
+}
+}  // namespace
+
+// ---- stage 1: LCP + count (the expensive, gz-bound pass) ----
+void run_lcp(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir, int level, int flank, int margin, int threads) {
+    mkdir(dir.c_str(), 0755);
+    const std::vector<std::string> ns = collect_shards(normal_fq), ts = collect_shards(tumor_fq);
+    std::vector<Shard> shards;
+    for (const auto& p : ns) shards.push_back({p, 0});
+    for (const auto& p : ts) shards.push_back({p, 1});
+    std::fprintf(stderr, "[lcp] normal=%zu shards, tumor=%zu shards, threads=%d\n", ns.size(), ts.size(), threads);
+    std::vector<SigCol> sigs; std::mutex smtx;
+    std::vector<SEdge> edges; std::mutex emtx;
+    uint64_t nr_n = 0, nr_t = 0;
+    run_pool(shards, level, flank, margin, threads, sigs, smtx, edges, emtx, nr_n, nr_t);
+    radix_sort_sigs(sigs);
+    std::vector<SigCount> nodes; reduce_sigs(sigs, nodes);
+    std::vector<SigCol>().swap(sigs);
+    radix_sort_edges(edges);
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    const std::string cp = dir + "/counts.bin", ep = dir + "/edges.bin";
+    FILE* fc = xopen(cp + ".tmp", "wb"); uint64_t N = nodes.size(); wr(fc, &N, 8); wr(fc, nodes.data(), N * sizeof(SigCount)); atomic_close(fc, cp + ".tmp", cp);
+    FILE* fe = xopen(ep + ".tmp", "wb"); uint64_t M = edges.size(); wr(fe, &M, 8); wr(fe, edges.data(), M * sizeof(SEdge)); atomic_close(fe, ep + ".tmp", ep);
+    std::fprintf(stderr, "[lcp] normal_reads=%lu tumor_reads=%lu distinct_sigs=%lu edges=%lu -> %s/{counts,edges}.bin\n",
+                 (unsigned long)nr_n, (unsigned long)nr_t, (unsigned long)N, (unsigned long)M, dir.c_str());
+}
+
+// ---- stage 2: prune + colour + resolve edges ----
+void run_graph(const std::string& dir, int min_mult) {
+    FILE* fc = xopen(dir + "/counts.bin", "rb"); uint64_t N; rd(fc, &N, 8); std::vector<SigCount> nodes(N); rd(fc, nodes.data(), N * sizeof(SigCount)); std::fclose(fc);
+    std::unordered_map<uint64_t, uint32_t> id; id.reserve(N);
+    std::vector<uint8_t> color; std::vector<uint32_t> ncov, tcov; std::vector<uint64_t> kept_sigs;
+    for (const SigCount& c : nodes) {
+        if ((c.n > c.t ? c.n : c.t) < (uint32_t)min_mult) continue;
+        id.emplace(c.sig, (uint32_t)color.size());
+        color.push_back(c.n && c.t ? 3 : c.n ? 1 : 2); ncov.push_back(c.n); tcov.push_back(c.t); kept_sigs.push_back(c.sig);
+    }
+    const uint64_t kept = color.size();
+    std::vector<SigCount>().swap(nodes);
+    FILE* fe = xopen(dir + "/edges.bin", "rb"); uint64_t M; rd(fe, &M, 8); std::vector<SEdge> se(M); rd(fe, se.data(), M * sizeof(SEdge)); std::fclose(fe);
+    std::vector<IEdge> ie; ie.reserve(M);
+    for (const SEdge& e : se) {
+        auto a = id.find(e.first), b = id.find(e.second);
+        if (a != id.end() && b != id.end() && a->second != b->second)
+            ie.push_back(a->second < b->second ? IEdge(a->second, b->second) : IEdge(b->second, a->second));
+    }
+    std::sort(ie.begin(), ie.end()); ie.erase(std::unique(ie.begin(), ie.end()), ie.end());
+    const std::string gp = dir + "/graph.bin";
+    FILE* fg = xopen(gp + ".tmp", "wb"); uint64_t K = kept; wr(fg, &K, 8);
+    wr(fg, color.data(), K); wr(fg, ncov.data(), K * 4); wr(fg, tcov.data(), K * 4); wr(fg, kept_sigs.data(), K * 8);
+    uint64_t E = ie.size(); wr(fg, &E, 8); wr(fg, ie.data(), E * sizeof(IEdge)); atomic_close(fg, gp + ".tmp", gp);
+    std::fprintf(stderr, "[graph] min_mult=%d kept_nodes=%lu of %lu edges=%lu -> %s/graph.bin\n",
+                 min_mult, (unsigned long)kept, (unsigned long)N, (unsigned long)E, dir.c_str());
+}
+
+// ---- stage 3: decompose into bubbles ----
+void run_bubbles(const std::string& dir, const std::string& out_tsv) {
+    FILE* fg = xopen(dir + "/graph.bin", "rb"); uint64_t K; rd(fg, &K, 8);
+    std::vector<uint8_t> color(K); rd(fg, color.data(), K);
+    std::vector<uint32_t> ncov(K), tcov(K); rd(fg, ncov.data(), K * 4); rd(fg, tcov.data(), K * 4);
+    std::vector<uint64_t> sigs(K); rd(fg, sigs.data(), K * 8);
+    uint64_t E; rd(fg, &E, 8); std::vector<IEdge> ie(E); rd(fg, ie.data(), E * sizeof(IEdge)); std::fclose(fg);
+    std::vector<std::vector<int32_t>> adj(K);
+    for (const IEdge& e : ie) { adj[e.first].push_back((int32_t)e.second); adj[e.second].push_back((int32_t)e.first); }
+    std::vector<CortexBubble> out; decompose(adj, color, ncov, tcov, sigs, out);
+    FILE* f = xopen(out_tsv, "w"); std::fputs("type\tn_nodes_n\tn_nodes_t\tnormal_cov\ttumor_cov\n", f);
+    int nd = 0, ni = 0, np = 0, ns = 0, nc = 0;
+    for (const CortexBubble& b : out) {
+        const char* t = b.type == 'D' ? "DEL" : b.type == 'I' ? "INS" : b.type == 'P' ? "SNP" : b.type == 'S' ? "SUB" : "CPLX";
+        nd += b.type == 'D'; ni += b.type == 'I'; np += b.type == 'P'; ns += b.type == 'S'; nc += b.type == 'C';
+        std::fprintf(f, "%s\t%u\t%u\t%lu\t%lu\n", t, b.n_nodes_n, b.n_nodes_t, (unsigned long)b.normal_cov, (unsigned long)b.tumor_cov);
+    }
+    std::fclose(f);
+    const std::string bp = dir + "/bubbles.bin";
+    FILE* fb = xopen(bp + ".tmp", "wb");
+    uint64_t Nb = out.size(); wr(fb, &Nb, 8);
+    for (const CortexBubble& b : out) {
+        wr(fb, &b.type, 1);
+        wr(fb, &b.n_nodes_n, 4); wr(fb, &b.n_nodes_t, 4);
+        wr(fb, &b.normal_cov, 8); wr(fb, &b.tumor_cov, 8);
+        uint32_t na = (uint32_t)b.anchors.size(); wr(fb, &na, 4);
+        wr(fb, b.anchors.data(), na * 8);
+        wr(fb, b.sigs_n.data(), b.n_nodes_n * 8);
+        wr(fb, b.sigs_t.data(), b.n_nodes_t * 8);
+    }
+    atomic_close(fb, bp + ".tmp", bp);
+    std::fprintf(stderr, "[bubbles] %zu bubbles  DEL=%d INS=%d SNP=%d SUB=%d CPLX=%d -> %s + bubbles.bin\n", out.size(), nd, ni, np, ns, nc, out_tsv.c_str());
+}

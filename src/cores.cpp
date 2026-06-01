@@ -17,19 +17,16 @@ static inline uint64_t fmix64(uint64_t k) {
     return k;
 }
 
-/* per-thread scratch: arena + cores buffer reused across reads; no malloc/free per core */
-static thread_local struct lps_scratch tls_scratch = {NULL, 0, NULL, 0, 0};
-
 void extract_cores(const std::string& seq, const std::vector<uint64_t>& rec_start, const std::vector<uint64_t>& rec_end, int level, std::vector<Core>& out) {
     out.clear();
     for (size_t r = 0; r < rec_start.size(); r++) {
         const uint64_t s = rec_start[r], e = rec_end[r];
         if (e - s > (uint64_t)INT_MAX) { std::fprintf(stderr, "[FATAL] record %zu length %lu exceeds INT_MAX\n", r, (unsigned long)(e - s)); std::abort(); }
-        struct lps p;
-        init_lps_scratch(&p, &tls_scratch, seq.data() + s, (int)(e - s), s, level);
+        int n; const uint64_t *st, *en; const uint32_t *lb;
+        extract_fast(seq.data() + s, (int)(e - s), s, level, &n, &st, &en, &lb);
         const size_t base = out.size();
-        out.resize(base + p.size);
-        for (int i = 0; i < p.size; i++) out[base + i] = {p.cores[i].start, p.cores[i].end, p.cores[i].label};
+        out.resize(base + (size_t)n);
+        for (int i = 0; i < n; i++) out[base + i] = {st[i], en[i], lb[i]};
     }
 }
 
