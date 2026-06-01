@@ -126,6 +126,59 @@ decompression** (the input is gz-bound, not LCP-bound, at 8+ threads).
   batch buffer, the worker's edge vector — every persistent allocation is hoisted out of
   the per-read loop.
 
+## 4. Negative results (don't redo these)
+
+### Sharded-counter map (the rust-mdbg DashMap pattern) — 64% slower
+
+Tried 2026-06-02. Replaced the SigCol-emit + 8-pass radix-sort + run-length-reduce design
+with a 256-shard `unordered_map<sig, Counts>` (per-shard `std::mutex`). Workers directly
+incremented the shared counter per emit (the same pattern rust-mdbg uses with
+`Arc<DashMap<Kmer, DbgEntry>>`).
+
+| design | WG 8 threads, 2 `.fq.gz` | CPU % | bubble output |
+|---|---|---|---|
+| SigCol + radix-sort (current) | **12:02** | 466% | 112,977 |
+| 256-shard `unordered_map` + `mutex` | 19:44 | 412% | 112,977 (identical) |
+
+8.5 M voluntary context switches vs 154 K for SigCol = **55× more** worker stalls. User-time
++45%. Reasons it doesn't transfer from Rust:
+
+1. **Emit density.** LCP cores at L5 fire ~1 per 17 bp; rust-mdbg minimizers fire ~1 per
+   50–100 bp. We do **~5× more per-emit work**, so per-emit overhead dominates.
+2. **`std::unordered_map` ≠ DashMap shard.** std-unordered-map is closed-chaining with
+   per-node `malloc`; DashMap is open-addressing flat-table inside its RwLock. 1.1 B
+   `m[g]` calls cost ~25 ns extra each vs `vec.push_back`; the radix-sort end-of-stage
+   merge cost is **less** than that aggregate.
+3. **Mutex is heavier than RwLock-write.** `std::mutex` lock acquire under contention is a
+   futex syscall on Linux → context switch → reschedule. Rust's parking_lot RwLock
+   (DashMap default) is a spin-then-park hybrid.
+
+SigCol's "delayed shard-and-count" (radix sort partitions by `sig & 0xFF` per pass = the
+hash-shard semantics of DashMap, just batched once at the end) is empirically the right
+trade for our dense emit rate. Don't revisit without ALSO swapping `std::unordered_map`
+for a flat open-addressing map (e.g. `ankerl::unordered_dense` or `absl::flat_hash_map`)
+AND switching to a spin-mutex.
+
+### Pre-shard input → 32 threads / 62 plain shards — only 21% faster than 16t baseline
+
+Tried 2026-06-02. Pre-decompressed both `hifi.fastq.gz` into 31 record-aligned plain
+FASTQ shards each (`pigz -dc | split -l 800000`), then ran svp at 32 threads.
+
+| inputs | threads | wall | CPU % |
+|---|---|---|---|
+| 1 `.fq.gz` × 2 | 8 | 12:02 | 466% |
+| 1 `.fq.gz` × 2 | 16 | 9:52 | 622% |
+| 62 plain shards | 32 | 7:47 | **895%** |
+
+895% CPU = ~9 effective cores out of 32 → workers still stall (~14 of 24 idle on avg).
+With inflate uncapped the new bottleneck is somewhere else (edge-merge phase, allocator
+contention on `lsigs.push_back`'s growth, or LCP saturation per malloc tree). Sharding
+also costs 8:59 one-time decompress + 346 GB disk. Net benefit too small for the cost.
+
+Conclusion: **on this workload, the brute-force parallelism path plateaus around 8 cores**;
+beyond that, algorithmic changes are required (e.g. minimizer-space sketching like
+rust-mdbg, or reverse-complement signature canonicalization to halve the work upstream).
+
 ## How to reproduce
 
 ```
