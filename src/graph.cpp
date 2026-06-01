@@ -15,7 +15,6 @@ extern "C" void extract_fast(const char *str, int len, uint64_t offset, int targ
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <map>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -219,92 +218,28 @@ void reduce_sigs(const std::vector<SigCol>& sigs, std::vector<SigCount>& nodes) 
     }
 }
 
-// Classify by per-colour node count: (n_n, n_t) → D, I, P, S, C.
-//   n_t=0      → D (DEL)        n_n=0      → I (INS)
-//   n_n=n_t=1  → P (SNP)        n_n=n_t>1  → S (SUB, balanced multi-base)
-//   otherwise (both >0, unbalanced) → C (CPLX, true complex)
-inline char classify_bubble(uint32_t nn, uint32_t nt) {
-    if (nt == 0) return 'D';
-    if (nn == 0) return 'I';
-    if (nn == 1 && nt == 1) return 'P';
-    if (nn == nt) return 'S';
-    return 'C';
-}
-
-// Cortex-style bubble: BFS chains of non-shared (colour != 3) nodes, then group chains by
-// the SET of color=3 anchors they touch. Two chains sharing the same anchor set are two
-// alleles of the same locus → merge. Per-bubble sig lists are populated for the base-pair
-// variant caller (tools/call). Topology-only type is just a sketch — real type comes from
-// the call tool's prefix/suffix-trimmed diff of allele sequences.
+// Permissive Cortex bubble = a maximal connected run of non-shared (colour != 3) nodes,
+// bounded by shared-backbone nodes that are not traversed. One BFS per seed gives one
+// bubble. type = 'D' (only colour-1 seen, normal-only/germline), 'I' (only colour-2,
+// tumor-only/somatic candidate), 'C' (both → mixed). This is the 2026-05-26 high-recall
+// decomposition that hit ~99.6% recall on WG reads; the chain+union-find-by-anchor merge
+// that displaced it (2026-06-01) over-merged adjacent loci and dropped recall ~3-6 pts.
 void decompose(const std::vector<std::vector<int32_t>>& adj, const std::vector<uint8_t>& color,
                const std::vector<uint32_t>& ncov, const std::vector<uint32_t>& tcov,
-               const std::vector<uint64_t>& sigs, std::vector<CortexBubble>& out) {
+               std::vector<CortexBubble>& out) {
     const uint32_t K = (uint32_t)color.size();
-    std::vector<char> vis(K, 0);
-    struct Chain { uint64_t nc = 0, tc = 0; std::vector<uint32_t> n_ids, t_ids, anchors; };
-    std::vector<Chain> chains; chains.reserve(K / 4 + 1);
+    std::vector<char> vis(K, 0); out.clear();
     std::queue<uint32_t> q;
     for (uint32_t s = 0; s < K; s++) {
         if (color[s] == 3 || vis[s]) continue;
         q.push(s); vis[s] = 1;
-        Chain c;
+        uint8_t seen = 0; uint32_t nn = 0; uint64_t nc = 0, tc = 0;
         while (!q.empty()) {
-            const uint32_t u = q.front(); q.pop();
-            (color[u] == 1 ? c.n_ids : c.t_ids).push_back(u);
-            c.nc += ncov[u]; c.tc += tcov[u];
-            for (int32_t v : adj[u]) {
-                if (color[v] == 3) c.anchors.push_back((uint32_t)v);
-                else if (!vis[v]) { vis[v] = 1; q.push((uint32_t)v); }
-            }
+            const uint32_t u = q.front(); q.pop(); seen |= color[u]; nn++; nc += ncov[u]; tc += tcov[u];
+            for (int32_t v : adj[u]) if (!vis[v] && color[v] != 3) { vis[v] = 1; q.push((uint32_t)v); }
         }
-        std::sort(c.anchors.begin(), c.anchors.end());
-        c.anchors.erase(std::unique(c.anchors.begin(), c.anchors.end()), c.anchors.end());
-        chains.push_back(std::move(c));
+        out.push_back({(char)(seen == 1 ? 'D' : seen == 2 ? 'I' : 'C'), nn, nc, tc});
     }
-    out.clear();
-    auto emit = [&](const std::vector<size_t>& idxs) {
-        uint64_t nc = 0, tc = 0; std::vector<uint64_t> sn, st_; std::vector<uint32_t> aids;
-        for (size_t i : idxs) {
-            const Chain& c = chains[i]; nc += c.nc; tc += c.tc;
-            for (uint32_t id : c.n_ids) sn.push_back(sigs[id]);
-            for (uint32_t id : c.t_ids) st_.push_back(sigs[id]);
-            aids.insert(aids.end(), c.anchors.begin(), c.anchors.end());
-        }
-        std::sort(aids.begin(), aids.end()); aids.erase(std::unique(aids.begin(), aids.end()), aids.end());
-        std::vector<uint64_t> asig; asig.reserve(aids.size());
-        for (uint32_t id : aids) asig.push_back(sigs[id]);
-        const uint32_t nn = (uint32_t)sn.size(), nt = (uint32_t)st_.size();
-        out.push_back({classify_bubble(nn, nt), nn, nt, nc, tc, std::move(asig), std::move(sn), std::move(st_)});
-    };
-    // Union-find over chains by shared anchors: any two chains touching at least one common
-    // anchor merge into a single bubble. The earlier exact-set keying split a real variant's
-    // normal-allele chain (anchor set {A,B,C}) from its tumor-allele chain (anchor set
-    // {A,B,D}) into two single-colour bubbles whenever an LCP boundary core near the variant
-    // edge ended up single-coloured itself (so the two chains touch slightly different
-    // anchors). Partial-overlap merge fixes the artifact split.
-    std::vector<size_t> parent(chains.size());
-    for (size_t i = 0; i < chains.size(); i++) parent[i] = i;
-    auto root = [&](size_t x) -> size_t {
-        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
-        return x;
-    };
-    std::unordered_map<uint32_t, size_t> first_for_anchor;
-    for (size_t i = 0; i < chains.size(); i++) {
-        for (uint32_t a : chains[i].anchors) {
-            auto it = first_for_anchor.find(a);
-            if (it == first_for_anchor.end()) first_for_anchor.emplace(a, i);
-            else { size_t ra = root(i), rb = root(it->second); if (ra != rb) parent[ra] = rb; }
-        }
-    }
-    std::map<size_t, std::vector<size_t>> groups;
-    uint64_t stand = 0;
-    for (size_t i = 0; i < chains.size(); i++) {
-        if (chains[i].anchors.empty()) { emit({i}); stand++; }
-        else groups[root(i)].push_back(i);
-    }
-    for (auto& kv : groups) emit(kv.second);
-    std::fprintf(stderr, "[bubbles] %zu chains -> %zu anchor-merged groups + %lu anchorless\n",
-                 chains.size(), groups.size(), (unsigned long)stand);
 }
 }  // namespace
 
@@ -336,11 +271,11 @@ void run_lcp(const std::string& normal_fq, const std::string& tumor_fq, const st
 void run_graph(const std::string& dir, int min_mult) {
     FILE* fc = xopen(dir + "/counts.bin", "rb"); uint64_t N; rd(fc, &N, 8); std::vector<SigCount> nodes(N); rd(fc, nodes.data(), N * sizeof(SigCount)); std::fclose(fc);
     std::unordered_map<uint64_t, uint32_t> id; id.reserve(N);
-    std::vector<uint8_t> color; std::vector<uint32_t> ncov, tcov; std::vector<uint64_t> kept_sigs;
+    std::vector<uint8_t> color; std::vector<uint32_t> ncov, tcov;
     for (const SigCount& c : nodes) {
         if ((c.n > c.t ? c.n : c.t) < (uint32_t)min_mult) continue;
         id.emplace(c.sig, (uint32_t)color.size());
-        color.push_back(c.n && c.t ? 3 : c.n ? 1 : 2); ncov.push_back(c.n); tcov.push_back(c.t); kept_sigs.push_back(c.sig);
+        color.push_back(c.n && c.t ? 3 : c.n ? 1 : 2); ncov.push_back(c.n); tcov.push_back(c.t);
     }
     const uint64_t kept = color.size();
     std::vector<SigCount>().swap(nodes);
@@ -354,7 +289,7 @@ void run_graph(const std::string& dir, int min_mult) {
     std::sort(ie.begin(), ie.end()); ie.erase(std::unique(ie.begin(), ie.end()), ie.end());
     const std::string gp = dir + "/graph.bin";
     FILE* fg = xopen(gp + ".tmp", "wb"); uint64_t K = kept; wr(fg, &K, 8);
-    wr(fg, color.data(), K); wr(fg, ncov.data(), K * 4); wr(fg, tcov.data(), K * 4); wr(fg, kept_sigs.data(), K * 8);
+    wr(fg, color.data(), K); wr(fg, ncov.data(), K * 4); wr(fg, tcov.data(), K * 4);
     uint64_t E = ie.size(); wr(fg, &E, 8); wr(fg, ie.data(), E * sizeof(IEdge)); atomic_close(fg, gp + ".tmp", gp);
     std::fprintf(stderr, "[graph] min_mult=%d kept_nodes=%lu of %lu edges=%lu -> %s/graph.bin\n",
                  min_mult, (unsigned long)kept, (unsigned long)N, (unsigned long)E, dir.c_str());
@@ -365,31 +300,17 @@ void run_bubbles(const std::string& dir, const std::string& out_tsv) {
     FILE* fg = xopen(dir + "/graph.bin", "rb"); uint64_t K; rd(fg, &K, 8);
     std::vector<uint8_t> color(K); rd(fg, color.data(), K);
     std::vector<uint32_t> ncov(K), tcov(K); rd(fg, ncov.data(), K * 4); rd(fg, tcov.data(), K * 4);
-    std::vector<uint64_t> sigs(K); rd(fg, sigs.data(), K * 8);
     uint64_t E; rd(fg, &E, 8); std::vector<IEdge> ie(E); rd(fg, ie.data(), E * sizeof(IEdge)); std::fclose(fg);
     std::vector<std::vector<int32_t>> adj(K);
     for (const IEdge& e : ie) { adj[e.first].push_back((int32_t)e.second); adj[e.second].push_back((int32_t)e.first); }
-    std::vector<CortexBubble> out; decompose(adj, color, ncov, tcov, sigs, out);
-    FILE* f = xopen(out_tsv, "w"); std::fputs("type\tn_nodes_n\tn_nodes_t\tnormal_cov\ttumor_cov\n", f);
-    int nd = 0, ni = 0, np = 0, ns = 0, nc = 0;
+    std::vector<CortexBubble> out; decompose(adj, color, ncov, tcov, out);
+    FILE* f = xopen(out_tsv, "w"); std::fputs("type\tn_nodes\tnormal_cov\ttumor_cov\n", f);
+    int nd = 0, ni = 0, nc = 0;
     for (const CortexBubble& b : out) {
-        const char* t = b.type == 'D' ? "DEL" : b.type == 'I' ? "INS" : b.type == 'P' ? "SNP" : b.type == 'S' ? "SUB" : "CPLX";
-        nd += b.type == 'D'; ni += b.type == 'I'; np += b.type == 'P'; ns += b.type == 'S'; nc += b.type == 'C';
-        std::fprintf(f, "%s\t%u\t%u\t%lu\t%lu\n", t, b.n_nodes_n, b.n_nodes_t, (unsigned long)b.normal_cov, (unsigned long)b.tumor_cov);
+        const char* t = b.type == 'D' ? "DEL" : b.type == 'I' ? "INS" : "CPLX";
+        nd += b.type == 'D'; ni += b.type == 'I'; nc += b.type == 'C';
+        std::fprintf(f, "%s\t%u\t%lu\t%lu\n", t, b.n_nodes, (unsigned long)b.normal_cov, (unsigned long)b.tumor_cov);
     }
     std::fclose(f);
-    const std::string bp = dir + "/bubbles.bin";
-    FILE* fb = xopen(bp + ".tmp", "wb");
-    uint64_t Nb = out.size(); wr(fb, &Nb, 8);
-    for (const CortexBubble& b : out) {
-        wr(fb, &b.type, 1);
-        wr(fb, &b.n_nodes_n, 4); wr(fb, &b.n_nodes_t, 4);
-        wr(fb, &b.normal_cov, 8); wr(fb, &b.tumor_cov, 8);
-        uint32_t na = (uint32_t)b.anchors.size(); wr(fb, &na, 4);
-        wr(fb, b.anchors.data(), na * 8);
-        wr(fb, b.sigs_n.data(), b.n_nodes_n * 8);
-        wr(fb, b.sigs_t.data(), b.n_nodes_t * 8);
-    }
-    atomic_close(fb, bp + ".tmp", bp);
-    std::fprintf(stderr, "[bubbles] %zu bubbles  DEL=%d INS=%d SNP=%d SUB=%d CPLX=%d -> %s + bubbles.bin\n", out.size(), nd, ni, np, ns, nc, out_tsv.c_str());
+    std::fprintf(stderr, "[bubbles] %zu bubbles  DEL(normal-only)=%d INS(somatic)=%d CPLX=%d -> %s\n", out.size(), nd, ni, nc, out_tsv.c_str());
 }

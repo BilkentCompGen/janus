@@ -4,7 +4,7 @@ Guidance for Claude Code working in this repository.
 
 ## Project
 
-`svp` is a somatic structural-variant caller. Active branch: **`lcp-cortex`** (this branch).
+`svp` is a somatic structural-variant caller. Active branch: **`lcp-cortex-merged`** (this branch).
 It builds a **2-colour LCP-core graph directly from reads** (normal vs tumor HiFi FASTQ) and
 emits candidate somatic bubbles. No assembly, no alignment, no reference graph — a single
 binary. Output is **coordinate-free** today (per-node multiplicity, not genome positions);
@@ -24,7 +24,9 @@ mapping back to coordinates / a VCF is the next step.
 | Branch | What's there |
 |---|---|
 | `main` | clean slate, scaffolding only |
-| `lcp-cortex` | **this branch** — read-based 2-colour LCP-core graph caller |
+| `lcp-cortex` | original LCP-anchor (match.cpp) pipeline at HEAD `ae0c50e` |
+| `lcp-cortex-fast` | reads-only Cortex caller with fast gzip+LCP, but with the broken chain+union-find decomposition that hurt recall (kept for diff/reference) |
+| `lcp-cortex-merged` | **this branch** — fast gzip+LCP plumbing from `lcp-cortex-fast`, simple BFS connected-components bubble decomposition from the 2026-05-26 high-recall version. Target: ~99.6% recall / ~78% precision (the user-described "high recall / lower precision" regime) |
 | `vg-rewrite` | prior assembly-input LCP-anchor rewrite (pre-reads) |
 | `backup` | previous monolithic LCP-graph impl. Source of `zstr.hpp`, `MurmurHash3.{h,cpp}` |
 | `experimental/modular-pipeline` | `svp2/` 6-stage modular pipeline; entry: `svp2/STATUS.md` |

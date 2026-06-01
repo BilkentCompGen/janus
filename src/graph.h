@@ -12,16 +12,8 @@
 //             resolve to node-id edges -> <dir>/graph.bin
 //   bubbles : graph -> permissive Cortex bubble decomposition -> <out_tsv>
 // Colour 1 = normal-only, 2 = tumor-only (candidate somatic), 3 = shared backbone.
-// Topology-only type (from core counts): 'D'=DEL 'I'=INS 'P'=1+1-shape 'S'=N+N 'C'=other.
-// Real variant call (base-pair diff) is done by tools/call from the sig lists below.
-struct CortexBubble {
-    char type;
-    uint32_t n_nodes_n, n_nodes_t;
-    uint64_t normal_cov, tumor_cov;
-    std::vector<uint64_t> anchors;     // color=3 anchor sigs around the bubble
-    std::vector<uint64_t> sigs_n;      // color=1 chain sigs (normal-allele cores)
-    std::vector<uint64_t> sigs_t;      // color=2 chain sigs (tumor-allele cores)
-};
+// type 'D' = normal-only, 'I' = tumor-only (somatic), 'C' = mixed.
+struct CortexBubble { char type; uint32_t n_nodes; uint64_t normal_cov, tumor_cov; };
 
 void run_lcp(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir, int level, int flank, int margin, int threads);
 void run_graph(const std::string& dir, int min_mult);
