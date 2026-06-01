@@ -1,17 +1,31 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repository.
 
 ## Project
 
-`svp` is a somatic structural-variant caller. Active development is on **`vg-rewrite`** (this branch). It is a pairwise normal-vs-tumor caller anchored on **LCP cores** — no graph construction, no rGFA, single binary. Output is a flat bubble TSV; mapping back to per-contig coordinates / VCF is a downstream concern.
+`svp` is a somatic structural-variant caller. Active branch: **`lcp-cortex`** (this branch).
+It builds a **2-colour LCP-core graph directly from reads** (normal vs tumor HiFi FASTQ) and
+emits candidate somatic bubbles. No assembly, no alignment, no reference graph — a single
+binary. Output is **coordinate-free** today (per-node multiplicity, not genome positions);
+mapping back to coordinates / a VCF is the next step.
+
+### Two hard rules — do not violate
+
+1. **The caller consumes READS ONLY** — two FASTQ inputs (normal, tumor). An assembly/`.fa`
+   is **never** a caller input. Assemblies *are* allowed as a ground-truth / analysis oracle
+   in `tools/`: extract their LCP cores and match read-derived cores by signature. LCP is
+   deterministic, so equal signature = exact match — no alignment needed.
+2. **Whole-genome only.** Nothing chr19-specific in the caller. Sim scope is chosen by the
+   simulation config, never hard-coded here.
 
 ## Branch map
 
 | Branch | What's there |
 |---|---|
 | `main` | clean slate, scaffolding only |
-| `vg-rewrite` | this branch — active LCP-anchor rewrite |
+| `lcp-cortex` | **this branch** — read-based 2-colour LCP-core graph caller |
+| `vg-rewrite` | prior assembly-input LCP-anchor rewrite (pre-reads) |
 | `backup` | previous monolithic LCP-graph impl. Source of `zstr.hpp`, `MurmurHash3.{h,cpp}` |
 | `experimental/modular-pipeline` | `svp2/` 6-stage modular pipeline; entry: `svp2/STATUS.md` |
 | `kmer`, `no-compression` | dead-end experiments |
@@ -21,112 +35,80 @@ Don't port files across branches without explicit instruction.
 ## Build & run
 
 ```
-make install-deps       # one-time: builds lib/lcptools (liblcptools.a)
-make                    # builds ./svp
-make clean              # moves build/, svp, outputs/ → ~/trash/svp-make-clean/
-make run-<id>           # ids: del dup ins inv mixed snp
-                        # auto-generates simulation/truth/<id>/ if missing,
-                        # writes outputs/svp/<id>/bubbles.tsv, /usr/bin/time -v
-make run-list           # shows ids and overrides
+make install-deps    # one-time: builds lib/lcptools (liblcptools.a)
+make                 # builds ./svp
+make run             # whole-genome read run: reads/normal vs reads/wgs -> outputs/svp/wgs/
+make clean           # moves build/, svp, outputs/ -> ~/trash/svp-make-clean/
 ```
 
-Overrides on `make run-<id>`:
-- `LEVEL=N` lcptools deepening level (default 5)
-- `FLANK=M` ±M bp window for core signature (default 10)
-- `NORMAL=path/to/normal.fa` defaults to `simulation/ref.fasta`. Use a germline truth FASTA when calling against simulated germline+somatic.
+`make run` overrides: `LEVEL` (lcptools depth, 5), `FLANK` (±bp signature window, 10),
+`MINMULT` (error-prune threshold, 3), `THREADS` (16), `READS_N`/`READS_T` (FASTQ paths).
 
-Direct invocation: `./svp <normal.fa[.gz]> <tumor.fa[.gz]> <out.tsv> [--level N] [--flank M]`.
+## CLI — three resumable, checkpointed stages
 
-## Pipeline
+The expensive LCP pass is paid once; later stages are seconds and re-runnable.
 
-`main.cpp` orchestrates this exact sequence — one stage per module, no cross-module state:
+```
+svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5 --flank 10 --margin 10 --threads 16]
+svp graph   <dir> [--min-mult 3]
+svp bubbles <dir> [--out <dir>/bubbles.tsv]
+svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   # runs all, skipping done stages
+```
 
-1. **`read_fasta_flat`** (`io.cpp`) — zlib `gzopen`/`gzgets`. Concatenates **all records** of one FASTA into a single `std::string`, separated by `2*flank+1` `N`-bumpers (so neither LCP cores nor signature flanks bridge records). Emits `rec_start[]`, `rec_end[]` for downstream per-record processing. Record names are dropped.
-2. **`extract_cores`** (`cores.cpp`) — calls `init_lps_offset` + `lps_deepen` from `lib/lcptools`, **per record** (because lcptools takes `int len` and full-genome FASTAs > INT_MAX). Cores carry the lcptools `label` for use as a hash seed.
-3. **`compute_sigs`** (`cores.cpp`) — `signature(core) = MurmurHash64(seq[start-m .. end+m], seed=core.label)`. Single 64-bit key collapses both label-equality and flank-equality checks into one `unordered_map` lookup.
-4. **`unique_anchors`** (`match.cpp`) — keeps cores whose signature appears exactly once on **both** sides. Two `unordered_map<uint64_t,int32_t>` first-sighting passes; `-1` marks "seen ≥2 times". Output anchors are pre-sorted by `n_idx` because we walk normal first.
-5. **`chain`** (`match.cpp`) — patience-sort LIS on tumor index, O(K log K), with `parent[]` reconstruction. Drops out-of-order anchors (translocations, inversions). Verified on the user's `ABCDE`/`ADBCE` example.
-6. **`emit_bubbles`** (`match.cpp`) — between consecutive chained anchors (with virtual head/tail), greedy byte-equality `ext_r` then `ext_l` to expand matching flanks. Emits `Bubble{n_start, n_end, t_start, t_end, n_seq, t_seq, type}`. Type is classified at construction (`SNP`/`INS`/`DEL`/`CPLX`) from `(nl, tl)` lengths.
-7. **`write_bubbles`** (`io.cpp`) — TSV with header `#type\tn_start\tn_end\tt_start\tt_end\tn_seq\tt_seq`. Empty seqs print as `.`.
+`run` skips any stage whose checkpoint already exists, so re-tuning `--min-mult` re-runs only
+graph+bubbles (no re-LCP). Checkpoints are written atomically (`.tmp` + `rename`): an
+interrupted write never leaves a half-file that resume would mistake for complete.
 
-Shared types are POD-only in `src/svp.h` (`Core`, `Anchor`, `Bubble`). No constructors, no methods, no inheritance.
+## Pipeline (`src/`, ~430 LOC)
 
-## Coordinates
+1. **lcp** (`run_lcp`, `graph.cpp`) — stream both FASTQ through a threaded worker pool. Gzip
+   decompression is serial under one I/O lock, so that's the throughput ceiling (~17 MB/s at
+   16 threads); progress prints every `REPORT` reads. Per read: uppercase, `extract_cores` +
+   `compute_sigs` (`cores.cpp`), keep interior cores only (≥`margin` bp from both ends).
+   Accumulate a 256-sharded per-signature read count `{normal,tumor}` plus within-read
+   adjacent-signature edges. → `dir/counts.bin`, `dir/edges.bin`.
+2. **graph** (`run_graph`, `graph.cpp`) — drop signatures with `max(n,t) < min_mult`
+   (sequencing errors are multiplicity-1; `min_mult=3` removes ~99.9% of them). Colour each
+   survivor: 1 = normal-only, 2 = tumor-only (candidate somatic), 3 = shared. Resolve
+   signature edges to node-id edges. → `dir/graph.bin`.
+3. **bubbles** (`run_bubbles`, `graph.cpp`) — connected components of non-shared (colour≠3)
+   nodes = permissive Cortex bubbles. Type `D`=normal-only (DEL), `I`=tumor-only (INS,
+   somatic), `C`=mixed (CPLX). → `dir/bubbles.tsv` (`type  n_nodes  normal_cov  tumor_cov`).
 
-- 0-based half-open everywhere (matches lcptools).
-- Bubble positions are **flat offsets into the concatenated buffer**, not into any FASTA record. Translating back is a separate downstream tool's job — that's why `read_fasta_flat` exposes `rec_start[]`/`rec_end[]`.
-- N-bumper width is `2*flank+1` exactly so LCP cores and signature flanks cannot span records.
+`src/svp.h` holds the one shared POD (`Core`) + the LCP primitives. `extract_cores` /
+`compute_sigs` are used by both the caller and `tools/`; `io.cpp::read_fasta_flat` is for the
+assembly-based GT/analysis tools only — never the caller.
+
+**Next:** map nodes back to genome positions for recall vs a truth VCF, and trim bubble allele
+sequences to call simple SNP/INS/DEL — both may use truth assemblies as the GT oracle (rule 1).
 
 ## Code style — strict
 
-Read `docs/CODE_STYLE.md` before editing. Hard rules: C++17, no OOP, no user templates, no try/catch (fail-fast with `[FATAL]` + `std::abort()`), avoid if-else trees, ≤30 LOC per function, ≤700 LOC total across `src/*.cpp`. Comments only when the WHY is non-obvious. Single-line function signatures (`.clang-format` has `ColumnLimit: 0` — don't reformat).
+Read `docs/CODE_STYLE.md` before editing. C++17, no OOP, no user templates, no try/catch
+(fail-fast `[FATAL]` + `std::abort()`), avoid if-else trees, ≤30 LOC/function, ≤700 LOC total
+across `src/*.cpp`. Comments only when the WHY is non-obvious. `.o`/`.d` go to `build/`.
 
-`.o` and `.d` artifacts go to `build/`, never `src/`.
+## Simulation (reads — the only caller input)
 
-## Simulation tooling
+`simulation/Makefile` is independent (delegated by the top-level Makefile); layout is flat.
+Reads are generated whole-genome:
 
-`simulation/Makefile` is independent (delegated by the top-level Makefile). Layout is **flat** — no per-chromosome subdirs:
+- `scripts/sim_reads_wg_ccs.sh` — realistic 30x HiFi: pbsim3 multi-pass CLR → real `ccs`
+  consensus (correlated, context-dependent errors). → `reads/wgs/`, `reads/normal/`.
+- `scripts/sim_reads_wg.sh` / `tools/sim_hifi` — fast direct Q30 injector with exact known
+  errors; for QC, not realism.
+- Truth assemblies/VCF (`simulation/truth/<id>/`, insilicoSV) — GT/analysis only.
 
-```
-simulation/
-  ref.fasta              base genome (gitignored)
-  ref.fasta.fai
-  beds/{chr19,genome}.bed   yaml's overlap_regions decides scope
-  configs/<id>.yaml      insilicoSV config (id == filename stem)
-  truth/<id>/            generated: out.fa, out.fa.fai, out.vcf, [novel.fa]
-  reads/<id>/            generated: hifi.fastq.gz, pbsim.maf.gz, ccs_report.txt
-  reads/normal/          generated from ref.fasta
-```
-
-Common targets: `make -C simulation <id>` (or `all`), `make -C simulation list`, `make -C simulation index`, `make -C simulation clean-<id>`. Whether a sim is chr19-only or whole-genome depends solely on which BED its yaml points at — there are no separate folders per scope.
-
-Truvari benchmark: `make -C simulation bench/<id> CALL=path/to/detected.vcf` (uses `scripts/truvari.sh`). Note: svp's flat-buffer bubble TSV is **not** a VCF — Truvari benchmarking requires a downstream coordinate-mapper that does not yet exist on this branch.
-
-## HiFi read simulation (pbsim3 + ccs)
-
-`scripts/sim_reads.sh` wraps a two-step pipeline: pbsim3 multi-pass CLR (`--pass-num 10`) → ccs consensus → HiFi FASTQ. Defaults reproduce realistic 30x PacBio Sequel HiFi (`--length-mean 15000 --accuracy-mean 0.85 --difference-ratio 22:45:33`). One ZMW per ~15 kb subread, ccs collapses 10 passes to ~Q30 consensus.
-
-```
-make -C simulation reads-<id>     # tumor reads from truth/<id>/out.fa
-make -C simulation reads-normal   # reads from ref.fasta
-make -C simulation reads          # all six tumors + normal
-make -C simulation reads-list     # parameter knobs + per-id presence
-```
-
-Knobs (env or `VAR=...`): `REGION` (default `19_hapA`; extracted via `samtools faidx` before pbsim because whole-genome multi-pass produces one BAM per record), `REGION_REF` (default `19`, used for `reads-normal`), `DEPTH`, `LEN_MEAN`, `LEN_SD`, `ACCURACY`, `PASS_NUM`, `DIFF_RATIO`, `THREADS`, `KEEP_BAM=1` to retain the intermediate subreads BAM.
-
-**Per-`reads/<id>/` outputs:** `hifi.fastq.gz`, `pbsim.maf.gz` (ground-truth alignments — pbsim emits one MAF entry per simulated read, useful for downstream evaluation), `ccs_report.txt` (ZMW pass/fail breakdown), `pbsim.log`. Subreads BAM is removed unless `KEEP_BAM=1`.
-
-**Measured baseline (chr19, `DEPTH=2`, `THREADS=4`):** pbsim 261s elapsed (CPU 46s); ccs ~14 min; 7656 ZMWs in → 7516 HiFi reads (98.17% pass), mean length 15031bp, rq 0.9952–0.9989; output 111 MB gzipped FASTQ; peak intermediate subreads BAM 853 MB before deletion. 30x scaling not yet measured — pbsim grows linearly with `DEPTH`, ccs grows with subread count.
-
-**Long runs — survive disconnect:** wrap in detached screen so the session is independent of any client connection.
-
-```sh
-cd simulation
-screen -dmS svp-reads-mixed bash -c '
-  set -o pipefail
-  cd /home/yuio/svp/simulation
-  echo "[start] $(date \"+%F %T\")"
-  /usr/bin/time -v make reads-mixed DEPTH=30 THREADS=0 2>&1 | tee reads-mixed.log
-  echo "[end rc=$? ] $(date \"+%F %T\")" | tee -a reads-mixed.log
-  sleep 600
-'
-# attach:    screen -r svp-reads-mixed
-# tail log:  tail -f simulation/reads-mixed.log
-# alive?     screen -ls
-```
+**Long runs survive disconnect** in a detached `screen` (the realistic ccs sim is multi-day):
+`screen -dmS <name> -L -Logfile <log> <cmd>` (`-L -Logfile` avoids `>` redirects).
 
 ## Dependencies
 
-- `lib/lcptools` — locally consistent parsing core extraction. Build with `make install-deps`. The static lib is stale-prone; if you see segfaults on struct fields after a `git pull` of `lib/`, rebuild it.
-- `lib/insilicoSV` — truth simulator (driven by `simulation/Makefile`).
-- `lib/pbsim3` — long-read simulator (autotools build via `make install-deps-pbsim3`; needs `autoreconf -fi` to regenerate `config.guess`/`config.sub`). Multi-pass `--pass-num 10` mode emits subreads BAMs that ccs consumes.
-- `lib/ccs` — PacBio CCS v6.4.0 static binary (`make install-deps-ccs` downloads `ccs.tar.gz` from the GitHub release). Outputs HiFi FASTQ at `--min-rq 0.99` by default.
-- `zlib` — for `gzopen`/`gzgets` FASTA reading.
-- `truvari` — for VCF-level benchmarking (when a VCF emitter exists).
+- `lib/lcptools` — LCP core extraction (`make install-deps`). Static lib is stale-prone;
+  rebuild if you see segfaults on struct fields after pulling `lib/`.
+- `lib/pbsim3` — long-read simulator (autotools; `autoreconf -fi` for `config.guess/sub`).
+- `lib/ccs` — PacBio CCS v6.4.0 static binary.
+- `lib/insilicoSV` — truth simulator. `zlib` — gz FASTA/FASTQ IO. `truvari` — VCF
+  benchmarking (once a VCF emitter exists).
 
-`lib/`, `simulation/`, `outputs/` are all gitignored.
-
-## Current accuracy focus
-
-Per the user, only **SNP / INS / DEL** classification matters for the moment. INV / DUP / CPLX may be miscalled — don't sink time into those without explicit direction. Single-bp position-equivalence ambiguity (homopolymer left/right alignment) within ±5 bp is acceptable.
+`lib/`, `simulation/`, `outputs/`, `build/`, `tools/`, `svp` are gitignored.

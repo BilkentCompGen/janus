@@ -7,10 +7,9 @@ BUILD  := build
 SRC    := $(wildcard src/*.cpp)
 OBJ    := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRC))
 
-LEVEL  ?= 5
-FLANK  ?= 10
-OUT    := outputs/svp
-NORMAL ?= simulation/ref.fasta
+LEVEL   ?= 5
+FLANK   ?= 10
+OUT     := outputs/svp
 
 svp: $(OBJ)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $^ $(LDFLAGS)
@@ -20,35 +19,50 @@ ANALYZE_DEPS := $(BUILD)/io.o $(BUILD)/cores.o $(BUILD)/MurmurHash3.o
 tools/analyze_cores: tools/analyze_cores.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
 
+tools/analyze_uniqueness: tools/analyze_uniqueness.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+tools/analyze_kmer: tools/analyze_kmer.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+tools/dump_gfa: tools/dump_gfa.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+tools/gfa_collapse: tools/gfa_collapse.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+tools/analyze_tangle: tools/analyze_tangle.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+tools/call: tools/call.cpp $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# LCP-topology experiment binaries (read-only probes; docs/LCP_TOPOLOGY.md)
+LCP_EXP := lcp_bags lcp_triplet_bags lcp_collision_anatomy lcp_perturb lcp_rc_invariance lcp_crosslevel lcp_repeat_probe lcp_consistency
+tools/lcp_%: tools/lcp_%.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+lcp-exp: $(addprefix tools/,$(LCP_EXP))
+
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INC) -c $< -o $@
 
 $(BUILD):
 	mkdir -p $@
 
-# ---------- simulation auto-build (delegates to simulation/Makefile) ----------
-simulation/truth/%/out.fa: ; $(MAKE) -C simulation $*
-
-# ---------- run targets ----------
-# id == configs/<id>.yaml. Output: $(OUT)/<id>/bubbles.tsv.
-# N defaults to ref.fasta. Override e.g. NORMAL=simulation/truth/germline/out.fa
-SIMS := del dup ins inv mixed snp
-
-define run_rule
-run-$(1): svp simulation/truth/$(1)/out.fa $$(NORMAL)
-	@mkdir -p $$(OUT)/$(1)
-	/usr/bin/time -v ./svp $$(NORMAL) simulation/truth/$(1)/out.fa $$(OUT)/$(1)/bubbles.tsv --level $$(LEVEL) --flank $$(FLANK)
-endef
-
-$(foreach s,$(SIMS),$(eval $(call run_rule,$(s))))
+# ---------- run target (whole-genome, reads only — assemblies are never a caller input) ----------
+READS_N  ?= simulation/reads/normal/hifi.fastq.gz
+READS_T  ?= simulation/reads/wgs/hifi.fastq.gz
+MINMULT  ?= 3
+THREADS  ?= 16
+run: svp
+	@mkdir -p $(OUT)/wgs
+	/usr/bin/time -v ./svp run $(READS_N) $(READS_T) $(OUT)/wgs --level $(LEVEL) --flank $(FLANK) --min-mult $(MINMULT) --threads $(THREADS)
 
 run-list:
-	@echo "available run-<id> targets (N=$(NORMAL)):"
-	@echo "  ids: $(SIMS)"
-	@echo "  scope is decided by the yaml's overlap_regions: chr19.bed → chr19-only, genome.bed → whole genome"
-	@echo "overrides: LEVEL=$(LEVEL) FLANK=$(FLANK) NORMAL=$(NORMAL)"
-	@echo "  e.g. make run-mixed LEVEL=4 FLANK=20"
-	@echo "  e.g. make run-mixed NORMAL=simulation/truth/germline/out.fa"
+	@echo "read-based pipeline (reads only — no assembly in the caller):"
+	@echo "  make run    normal=$(READS_N)"
+	@echo "              tumor =$(READS_T)"
+	@echo "  overrides: LEVEL=$(LEVEL) FLANK=$(FLANK) MINMULT=$(MINMULT) READS_N=... READS_T=..."
 
 install-deps: install-deps-lcptools install-deps-pbsim3 install-deps-ccs
 
@@ -77,6 +91,6 @@ clean:
 	mv -f $(BUILD) svp $(OUT) /home/yuio/trash/svp-make-clean/ 2>/dev/null || true
 
 .PHONY: install-deps install-deps-lcptools install-deps-pbsim3 install-deps-ccs \
-        clean run-list $(addprefix run-,$(SIMS))
+        clean run-list run
 
 -include $(OBJ:.o=.d)

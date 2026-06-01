@@ -10,7 +10,7 @@ static inline uint64_t fmix64(uint64_t k) {
     return k;
 }
 
-uint64_t murmur64(const void* key, int len, uint32_t seed) {
+uint64_t __attribute__((hot)) murmur64(const void* key, int len, uint32_t seed) {
     const uint8_t* data = (const uint8_t*)key;
     const int nblocks = len / 16;
     uint64_t h1 = seed, h2 = seed;
