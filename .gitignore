@@ -11,7 +11,8 @@ build
 /svp
 
 # experiment/throwaway analysis (not part of the tracked implementation)
-tools
+tools/*
+!tools/bubble_recall.cpp
 docs/analysis
 experiments
 scripts/fakebin

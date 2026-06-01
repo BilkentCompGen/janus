@@ -37,6 +37,10 @@ tools/analyze_tangle: tools/analyze_tangle.cpp $(ANALYZE_DEPS)
 tools/call: tools/call.cpp $(BUILD)/MurmurHash3.o
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/MurmurHash3.o $(LDFLAGS)
 
+# Per-bubble TP/FP + sig recall vs a paired assembly oracle (rule-1 compliant).
+tools/bubble_recall: tools/bubble_recall.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
 # LCP-topology experiment binaries (read-only probes; docs/LCP_TOPOLOGY.md)
 LCP_EXP := lcp_bags lcp_triplet_bags lcp_collision_anatomy lcp_perturb lcp_rc_invariance lcp_crosslevel lcp_repeat_probe lcp_consistency
 tools/lcp_%: tools/lcp_%.cpp $(ANALYZE_DEPS)

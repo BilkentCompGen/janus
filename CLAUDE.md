@@ -61,25 +61,69 @@ svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   # runs all, skipping
 graph+bubbles (no re-LCP). Checkpoints are written atomically (`.tmp` + `rename`): an
 interrupted write never leaves a half-file that resume would mistake for complete.
 
-## Pipeline (`src/`, ~430 LOC)
+## Pipeline (`src/`, 546 LOC across 5 cpp files: graph 316 / cores 82 / main 64 / MurmurHash3 56 / io 28)
 
-1. **lcp** (`run_lcp`, `graph.cpp`) — stream both FASTQ through a threaded worker pool. Gzip
-   decompression is serial under one I/O lock, so that's the throughput ceiling (~17 MB/s at
-   16 threads); progress prints every `REPORT` reads. Per read: uppercase, `extract_cores` +
-   `compute_sigs` (`cores.cpp`), keep interior cores only (≥`margin` bp from both ends).
-   Accumulate a 256-sharded per-signature read count `{normal,tumor}` plus within-read
-   adjacent-signature edges. → `dir/counts.bin`, `dir/edges.bin`.
+1. **lcp** (`run_lcp`, `graph.cpp`) — one reader thread per FASTQ shard (so both samples
+   inflate in parallel CPUs) + N-2 workers consuming colour-tagged batches. The reader is a
+   block-based gzread + manual `\n` scan (line-by-line `gzgets` is 3-5× slower because zlib
+   state crosses every line + per-line `std::string` ops dominate). Per read: uppercase,
+   call `extract_fast` (lcptools perf-session2 SoA API — inlined into `process_read`, no
+   intermediate `Core[]`/`uint64_t[]` vectors), keep interior cores (≥`margin` bp from both
+   ends), inline the flank-window `murmur64` for the signature. Workers emit `SigCol{sig,col}`
+   records + within-read `(sig_prev, sig_curr)` edges to thread-local vectors; the pool
+   merges via LSB radix sort + run-length reduce. Atomic-rename checkpoint:
+   `dir/counts.bin` (16 B per record: `sig, n, t`), `dir/edges.bin` (16 B per record).
 2. **graph** (`run_graph`, `graph.cpp`) — drop signatures with `max(n,t) < min_mult`
-   (sequencing errors are multiplicity-1; `min_mult=3` removes ~99.9% of them). Colour each
-   survivor: 1 = normal-only, 2 = tumor-only (candidate somatic), 3 = shared. Resolve
-   signature edges to node-id edges. → `dir/graph.bin`.
-3. **bubbles** (`run_bubbles`, `graph.cpp`) — connected components of non-shared (colour≠3)
-   nodes = permissive Cortex bubbles. Type `D`=normal-only (DEL), `I`=tumor-only (INS,
-   somatic), `C`=mixed (CPLX). → `dir/bubbles.tsv` (`type  n_nodes  normal_cov  tumor_cov`).
+   (sequencing errors are multiplicity-1; `min_mult=3` removes 99.9% of them). Colour each
+   survivor: 1 = normal-only, 2 = tumor-only (candidate somatic), 3 = shared. Map signature
+   edges → node-id edges, dedupe. → `dir/graph.bin`. Seconds.
+3. **bubbles** (`run_bubbles`, `graph.cpp`) — **plain BFS connected-components on non-shared
+   nodes**. Backbone (colour=3) is NEVER traversed; each BFS component is one bubble; type
+   from the colour bits seen during the walk (`D` = only colour-1, `I` = only colour-2, `C`
+   = both). No anchor-merging / union-find — that variant over-merges adjacent loci. →
+   `dir/bubbles.tsv` (`type  n_nodes  normal_cov  tumor_cov`). Seconds.
 
 `src/svp.h` holds the one shared POD (`Core`) + the LCP primitives. `extract_cores` /
-`compute_sigs` are used by both the caller and `tools/`; `io.cpp::read_fasta_flat` is for the
-assembly-based GT/analysis tools only — never the caller.
+`compute_sigs` are used by `tools/` only (the caller uses `extract_fast` directly for speed);
+`io.cpp::read_fasta_flat` is for the assembly-based GT/analysis tools only — never the caller.
+
+Read `docs/PERFORMANCE.md` for the gzip+lcptools speed details, and
+`docs/BUBBLE_CALLER_COMPARISON.md` for the bubble-algorithm history (assembly chr19 → reads WG).
+
+### Measured WG performance & recall (lcp-cortex-merged, AMD 9950X, 8 threads)
+
+| metric | value |
+|---|---|
+| inputs | `simulation/reads/{normal,wgs}/hifi.fastq.gz` (29 GB each, 30× HiFi) |
+| wall clock | **12:02** (full lcp+graph+bubbles, 8 threads) |
+| CPU usage | 466% (gzip-bound at 2 streams; one reader per file) |
+| peak RAM | 129 GB |
+| normal reads / tumor reads | 6,176,526 / 6,174,744 |
+| distinct sigs (post-LCP) / edges | 489,021,068 / 628,505,021 |
+| nodes after `min_mult=3` / node-edges | 85,309,098 / 86,145,767 |
+| bubbles total | **112,977** (57,001 I-somatic + 55,976 D-normal-only + 0 C-mixed) |
+
+GT oracle = `simulation/ref.fasta` (germline) vs `simulation/truth/wgs/out.fa` (insilicoSV tumor):
+
+| metric | value |
+|---|---|
+| truth somatic sigs \|S\| | 96,903 |
+| called somatic sigs \|C\| (n=0, t≥3) | 122,948 |
+| \|C ∩ S\| | 96,532 |
+| **sig RECALL** | **99.62%** |
+| **sig PRECISION** | **78.51%** |
+| **bubble PRECISION** (I-bubbles with ≥1 sig ∈ S) | **63.00%** (35,911 / 57,001) |
+
+Tool: `tools/bubble_recall <counts.bin> <graph.bin> <normal.fa> <tumor.fa>` — re-derives
+node→sig from `counts.bin`, replays the BFS decomposition, and reports both sig-level (the
+union-of-I-nodes metric, identical to `tools/recall`) and bubble-level (per-component) TP/FP.
+Runs in ~5 min on WG.
+
+**Why bubble-precision (63%) trails sig-precision (78.5%):** residual-error sigs that survive
+`min_mult=3` cluster into small (1-2 node) singleton bubbles. Each such cluster bumps the
+bubble denominator by 1 even though the sig count of the cluster is tiny. The fix is upstream
+(more aggressive pruning / reverse-complement signature canonicalization to fold strand-pair
+sigs into one node, halving the bubble count) — NOT a chain-merge that over-fuses real loci.
 
 **Next:** map nodes back to genome positions for recall vs a truth VCF, and trim bubble allele
 sequences to call simple SNP/INS/DEL — both may use truth assemblies as the GT oracle (rule 1).
