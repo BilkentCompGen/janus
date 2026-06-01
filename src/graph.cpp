@@ -10,6 +10,7 @@ extern "C" void extract_fast(const char *str, int len, uint64_t offset, int targ
 #include <dirent.h>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -29,6 +30,18 @@ using SEdge = std::pair<uint64_t, uint64_t>;        // signature edge (edges.bin
 using IEdge = std::pair<uint32_t, uint32_t>;        // node-id edge (graph.bin record)
 struct SigCol { uint64_t sig; uint32_t col; };      // per-emission record collected by workers
                                                      // (col 0=normal, 1=tumor); reduced by sort.
+
+// ---- stage timing (wall-clock; one Tic per stage entry) ----
+struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
+    explicit Tic(const char* tg) : t0(std::chrono::steady_clock::now()), prev(t0), tag(tg) {}
+    void mark(const char* lbl) {
+        const auto now = std::chrono::steady_clock::now();
+        const double dprev = std::chrono::duration<double>(now - prev).count();
+        const double dtot = std::chrono::duration<double>(now - t0).count();
+        std::fprintf(stderr, "[%s/%s] +%.2fs  (total %.2fs)\n", tag, lbl, dprev, dtot);
+        prev = now;
+    }
+};
 
 // ---- fail-fast binary checkpoint IO ----
 FILE* xopen(const std::string& p, const char* m) { FILE* f = std::fopen(p.c_str(), m); if (!f) { std::fprintf(stderr, "[FATAL] fopen %s\n", p.c_str()); std::abort(); } return f; }
@@ -94,18 +107,25 @@ void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin
     std::atomic<size_t> next{0}, done{0};
     std::atomic<uint64_t> nr_n{0}, nr_t{0};
     std::atomic<int> readers_left{nrd};
+    // Aggregate ns spent in each phase across all threads (sum, not max). Worker idle =
+    // queue empty wait; worker busy = process_read. Reader wall = gzread + parse + flush.
+    std::atomic<uint64_t> tot_rd_ns{0}, tot_w_busy_ns{0}, tot_w_idle_ns{0}, tot_q_full_ns{0};
     std::mutex qmtx; std::condition_variable cv_full, cv_empty;
     std::queue<Batch> q;
     constexpr size_t Q_CAP = 256, BATCH = 64;
     constexpr unsigned BLOCK = 1u << 20;
     auto reader = [&]() {
+        const auto t_start = std::chrono::steady_clock::now();
+        uint64_t local_q_full_ns = 0;
         std::vector<char> buf(BLOCK);
         std::vector<std::string> batch; batch.reserve(BATCH);
         std::string carry; int col_local = 0;
         auto flush = [&]() {
             if (batch.empty()) return;
+            const auto t_w0 = std::chrono::steady_clock::now();
             std::unique_lock<std::mutex> lk(qmtx);
             cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
+            local_q_full_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_w0).count();
             q.push(Batch{std::move(batch), col_local}); cv_empty.notify_one();
             batch.clear(); batch.reserve(BATCH);
         };
@@ -135,31 +155,51 @@ void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin
         }
         flush();
         if (readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(qmtx); cv_empty.notify_all(); }
+        tot_rd_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_start).count();
+        tot_q_full_ns += local_q_full_ns;
     };
     auto worker = [&]() {
+        uint64_t local_busy_ns = 0, local_idle_ns = 0;
         std::vector<SEdge> ledges; std::vector<SigCol> lsigs;
         lsigs.reserve(1u << 22); ledges.reserve(1u << 22);
         uint64_t lnr_n = 0, lnr_t = 0;
         while (true) {
             Batch b;
             {
+                const auto t_i0 = std::chrono::steady_clock::now();
                 std::unique_lock<std::mutex> lk(qmtx);
                 cv_empty.wait(lk, [&]{ return !q.empty() || readers_left.load() == 0; });
+                local_idle_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_i0).count();
                 if (q.empty()) break;
                 b = std::move(q.front()); q.pop(); cv_full.notify_one();
             }
+            const auto t_b0 = std::chrono::steady_clock::now();
             for (auto& s : b.seqs) { process_read(s, b.col, level, flank, margin, lsigs, ledges); (b.col == 0 ? lnr_n : lnr_t)++; }
+            local_busy_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_b0).count();
         }
         { std::lock_guard<std::mutex> lk(emtx); all_edges.insert(all_edges.end(), ledges.begin(), ledges.end()); }
         { std::lock_guard<std::mutex> lk(smtx); all_sigs.insert(all_sigs.end(), lsigs.begin(), lsigs.end()); }
         nr_n += lnr_n; nr_t += lnr_t;
+        tot_w_busy_ns += local_busy_ns;
+        tot_w_idle_ns += local_idle_ns;
     };
     std::vector<std::thread> rds, wks;
     for (int i = 0; i < nrd; i++) rds.emplace_back(reader);
     for (int i = 0; i < nw;  i++) wks.emplace_back(worker);
     for (auto& t : rds) t.join();
     for (auto& t : wks) t.join();
+    const double rd_s    = tot_rd_ns.load()     / 1e9;
+    const double wb_s    = tot_w_busy_ns.load() / 1e9;
+    const double wi_s    = tot_w_idle_ns.load() / 1e9;
+    const double qf_s    = tot_q_full_ns.load() / 1e9;
     std::fprintf(stderr, "[lcp] pool: %d reader(s) + %d worker(s) on %d shard(s)\n", nrd, nw, nshards);
+    std::fprintf(stderr, "[lcp]    reader-wall sum = %.1fs (avg/reader = %.1fs); queue-full wait = %.1fs\n",
+                 rd_s, rd_s / nrd, qf_s);
+    std::fprintf(stderr, "[lcp]    worker-busy sum = %.1fs (process_read total); worker-idle sum = %.1fs (queue-empty wait)\n",
+                 wb_s, wi_s);
+    std::fprintf(stderr, "[lcp]    worker utilization = %.1f%% (busy / (busy+idle)); reader vs workers: %s-bound\n",
+                 100.0 * wb_s / (wb_s + wi_s + 1e-9),
+                 wi_s > qf_s * 2 ? "reader(inflate)" : qf_s > wi_s * 2 ? "worker(LCP)" : "balanced");
     reads_n_out = nr_n.load(); reads_t_out = nr_t.load();
 }
 
@@ -251,25 +291,37 @@ void run_lcp(const std::string& normal_fq, const std::string& tumor_fq, const st
     for (const auto& p : ns) shards.push_back({p, 0});
     for (const auto& p : ts) shards.push_back({p, 1});
     std::fprintf(stderr, "[lcp] normal=%zu shards, tumor=%zu shards, threads=%d\n", ns.size(), ts.size(), threads);
+    Tic tic("lcp");
     std::vector<SigCol> sigs; std::mutex smtx;
     std::vector<SEdge> edges; std::mutex emtx;
     uint64_t nr_n = 0, nr_t = 0;
     run_pool(shards, level, flank, margin, threads, sigs, smtx, edges, emtx, nr_n, nr_t);
+    tic.mark("pool");
+    std::fprintf(stderr, "[lcp]    sigs raw=%lu (%.1f GB)  edges raw=%lu (%.1f GB)\n",
+                 (unsigned long)sigs.size(), sigs.size() * sizeof(SigCol) / 1e9,
+                 (unsigned long)edges.size(), edges.size() * sizeof(SEdge) / 1e9);
     radix_sort_sigs(sigs);
+    tic.mark("radix_sigs");
     std::vector<SigCount> nodes; reduce_sigs(sigs, nodes);
+    tic.mark("reduce_sigs");
     std::vector<SigCol>().swap(sigs);
     radix_sort_edges(edges);
+    tic.mark("radix_edges");
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    tic.mark("dedup_edges");
     const std::string cp = dir + "/counts.bin", ep = dir + "/edges.bin";
     FILE* fc = xopen(cp + ".tmp", "wb"); uint64_t N = nodes.size(); wr(fc, &N, 8); wr(fc, nodes.data(), N * sizeof(SigCount)); atomic_close(fc, cp + ".tmp", cp);
     FILE* fe = xopen(ep + ".tmp", "wb"); uint64_t M = edges.size(); wr(fe, &M, 8); wr(fe, edges.data(), M * sizeof(SEdge)); atomic_close(fe, ep + ".tmp", ep);
+    tic.mark("write");
     std::fprintf(stderr, "[lcp] normal_reads=%lu tumor_reads=%lu distinct_sigs=%lu edges=%lu -> %s/{counts,edges}.bin\n",
                  (unsigned long)nr_n, (unsigned long)nr_t, (unsigned long)N, (unsigned long)M, dir.c_str());
 }
 
 // ---- stage 2: prune + colour + resolve edges ----
 void run_graph(const std::string& dir, int min_mult) {
+    Tic tic("graph");
     FILE* fc = xopen(dir + "/counts.bin", "rb"); uint64_t N; rd(fc, &N, 8); std::vector<SigCount> nodes(N); rd(fc, nodes.data(), N * sizeof(SigCount)); std::fclose(fc);
+    tic.mark("read_counts");
     std::unordered_map<uint64_t, uint32_t> id; id.reserve(N);
     std::vector<uint8_t> color; std::vector<uint32_t> ncov, tcov;
     for (const SigCount& c : nodes) {
@@ -277,33 +329,42 @@ void run_graph(const std::string& dir, int min_mult) {
         id.emplace(c.sig, (uint32_t)color.size());
         color.push_back(c.n && c.t ? 3 : c.n ? 1 : 2); ncov.push_back(c.n); tcov.push_back(c.t);
     }
+    tic.mark("prune+colour");
     const uint64_t kept = color.size();
     std::vector<SigCount>().swap(nodes);
     FILE* fe = xopen(dir + "/edges.bin", "rb"); uint64_t M; rd(fe, &M, 8); std::vector<SEdge> se(M); rd(fe, se.data(), M * sizeof(SEdge)); std::fclose(fe);
+    tic.mark("read_edges");
     std::vector<IEdge> ie; ie.reserve(M);
     for (const SEdge& e : se) {
         auto a = id.find(e.first), b = id.find(e.second);
         if (a != id.end() && b != id.end() && a->second != b->second)
             ie.push_back(a->second < b->second ? IEdge(a->second, b->second) : IEdge(b->second, a->second));
     }
+    tic.mark("resolve_edges");
     std::sort(ie.begin(), ie.end()); ie.erase(std::unique(ie.begin(), ie.end()), ie.end());
+    tic.mark("sort+dedup");
     const std::string gp = dir + "/graph.bin";
     FILE* fg = xopen(gp + ".tmp", "wb"); uint64_t K = kept; wr(fg, &K, 8);
     wr(fg, color.data(), K); wr(fg, ncov.data(), K * 4); wr(fg, tcov.data(), K * 4);
     uint64_t E = ie.size(); wr(fg, &E, 8); wr(fg, ie.data(), E * sizeof(IEdge)); atomic_close(fg, gp + ".tmp", gp);
+    tic.mark("write");
     std::fprintf(stderr, "[graph] min_mult=%d kept_nodes=%lu of %lu edges=%lu -> %s/graph.bin\n",
                  min_mult, (unsigned long)kept, (unsigned long)N, (unsigned long)E, dir.c_str());
 }
 
 // ---- stage 3: decompose into bubbles ----
 void run_bubbles(const std::string& dir, const std::string& out_tsv) {
+    Tic tic("bubbles");
     FILE* fg = xopen(dir + "/graph.bin", "rb"); uint64_t K; rd(fg, &K, 8);
     std::vector<uint8_t> color(K); rd(fg, color.data(), K);
     std::vector<uint32_t> ncov(K), tcov(K); rd(fg, ncov.data(), K * 4); rd(fg, tcov.data(), K * 4);
     uint64_t E; rd(fg, &E, 8); std::vector<IEdge> ie(E); rd(fg, ie.data(), E * sizeof(IEdge)); std::fclose(fg);
+    tic.mark("read_graph");
     std::vector<std::vector<int32_t>> adj(K);
     for (const IEdge& e : ie) { adj[e.first].push_back((int32_t)e.second); adj[e.second].push_back((int32_t)e.first); }
+    tic.mark("build_adj");
     std::vector<CortexBubble> out; decompose(adj, color, ncov, tcov, out);
+    tic.mark("bfs_decomp");
     FILE* f = xopen(out_tsv, "w"); std::fputs("type\tn_nodes\tnormal_cov\ttumor_cov\n", f);
     int nd = 0, ni = 0, nc = 0;
     for (const CortexBubble& b : out) {
@@ -312,5 +373,6 @@ void run_bubbles(const std::string& dir, const std::string& out_tsv) {
         std::fprintf(f, "%s\t%u\t%lu\t%lu\n", t, b.n_nodes, (unsigned long)b.normal_cov, (unsigned long)b.tumor_cov);
     }
     std::fclose(f);
+    tic.mark("write_tsv");
     std::fprintf(stderr, "[bubbles] %zu bubbles  DEL(normal-only)=%d INS(somatic)=%d CPLX=%d -> %s\n", out.size(), nd, ni, nc, out_tsv.c_str());
 }

@@ -179,6 +179,70 @@ Conclusion: **on this workload, the brute-force parallelism path plateaus around
 beyond that, algorithmic changes are required (e.g. minimizer-space sketching like
 rust-mdbg, or reverse-complement signature canonicalization to halve the work upstream).
 
+## 5. Per-phase timing (2026-06-02, WG 8 threads, lcp-cortex-merged)
+
+Run was instrumented with `Tic` wall-clock marks at every stage boundary inside `run_lcp` /
+`run_graph` / `run_bubbles`, plus aggregate per-reader / per-worker accounting in `run_pool`
+(busy ns, idle ns, queue-full-wait ns). Same inputs as §1: two `hifi.fastq.gz`, 29 GB each.
+
+| phase | wall | % of total | threads doing work |
+|---|---:|---:|---|
+| **lcp**: reader+worker pool | **444.86 s** | 61.4% | **7.56 / 8 (94.5%)** |
+| **lcp**: radix-sort sigs (2.59 B records, 41.5 GB) | 63.58 s | 8.8% | 1 |
+| **lcp**: reduce sigs → SigCount | 9.25 s | 1.3% | 1 |
+| **lcp**: radix-sort edges (2.58 B records, 41.3 GB) | 127.77 s | 17.6% | 1 |
+| **lcp**: dedup edges | 2.79 s | 0.4% | 1 |
+| **lcp**: write counts.bin + edges.bin | 2.35 s | 0.3% | 1 |
+| **graph**: read counts.bin | 1.83 s | 0.3% | 1 |
+| **graph**: prune+colour | 12.34 s | 1.7% | 1 |
+| **graph**: read edges.bin | 2.49 s | 0.3% | 1 |
+| **graph**: resolve edges (sig→id hashmap lookup) | 27.02 s | 3.7% | 1 |
+| **graph**: sort+dedup id-edges | 1.10 s | 0.2% | 1 |
+| **graph**: write graph.bin | 0.19 s | 0.0% | 1 |
+| **bubbles**: read graph.bin | 0.18 s | 0.0% | 1 |
+| **bubbles**: build adjacency list | 13.76 s | 1.9% | 1 |
+| **bubbles**: BFS connected-components | 0.19 s | 0.0% | 1 |
+| **bubbles**: write bubbles.tsv | 0.01 s | 0.0% | 1 |
+| **total wall** | **725 s = 12:05** | 100% | 467% avg = 4.67 effective cores |
+
+### What the 467% average actually hides
+
+Inside the **444 s pool phase** the picture is good:
+
+- Workers (`process_read`: LCP + sig + edge collect) sum to 2516.6 s across 6 workers — that's
+  **5.67 effective cores**, ~100% per-worker utilization (worker-idle = 0.1 s total).
+- Readers wall-time sum is 838.7 s across 2 readers = **1.89 effective cores** — 95% per
+  reader. **266 s of that was `queue-full` wait** (32% of reader wall): readers can produce
+  faster than workers consume. So inflate is *not* the bottleneck; LCP work is.
+- Pool effective cores = 5.67 + 1.89 = **7.56 / 8 = 94.5% utilization**.
+
+Everything after the pool (~287 s) is **single-threaded**:
+
+- 192 s of radix-sort on the 41 GB SigCol and 41 GB SEdge vectors (memory-bandwidth-bound,
+  8 sequential passes × 41 GB read+write each ≈ 64 s/pass × 8 = 512 GB of memory traffic).
+- 14 s reduce / dedup / write.
+- 45 s graph stage (resolve_edges sig→id hashmap is the bulk).
+- 14 s bubbles stage (build_adj is the bulk).
+
+Averaged: `(444 s × 7.56 cores + 287 s × 1 core) / 725 s wall = 5.02 effective cores`,
+matching the observed 467%. **The "low CPU%" is entirely the 287 s of serial tail.**
+
+### What this implies for next round
+
+The merge phase is the clearest target — 287 s × 7 idle cores = ~2000 core-seconds left on
+the floor. Two ways to attack it (deferred until after E2E call accuracy is sorted):
+
+1. **Parallel radix sort.** Each pass partitions chunks across threads (count-then-scatter
+   with per-thread offsets). Memory bandwidth is shared so it won't be 8×, but ~3-4×
+   reduction on the 192 s sort phase is realistic → cuts 287 s → ~150 s, total 12:05 → ~9:35.
+2. **Bypass the sort.** Workers emit to **256 thread-local partition buffers** (`sig & 0xFF`)
+   instead of one flat vector. At end-of-pool, 8 reducer threads each handle 32 shards,
+   producing the final `SigCount`s in parallel. No global sort, no 41 GB monolithic
+   vector → also cuts peak RAM. The "real" algorithmic fix and a partial reprise of the
+   shard-map idea, but with **no per-emit locks** (each worker has its own 256 vectors).
+
+Same shape for the edge merge.
+
 ## How to reproduce
 
 ```
