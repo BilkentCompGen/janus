@@ -7,3 +7,11 @@ __pycache__
 lib
 simulation
 outputs
+build
+/svp
+
+# experiment/throwaway analysis (not part of the tracked implementation)
+tools
+docs/analysis
+experiments
+scripts/fakebin

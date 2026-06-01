@@ -20,25 +20,9 @@ void read_fasta_flat(const std::string& path, int flank, std::string& out, std::
         }
         size_t n = std::strlen(line);
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) n--;
+        for (size_t k = 0; k < n; k++) if (line[k] >= 'a' && line[k] <= 'z') line[k] -= 32;  // uppercase: signatures must be case-insensitive (soft-masking transparent, like lcptools cores)
         out.append(line, n);
     }
     if (in_record) rec_end.push_back(out.size());
     gzclose(f);
-}
-
-static void emit_seq(FILE* f, std::string_view s) {
-    if (s.empty()) std::fputc('.', f);
-    else std::fwrite(s.data(), 1, s.size(), f);
-}
-
-void write_bubbles(const std::string& path, const std::vector<Bubble>& bubs) {
-    FILE* f = std::fopen(path.c_str(), "w");
-    if (!f) { std::fprintf(stderr, "[FATAL] fopen %s\n", path.c_str()); std::abort(); }
-    std::fputs("#type\tn_start\tn_end\tt_start\tt_end\tn_seq\tt_seq\n", f);
-    for (const Bubble& b : bubs) {
-        std::fprintf(f, "%s\t%lu\t%lu\t%lu\t%lu\t", b.type, (unsigned long)b.n_start, (unsigned long)b.n_end, (unsigned long)b.t_start, (unsigned long)b.t_end);
-        emit_seq(f, b.n_seq); std::fputc('\t', f);
-        emit_seq(f, b.t_seq); std::fputc('\n', f);
-    }
-    std::fclose(f);
 }
