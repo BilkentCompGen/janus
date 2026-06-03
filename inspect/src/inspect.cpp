@@ -941,14 +941,13 @@ void emit_meta(const Subgraph& raw, const Subgraph& mA, const Subgraph& mB,
     }
     std::fprintf(f, "  ],\n");
 
-    // Extra key-value pairs
+    // Extra key-value pairs (each terminated by comma+newline so they slot in cleanly)
     for (size_t i = 0; i < extra_kv.size(); i++) {
-        std::fprintf(f, "  \"%s\": %s%s\n",
-                     extra_kv[i].first.c_str(), extra_kv[i].second.c_str(),
-                     i + 1 < extra_kv.size() ? "," : "");
+        std::fprintf(f, "  \"%s\": %s,\n",
+                     extra_kv[i].first.c_str(), extra_kv[i].second.c_str());
     }
 
-    std::fprintf(f, "  ,\n  \"warnings\": [");
+    std::fprintf(f, "  \"warnings\": [");
     for (size_t i = 0; i < warnings.size(); i++) {
         std::fprintf(f, "%s\"%s\"", i ? ", " : "", warnings[i].c_str());
     }
@@ -1007,19 +1006,93 @@ void pick_bubbles_by_region(const std::vector<Bubble>& bubs,
 
 }  // namespace
 
+// Process one query (one of: "bubble <id>", "region <chr>:<lo>-<hi>", "sv <vcf> <id>").
+// Args:  cmd ∈ {bubble,region,sv}, arg3, arg4 (used by sv). Returns 0 on success.
+int process_query(const std::string& cmd, const std::string& arg3, const std::string& arg4,
+                  const std::string& dir,
+                  const std::vector<Bubble>& bubs,
+                  const std::vector<std::vector<int32_t>>& adj,
+                  const Graph& g,
+                  const std::vector<uint64_t>& node_to_sig,
+                  const Posmap& pm,
+                  const Seqs& seqs,
+                  const PosIndex& pos_index) {
+    std::vector<uint32_t> targets;
+    std::string key;
+    std::vector<std::pair<std::string, std::string>> extra_kv;
+
+    if (cmd == "bubble") {
+        uint32_t bid = (uint32_t)std::stoul(arg3);
+        if (bid >= bubs.size()) { std::fprintf(stderr, "[inspect] bubble id out of range: %u\n", bid); return 1; }
+        targets.push_back(bid);
+        key = "bubble_" + arg3;
+    } else if (cmd == "region") {
+        auto colon = arg3.find(':');
+        auto dash = arg3.find('-');
+        if (colon == std::string::npos || dash == std::string::npos) {
+            std::fprintf(stderr, "[inspect] region format chr:start-end\n"); return 1;
+        }
+        std::string chrom = arg3.substr(0, colon);
+        uint32_t lo = (uint32_t)std::stoul(arg3.substr(colon + 1, dash - colon - 1));
+        uint32_t hi = (uint32_t)std::stoul(arg3.substr(dash + 1));
+        pick_bubbles_by_region(bubs, node_to_sig, pm, chrom, lo, hi, targets);
+        key = "region_" + sanitize(arg3);
+    } else if (cmd == "sv") {
+        std::vector<TruthRec> truth;
+        load_truth(arg3, truth);
+        const TruthRec* found = nullptr;
+        for (const auto& r : truth) if (r.sv_id == arg4) { found = &r; break; }
+        if (!found) { std::fprintf(stderr, "[inspect] sv_id not in truth VCF: %s\n", arg4.c_str()); return 1; }
+        uint32_t lo = found->pos > 500 ? found->pos - 500 : 0;
+        uint32_t hi = found->end + 500;
+        pick_bubbles_by_region(bubs, node_to_sig, pm, found->chrom, lo, hi, targets);
+        key = "sv_" + arg4;
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "{\"chrom\": \"%s\", \"pos\": %u, \"end\": %u, \"svtype\": \"%s\", \"svlen\": %d}",
+                      found->chrom.c_str(), found->pos, found->end, found->svtype.c_str(), found->svlen);
+        extra_kv.emplace_back("truth_sv", buf);
+    } else { std::fprintf(stderr, "[inspect] unknown subcmd: %s\n", cmd.c_str()); return 1; }
+
+    if (targets.empty()) { std::fprintf(stderr, "[inspect] no bubbles matched for %s\n", key.c_str()); return 2; }
+    std::fprintf(stderr, "[inspect] %s: %zu bubble(s)\n", key.c_str(), targets.size());
+
+    mkdir_p(dir + "/inspect");
+    std::string out_dir = dir + "/inspect/" + key;
+    mkdir_p(out_dir);
+
+    Subgraph raw;
+    build_subgraph(bubs, targets, adj, g.color, g.ncov, g.tcov, node_to_sig, pm, seqs, pos_index, raw);
+    emit_gfa(raw, out_dir + "/raw.gfa", false);
+
+    std::vector<std::string> warnings;
+    Subgraph mA; run_mode_a(raw, mA, warnings);
+    emit_gfa(mA, out_dir + "/modeA.gfa", false);
+
+    Subgraph mB; run_mode_b(mA, mB, warnings);
+    emit_gfa(mB, out_dir + "/modeB.gfa", true);
+
+    emit_meta(raw, mA, mB, bubs, targets, pm, warnings, key, out_dir + "/meta.json", extra_kv);
+    std::fprintf(stderr, "[inspect]   raw=%zu modeA=%zu modeB=%zu  -> %s\n",
+                 raw.nodes.size(), mA.nodes.size(), mB.nodes.size(), out_dir.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr,
                      "usage:\n"
                      "  %s <dir> bubble <id>\n"
-                     "  %s <dir> region <chr>:<start>-<end>\n"
-                     "  %s <dir> sv     <truth_vcf> <sv_id>\n",
-                     argv[0], argv[0], argv[0]);
+                     "  %s <dir> region <chr>:<lo>-<hi>\n"
+                     "  %s <dir> sv <vcf> <sv_id>\n"
+                     "  %s <dir> batch <queries_file>\n"
+                     "    queries_file: one query per line, e.g.:\n"
+                     "      sv <vcf> <id>\n"
+                     "      region <chr>:<lo>-<hi>\n"
+                     "      bubble <id>\n", argv[0], argv[0], argv[0], argv[0]);
         return 1;
     }
     const std::string dir = argv[1];
     const std::string subcmd = argv[2];
-    const std::string arg3 = argv[3];
 
     std::fprintf(stderr, "[inspect] loading graph.bin + posmap.bin + counts.bin + seqs.bin (slow) ...\n");
     Graph g;       load_graph(dir + "/graph.bin", g);
@@ -1047,69 +1120,41 @@ int main(int argc, char** argv) {
     decompose_with_ids(adj, g.color, bubs);
     std::fprintf(stderr, "[inspect]   decompose: %zu bubbles\n", bubs.size());
 
-    // Resolve target bubble(s)
-    std::vector<uint32_t> targets;
-    std::string key;
-    std::vector<std::pair<std::string, std::string>> extra_kv;
+    if (subcmd == "batch") {
+        const std::string qfile = argv[3];
+        std::ifstream qf(qfile);
+        if (!qf) die("cannot open batch queries file");
+        std::string line;
+        int n_done = 0, n_fail = 0;
+        while (std::getline(qf, line)) {
+            // trim leading/trailing whitespace
+            size_t a = line.find_first_not_of(" \t\r\n");
+            size_t b = line.find_last_not_of(" \t\r\n");
+            if (a == std::string::npos || line[a] == '#') continue;
+            line = line.substr(a, b - a + 1);
+            // tokenize on whitespace
+            std::vector<std::string> tok;
+            size_t i = 0;
+            while (i < line.size()) {
+                while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) i++;
+                size_t j = i;
+                while (j < line.size() && line[j] != ' ' && line[j] != '\t') j++;
+                if (j > i) tok.push_back(line.substr(i, j - i));
+                i = j;
+            }
+            if (tok.empty()) continue;
+            std::string cmd = tok[0];
+            std::string a3 = tok.size() > 1 ? tok[1] : "";
+            std::string a4 = tok.size() > 2 ? tok[2] : "";
+            int rc = process_query(cmd, a3, a4, dir, bubs, adj, g, node_to_sig, pm, seqs, pos_index);
+            if (rc == 0) n_done++; else n_fail++;
+        }
+        std::fprintf(stderr, "[inspect] batch done: %d ok, %d failed\n", n_done, n_fail);
+        return 0;
+    }
 
-    if (subcmd == "bubble") {
-        uint32_t bid = (uint32_t)std::stoul(arg3);
-        if (bid >= bubs.size()) die("bubble id out of range");
-        targets.push_back(bid);
-        key = "bubble_" + arg3;
-    } else if (subcmd == "region") {
-        auto colon = arg3.find(':');
-        auto dash = arg3.find('-');
-        if (colon == std::string::npos || dash == std::string::npos) die("region format chr:start-end");
-        std::string chrom = arg3.substr(0, colon);
-        uint32_t lo = (uint32_t)std::stoul(arg3.substr(colon + 1, dash - colon - 1));
-        uint32_t hi = (uint32_t)std::stoul(arg3.substr(dash + 1));
-        pick_bubbles_by_region(bubs, node_to_sig, pm, chrom, lo, hi, targets);
-        key = "region_" + sanitize(arg3);
-    } else if (subcmd == "sv") {
-        if (argc < 5) die("sv requires <truth_vcf> <sv_id>");
-        std::string vcf = arg3, sv_id = argv[4];
-        std::vector<TruthRec> truth;
-        load_truth(vcf, truth);
-        const TruthRec* found = nullptr;
-        for (const auto& r : truth) if (r.sv_id == sv_id) { found = &r; break; }
-        if (!found) die("sv_id not in truth VCF");
-        // Pick bubbles in [found.pos - 500, found.end + 500] on found.chrom
-        uint32_t lo = found->pos > 500 ? found->pos - 500 : 0;
-        uint32_t hi = found->end + 500;
-        pick_bubbles_by_region(bubs, node_to_sig, pm, found->chrom, lo, hi, targets);
-        key = "sv_" + sv_id;
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "{\"chrom\": \"%s\", \"pos\": %u, \"end\": %u, \"svtype\": \"%s\", \"svlen\": %d}",
-                      found->chrom.c_str(), found->pos, found->end, found->svtype.c_str(), found->svlen);
-        extra_kv.emplace_back("truth_sv", buf);
-    } else die("unknown subcmd");
-
-    if (targets.empty()) { std::fprintf(stderr, "[inspect] no bubbles matched\n"); return 2; }
-    std::fprintf(stderr, "[inspect] targets: %zu bubble(s)\n", targets.size());
-
-    mkdir_p(dir + "/inspect");
-    std::string out_dir = dir + "/inspect/" + key;
-    mkdir_p(out_dir);
-
-    Subgraph raw;
-    build_subgraph(bubs, targets, adj, g.color, g.ncov, g.tcov, node_to_sig, pm, seqs, pos_index, raw);
-    std::fprintf(stderr, "[inspect] subgraph: %zu nodes, %zu edges\n", raw.nodes.size(), raw.edges.size());
-
-    emit_gfa(raw, out_dir + "/raw.gfa", false);
-
-    std::vector<std::string> warnings;
-    Subgraph mA;
-    run_mode_a(raw, mA, warnings);
-    std::fprintf(stderr, "[inspect] mode A: %zu super-nodes, %zu edges\n", mA.nodes.size(), mA.edges.size());
-    emit_gfa(mA, out_dir + "/modeA.gfa", false);
-
-    Subgraph mB;
-    run_mode_b(mA, mB, warnings);
-    std::fprintf(stderr, "[inspect] mode B: %zu segments after refinement\n", mB.nodes.size());
-    emit_gfa(mB, out_dir + "/modeB.gfa", true);
-
-    emit_meta(raw, mA, mB, bubs, targets, pm, warnings, key, out_dir + "/meta.json", extra_kv);
-    std::fprintf(stderr, "[inspect] wrote %s/{raw,modeA,modeB}.gfa + meta.json\n", out_dir.c_str());
-    return 0;
+    // Single-query mode (bubble / region / sv)
+    const std::string arg3 = argv[3];
+    const std::string arg4 = argc > 4 ? argv[4] : "";
+    return process_query(subcmd, arg3, arg4, dir, bubs, adj, g, node_to_sig, pm, seqs, pos_index);
 }
