@@ -189,17 +189,53 @@ def plot_topology(nodes, edges, pos, deadends, out_path: str, meta: dict):
     plt.close(fig)
 
 
-# ---------- Linear layout (Mode B only) ----------
+# ---------- Linear layout (Mode B) ----------
+def _dr_color(dr):
+    """Map DR (depth ratio) ∈ [1, 2] to a grey→red gradient."""
+    if dr is None or dr < 1.0: return "#8E8E8E"
+    if dr >= 2.0: return "#cc0000"
+    f = (dr - 1.0)  # 0..1
+    # interpolate grey (#8E8E8E) → red (#cc0000)
+    r = int(0x8E + f * (0xcc - 0x8E))
+    g = int(0x8E + f * (0x00 - 0x8E))
+    b = int(0x8E + f * (0x00 - 0x8E))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _dr_value(d):
+    if "DR" not in d["tags"]: return None
+    try: return float(d["tags"]["DR"][1])
+    except Exception: return None
+
+
 def plot_linear(nodes, edges, out_path: str, meta: dict):
-    # Identify L_anchor and R_anchor: the two CL=SHARED nodes with PS:Z, by leftmost/rightmost pos
+    # Detect DUP signal from meta.json
+    dup_hint = False
+    dup_estimate = 0
+    cycles_count = len(meta.get("cycles", []))
+    if meta.get("modeB_calls"):
+        for c in meta["modeB_calls"]:
+            if c.get("dup_hint"):
+                dup_hint = True
+                dup_estimate = c.get("dup_size_estimate_bp", 0)
+                break
+
+    # If a clear allele-comparison is available (2 SHARED nodes with PS:Z AND a
+    # non-EQ sv_tag), render the side-by-side track layout. Otherwise fall back
+    # to a single-track display of every segment in modeB.gfa with DR coloring —
+    # this is what makes the DUP / EQ case visible.
     anchors = []
     for n, d in nodes.items():
         if tag_str(d, "CL") == "SHARED":
             ps = tag_str(d, "PS")
             if ps:
-                # PS:Z:<chrom>:<start>-<end>:<strand>
                 anchors.append((n, ps))
     anchors.sort(key=lambda x: int(x[1].split(":")[1].split("-")[0]) if ":" in x[1] else 0)
+
+    sv_tag = (meta.get("modeB_calls", [{}])[0] or {}).get("sv_tag", "?") if meta.get("modeB_calls") else "?"
+    if len(anchors) < 2 or sv_tag in ("EQ",) or dup_hint:
+        plot_linear_singletrack(nodes, edges, out_path, meta, dup_hint, dup_estimate, cycles_count)
+        return
 
     # Identify N-segment and T-segment per bubble
     n_segs = [n for n, d in nodes.items() if tag_str(d, "CL") == "NORMAL" and d["seq"] != "*" and d["seq"]]
@@ -274,6 +310,84 @@ def plot_linear(nodes, edges, out_path: str, meta: dict):
         c = meta["modeB_calls"][0]
         title += f"  |  SV={c.get('sv_tag','?')}  dN={c.get('diff_n','?')}  dT={c.get('diff_t','?')}"
     ax.set_title(title, fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close(fig)
+
+
+# ---------- Single-track linear layout (used for DUP / EQ / single-anchor cases) ----------
+def plot_linear_singletrack(nodes, edges, out_path: str, meta: dict,
+                            dup_hint: bool, dup_estimate: float, cycles_count: int):
+    # Order segments roughly by graph walk starting at the leftmost SHARED+PS anchor
+    # (or arbitrary if none). One row per segment, colored by CL with DR-derived
+    # shading for SHARED nodes.
+    adj = collections.defaultdict(set)
+    for a, b in edges:
+        adj[a].add(b); adj[b].add(a)
+    # Try to find a path order via BFS from a CL=SHARED node with PS
+    start = None
+    for n, d in nodes.items():
+        if tag_str(d, "CL") == "SHARED" and tag_str(d, "PS"):
+            start = n; break
+    if start is None:
+        start = sorted(nodes.keys())[0] if nodes else None
+    order = []
+    if start is not None:
+        seen = {start}
+        q = collections.deque([start])
+        while q:
+            u = q.popleft()
+            order.append(u)
+            for v in sorted(adj[u]):
+                if v not in seen:
+                    seen.add(v); q.append(v)
+        for n in nodes:
+            if n not in seen: order.append(n)
+
+    fig, ax = plt.subplots(figsize=(13, max(3.5, 0.45 * len(order) + 1)), dpi=160)
+    x = 0
+    for i, n in enumerate(order):
+        d = nodes[n]
+        ln = tag_int(d, "LN")
+        cl = tag_str(d, "CL")
+        dr = _dr_value(d)
+        if cl == "SHARED":
+            face = _dr_color(dr)
+        else:
+            face = color_for_label(cl)
+        ax.add_patch(mpatches.Rectangle((x, -0.4), ln, 0.8,
+                                        facecolor=face, edgecolor="#222"))
+        label = f"{n} {ln}bp"
+        if cl == "SHARED" and dr is not None:
+            label += f"\nDR={dr:.2f}"
+        ax.text(x + ln / 2, 0, label, ha="center", va="center", fontsize=7,
+                color="white" if cl != "SHARED" or (dr is not None and dr > 1.5) else "black")
+        x += ln + 20  # small spacer
+
+    ax.set_xlim(-20, max(x, 100))
+    ax.set_ylim(-2, 2)
+    ax.set_yticks([])
+    ax.set_xlabel("bp (segments concatenated; gaps are visual spacers, not real)")
+
+    title = meta.get("key", "?")
+    if "truth_sv" in meta:
+        tsv = meta["truth_sv"]
+        title += f"  |  TRUTH {tsv.get('svtype','?')} {tsv.get('svlen',0)} bp"
+    title += f"   |   cycles: {cycles_count}"
+    if dup_hint:
+        title += f"   |   DUP-hint dup_size≈{dup_estimate:.0f} bp"
+    ax.set_title(title, fontsize=10)
+
+    # Legend with DR gradient
+    handles = [
+        mpatches.Patch(color=color_for_label("NORMAL"), label="NORMAL"),
+        mpatches.Patch(color=color_for_label("TUMOR"),  label="TUMOR"),
+        mpatches.Patch(color="#8E8E8E", label="SHARED DR=1.0 (normal coverage)"),
+        mpatches.Patch(color="#cc6666", label="SHARED DR=1.5"),
+        mpatches.Patch(color="#cc0000", label="SHARED DR≥2.0 (duplicated)"),
+    ]
+    ax.legend(handles=handles, loc="upper right", fontsize=8)
 
     plt.tight_layout()
     plt.savefig(out_path)
