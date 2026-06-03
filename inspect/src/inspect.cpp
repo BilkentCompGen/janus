@@ -179,19 +179,29 @@ struct Subgraph {
     std::vector<SubNode> nodes;             // indexed 0..nodes.size()-1
     std::vector<std::pair<uint32_t, uint32_t>> edges;  // (i, j) into nodes[]
     std::unordered_map<uint32_t, uint32_t> orig_to_sub;  // orig node_id → sub index
-    // Per-target-bubble info (for Mode B)
+    // Per-target-bubble info (for Mode B grouping)
     struct BubbleInfo {
         char type;
         std::vector<uint32_t> interior_sub_ids;     // sub-indexes (color != 3) inside the bubble
         std::vector<uint32_t> anchor_sub_ids;       // sub-indexes (color == 3) adjacent to interior
         uint32_t bubble_id_orig;
-        // Filled by Mode B:
-        uint32_t L_sub_id = UINT32_MAX, R_sub_id = UINT32_MAX;
-        uint32_t diff_n = 0, diff_t = 0;
-        std::string sv_tag;  // EQ/D/I/S/C
-        uint32_t absorbed_prefix = 0, absorbed_suffix = 0;
     };
     std::vector<BubbleInfo> bubbles;
+    // Per-super-bubble Mode B classification (multiple bubbles sharing the same (L,R) anchor pair
+    // are merged into one super-bubble before allele-difference resolution).
+    struct SuperBubble {
+        uint32_t L_sub_id, R_sub_id;
+        std::vector<uint32_t> bubble_ids_orig;     // contributing bubble_id from the WG decompose
+        std::vector<uint32_t> n_path;              // path sub-ids L→...→R through color=1 or 3
+        std::vector<uint32_t> t_path;              // path sub-ids L→...→R through color=2 or 3
+        std::string n_allele;                      // overlap-merged normal allele
+        std::string t_allele;                      // overlap-merged tumor allele
+        size_t shared_prefix = 0, shared_suffix = 0;
+        uint32_t diff_n = 0, diff_t = 0;
+        std::string sv_tag;                        // EQ / D / I / S / C / ?
+        bool rc_applied = false;                   // T-allele was reverse-complemented (INV case)
+    };
+    std::vector<SuperBubble> super_bubbles;
 };
 
 void build_subgraph(const std::vector<Bubble>& bubs,
@@ -286,8 +296,12 @@ void merge_node_into_chain(std::string& chain, std::vector<uint32_t>& members,
                            uint32_t& ncov_sum, uint32_t& tcov_sum,
                            const SubNode& next, std::vector<std::string>& warnings,
                            bool& merge_ok) {
-    size_t k = suffix_prefix_overlap(chain, next.seq);
-    if (k == 0) {
+    // Bidirectional overlap: the chain walk picks a direction arbitrarily, but the
+    // genome-order of the two LCP-cores can be either way. Try both A.suffix-B.prefix
+    // AND B.suffix-A.prefix; take whichever gives the longer exact match.
+    const size_t kf = suffix_prefix_overlap(chain, next.seq);
+    const size_t kr = suffix_prefix_overlap(next.seq, chain);
+    if (kf == 0 && kr == 0) {
         merge_ok = false;
         std::ostringstream os;
         os << "no_overlap between members ";
@@ -296,7 +310,14 @@ void merge_node_into_chain(std::string& chain, std::vector<uint32_t>& members,
         warnings.push_back(os.str());
         return;
     }
-    chain.append(next.seq, k, next.seq.size() - k);
+    if (kf >= kr) {
+        chain.append(next.seq, kf, next.seq.size() - kf);
+    } else {
+        // Reverse-order: next.seq comes BEFORE the current chain in the genome.
+        // Prepend next.seq to chain (using kr-byte overlap from next's suffix into chain's prefix).
+        std::string new_chain = next.seq + chain.substr(kr);
+        chain = std::move(new_chain);
+    }
     members.push_back(next.node_id);
     ncov_sum += next.ncov;
     tcov_sum += next.tcov;
@@ -469,115 +490,170 @@ std::string reverse_complement(const std::string& s) {
     return r;
 }
 
+// Bidirectional overlap concat: try both A.suffix-B.prefix and B.suffix-A.prefix,
+// take whichever finds the longer exact byte match. If neither finds a positive
+// overlap, fall back to plain concat (logged as a no-overlap warning).
+std::string concat_bidir(const std::string& A, const std::string& B,
+                         const std::string& ctx, std::vector<std::string>& warnings) {
+    if (A.empty()) return B;
+    if (B.empty()) return A;
+    size_t kf = suffix_prefix_overlap(A, B);
+    size_t kr = suffix_prefix_overlap(B, A);
+    if (kf == 0 && kr == 0) {
+        warnings.push_back("concat no-overlap (" + ctx + ")");
+        return A + B;
+    }
+    if (kf >= kr) return A + B.substr(kf);
+    // Reverse-order win: B comes before A in the genome direction
+    return B + A.substr(kr);
+}
+
+// BFS L→R through allowed nodes. allowed_color: 1 (normal+anchors) or 2 (tumor+anchors).
+// Anchors (color=3) are always allowed; interior nodes must match allowed_color.
+std::vector<uint32_t> walk_color_path(uint32_t L_sub, uint32_t R_sub,
+                                     const Subgraph& sg,
+                                     const std::vector<std::vector<uint32_t>>& adj,
+                                     uint8_t allowed_color) {
+    if (L_sub == R_sub) return {L_sub};
+    const size_t N = sg.nodes.size();
+    std::vector<int32_t> parent(N, -1);
+    parent[L_sub] = (int32_t)L_sub;
+    std::queue<uint32_t> q; q.push(L_sub);
+    while (!q.empty()) {
+        uint32_t u = q.front(); q.pop();
+        if (u == R_sub) break;
+        for (uint32_t v : adj[u]) {
+            if (parent[v] != -1) continue;
+            if (v != R_sub) {
+                uint8_t c = sg.nodes[v].color;
+                if (c != 3 && c != allowed_color) continue;
+            }
+            parent[v] = (int32_t)u;
+            q.push(v);
+        }
+    }
+    std::vector<uint32_t> path;
+    if (parent[R_sub] == -1) return path;  // no valid path
+    for (uint32_t u = R_sub; u != L_sub; u = (uint32_t)parent[u]) path.push_back(u);
+    path.push_back(L_sub);
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
+// Merge a path of super-node sequences via bidirectional overlap concat.
+std::string merge_path(const std::vector<uint32_t>& path, const Subgraph& sg,
+                       const std::string& ctx, std::vector<std::string>& warnings) {
+    if (path.empty()) return "";
+    std::string merged = sg.nodes[path[0]].seq;
+    for (size_t i = 1; i < path.size(); i++) {
+        merged = concat_bidir(merged, sg.nodes[path[i]].seq, ctx, warnings);
+    }
+    return merged;
+}
+
+// Mode B v2: group bubbles sharing the same (L, R) anchor pair into super-bubbles,
+// walk N-path and T-path through color-constrained interior, trim shared prefix/suffix,
+// absorb into the anchor super-nodes in place, classify EQ/D/I/S/C.
 void run_mode_b(Subgraph& mA, Subgraph& mB, std::vector<std::string>& warnings) {
-    mB = mA;  // deep copy; we will mutate L_anchor / R_anchor in place + collapse/shrink interior
+    mB = mA;  // deep copy; mutate anchors + collapse interior in place
     const size_t N = mB.nodes.size();
-    // Build adjacency for mB
     std::vector<std::vector<uint32_t>> adj(N);
     for (auto& e : mB.edges) { adj[e.first].push_back(e.second); adj[e.second].push_back(e.first); }
 
+    // Pre-compute (L, R) for each input bubble and group by anchor pair.
+    std::map<std::pair<uint32_t, uint32_t>, Subgraph::SuperBubble> groups;
     for (Subgraph::BubbleInfo& bi : mB.bubbles) {
-        // Identify L, R anchors: pick the two by posmap (leftmost & rightmost coords) if available
         uint32_t L = UINT32_MAX, R = UINT32_MAX;
         uint32_t L_pos = UINT32_MAX, R_pos = 0;
         for (uint32_t a : bi.anchor_sub_ids) {
             const SubNode& sn = mB.nodes[a];
-            if (sn.has_pos) {
-                if (sn.pos_start < L_pos) { L_pos = sn.pos_start; L = a; }
-                if (sn.pos_end > R_pos)   { R_pos = sn.pos_end;   R = a; }
-            }
+            if (!sn.has_pos) continue;
+            if (sn.pos_start < L_pos) { L_pos = sn.pos_start; L = a; }
+            if (sn.pos_end > R_pos)   { R_pos = sn.pos_end;   R = a; }
         }
         if (L == UINT32_MAX || R == UINT32_MAX || L == R) {
-            // No usable anchor pair — skip refinement
-            bi.sv_tag = "?";
-            continue;
-        }
-        bi.L_sub_id = L; bi.R_sub_id = R;
-
-        // Find N-path and T-path interior super-nodes (color != 3)
-        std::vector<uint32_t> n_path, t_path;
-        for (uint32_t i : bi.interior_sub_ids) {
-            if (mB.nodes[i].color == 1) n_path.push_back(i);
-            else if (mB.nodes[i].color == 2) t_path.push_back(i);
-        }
-
-        // For simplicity v1, only handle the common case: exactly 1 N-path super-node
-        // and/or 1 T-path super-node (the most common after Mode A compaction).
-        // Multi-path bubbles get a sv_tag="?" and are left as-is.
-        if (n_path.size() > 1 || t_path.size() > 1) {
-            std::ostringstream os; os << "modeB skip: multi-path bubble id=" << bi.bubble_id_orig
-                                       << " n_path=" << n_path.size() << " t_path=" << t_path.size();
+            std::ostringstream os; os << "no usable anchor pair for bubble " << bi.bubble_id_orig;
             warnings.push_back(os.str());
-            bi.sv_tag = "?";
             continue;
         }
+        auto& sb = groups[{L, R}];
+        sb.L_sub_id = L;
+        sb.R_sub_id = R;
+        sb.bubble_ids_orig.push_back(bi.bubble_id_orig);
+    }
 
-        // Reconstruct alleles
-        // normal_allele = L.seq ⊕ (N_path ? n_path[0].seq : "") ⊕ R.seq   (⊕ = overlap-aware concat)
-        // tumor_allele  = L.seq ⊕ (T_path ? t_path[0].seq : "") ⊕ R.seq
-        auto concat_overlap = [&](const std::string& a, const std::string& b) -> std::string {
-            if (a.empty()) return b;
-            if (b.empty()) return a;
-            size_t k = suffix_prefix_overlap(a, b);
-            if (k == 0) {
-                std::ostringstream os; os << "modeB no_overlap in bubble " << bi.bubble_id_orig;
-                warnings.push_back(os.str());
-                return a + b;  // disconnect signal; emit concat for now (Mode B trim still works)
-            }
-            return a + b.substr(k);
-        };
+    // Classify each super-bubble.
+    for (auto& [key, sb] : groups) {
+        const std::string ctx = "sb L=" + std::to_string(sb.L_sub_id) + " R=" + std::to_string(sb.R_sub_id);
 
-        std::string Lseq = mB.nodes[L].seq;
-        std::string Rseq = mB.nodes[R].seq;
-        std::string Nint = n_path.empty() ? "" : mB.nodes[n_path[0]].seq;
-        std::string Tint = t_path.empty() ? "" : mB.nodes[t_path[0]].seq;
-        std::string nA = concat_overlap(concat_overlap(Lseq, Nint), Rseq);
-        std::string tA = concat_overlap(concat_overlap(Lseq, Tint), Rseq);
+        sb.n_path = walk_color_path(sb.L_sub_id, sb.R_sub_id, mB, adj, /*allowed=*/1);
+        sb.t_path = walk_color_path(sb.L_sub_id, sb.R_sub_id, mB, adj, /*allowed=*/2);
 
-        // strand_mismatch (INV candidate) handling — RC the tumor allele
-        if (mB.nodes[L].has_pos && mB.nodes[R].has_pos &&
-            mB.nodes[L].strand != mB.nodes[R].strand) {
+        // Walk fallback: if no color=1 path exists (e.g., DUP), the normal allele is just L+R
+        // (direct anchor-to-anchor) — reconstructed by overlap-concat below.
+        std::string nA = sb.n_path.empty()
+            ? concat_bidir(mB.nodes[sb.L_sub_id].seq, mB.nodes[sb.R_sub_id].seq, ctx + " n-fallback", warnings)
+            : merge_path(sb.n_path, mB, ctx + " n", warnings);
+        std::string tA = sb.t_path.empty()
+            ? concat_bidir(mB.nodes[sb.L_sub_id].seq, mB.nodes[sb.R_sub_id].seq, ctx + " t-fallback", warnings)
+            : merge_path(sb.t_path, mB, ctx + " t", warnings);
+
+        // INV candidate: anchor strands disagree → RC the tumor allele before trim
+        if (mB.nodes[sb.L_sub_id].has_pos && mB.nodes[sb.R_sub_id].has_pos &&
+            mB.nodes[sb.L_sub_id].strand != mB.nodes[sb.R_sub_id].strand) {
             tA = reverse_complement(tA);
+            sb.rc_applied = true;
         }
 
         size_t p = lcp(nA, tA);
-        size_t s = lcs(nA.substr(p), tA.substr(p));
-        std::string dN = nA.substr(p, nA.size() - p - s);
-        std::string dT = tA.substr(p, tA.size() - p - s);
-        bi.diff_n = (uint32_t)dN.size();
-        bi.diff_t = (uint32_t)dT.size();
-        bi.absorbed_prefix = (uint32_t)(p - std::min(p, Lseq.size()));
-        bi.absorbed_suffix = (uint32_t)(s - std::min(s, Rseq.size()));
+        size_t s = (p < nA.size() && p < tA.size())
+            ? lcs(nA.substr(p), tA.substr(p))
+            : 0;
+        sb.shared_prefix = p;
+        sb.shared_suffix = s;
+        sb.n_allele = nA;
+        sb.t_allele = tA;
 
-        // Classify
-        if (dN.empty() && dT.empty()) bi.sv_tag = "EQ";
-        else if (dT.empty()) bi.sv_tag = "D";
-        else if (dN.empty()) bi.sv_tag = "I";
-        else if (dN.size() == 1 && dT.size() == 1) bi.sv_tag = "S";
-        else bi.sv_tag = "C";
+        std::string dN = (p + s <= nA.size()) ? nA.substr(p, nA.size() - p - s) : "";
+        std::string dT = (p + s <= tA.size()) ? tA.substr(p, tA.size() - p - s) : "";
+        sb.diff_n = (uint32_t)dN.size();
+        sb.diff_t = (uint32_t)dT.size();
 
-        // Update anchor super-nodes IN PLACE to absorb the shared prefix+suffix
-        // Their new sequences become nA[0:p] (== tA[0:p]) and nA[len-s:] respectively.
-        mB.nodes[L].seq = nA.substr(0, p);
-        mB.nodes[R].seq = nA.substr(nA.size() - s, s);
-        // Shrink (or delete) N-path / T-path super-nodes
-        if (!n_path.empty()) {
-            if (dN.empty()) {
-                // Mark for deletion: zero out seq, color stays for now (we'll filter in emit)
-                mB.nodes[n_path[0]].seq.clear();
-                mB.nodes[n_path[0]].label += "_collapsed";
-            } else {
-                mB.nodes[n_path[0]].seq = dN;
+        if (dN.empty() && dT.empty())                       sb.sv_tag = "EQ";
+        else if (dT.empty())                                 sb.sv_tag = "D";
+        else if (dN.empty())                                 sb.sv_tag = "I";
+        else if (dN.size() == 1 && dT.size() == 1)           sb.sv_tag = "S";
+        else                                                 sb.sv_tag = "C";
+
+        // Absorb shared prefix into L_anchor, shared suffix into R_anchor.
+        // The new L_anchor.seq is nA[0..p) (== tA[0..p)); R_anchor.seq is nA[len-s..).
+        mB.nodes[sb.L_sub_id].seq = nA.substr(0, p);
+        mB.nodes[sb.R_sub_id].seq = nA.substr(nA.size() - s, s);
+
+        // Shrink/collapse interior super-nodes that participated in this super-bubble.
+        // For each interior super-node in n_path (excluding L,R), replace its seq with the
+        // portion of dN it should own. v1 lumps the whole dN into the first interior
+        // super-node and collapses the rest; v2 (TODO) could divide proportionally.
+        auto collapse_interior = [&](std::vector<uint32_t>& path, const std::string& diff) {
+            bool first = true;
+            for (uint32_t sid : path) {
+                if (sid == sb.L_sub_id || sid == sb.R_sub_id) continue;
+                if (first && !diff.empty()) {
+                    mB.nodes[sid].seq = diff;
+                    if (mB.nodes[sid].label.find("_d") == std::string::npos)
+                        mB.nodes[sid].label += "_d";
+                    first = false;
+                } else {
+                    mB.nodes[sid].seq.clear();
+                    if (mB.nodes[sid].label.find("_collapsed") == std::string::npos)
+                        mB.nodes[sid].label += "_collapsed";
+                }
             }
-        }
-        if (!t_path.empty()) {
-            if (dT.empty()) {
-                mB.nodes[t_path[0]].seq.clear();
-                mB.nodes[t_path[0]].label += "_collapsed";
-            } else {
-                mB.nodes[t_path[0]].seq = dT;
-            }
-        }
+        };
+        collapse_interior(sb.n_path, dN);
+        collapse_interior(sb.t_path, dT);
+
+        mB.super_bubbles.push_back(sb);
     }
 }
 
@@ -632,18 +708,36 @@ void emit_meta(const Subgraph& raw, const Subgraph& mA, const Subgraph& mB,
         std::fprintf(f, "%s%u", i ? ", " : "", target_bubble_ids[i]);
     std::fprintf(f, "],\n");
 
-    // Per-bubble Mode B classification
+    // Per-super-bubble Mode B classification
+    // (super-bubble = group of bubbles sharing the same (L, R) anchor pair, classified together)
     std::fprintf(f, "  \"modeB_calls\": [\n");
+    for (size_t i = 0; i < mB.super_bubbles.size(); i++) {
+        const auto& sb = mB.super_bubbles[i];
+        std::fprintf(f, "    {\"L_sub\": %u, \"R_sub\": %u, \"sv_tag\": \"%s\","
+                     " \"diff_n\": %u, \"diff_t\": %u,"
+                     " \"n_path_len\": %zu, \"t_path_len\": %zu,"
+                     " \"shared_prefix\": %zu, \"shared_suffix\": %zu,"
+                     " \"rc_applied\": %s, \"bubble_ids\": [",
+                     sb.L_sub_id, sb.R_sub_id, sb.sv_tag.c_str(),
+                     sb.diff_n, sb.diff_t,
+                     sb.n_path.size(), sb.t_path.size(),
+                     sb.shared_prefix, sb.shared_suffix,
+                     sb.rc_applied ? "true" : "false");
+        for (size_t j = 0; j < sb.bubble_ids_orig.size(); j++)
+            std::fprintf(f, "%s%u", j ? "," : "", sb.bubble_ids_orig[j]);
+        std::fprintf(f, "]}%s\n", i + 1 < mB.super_bubbles.size() ? "," : "");
+    }
+    std::fprintf(f, "  ],\n");
+
+    // Per-input-bubble grouping info (which super-bubble each contributing bubble belongs to)
+    std::fprintf(f, "  \"input_bubbles\": [\n");
     for (size_t i = 0; i < mB.bubbles.size(); i++) {
         const auto& bi = mB.bubbles[i];
         const Bubble& orig = bubs[bi.bubble_id_orig];
-        std::fprintf(f, "    {\"bubble_id\": %u, \"type\": \"%c\", \"sv_tag\": \"%s\", "
-                     "\"diff_n\": %u, \"diff_t\": %u, \"n_nodes_raw\": %zu, "
-                     "\"n_anchors_raw\": %zu, \"absorbed_prefix\": %u, \"absorbed_suffix\": %u}%s\n",
-                     bi.bubble_id_orig, bi.type, bi.sv_tag.c_str(),
-                     bi.diff_n, bi.diff_t,
+        std::fprintf(f, "    {\"bubble_id\": %u, \"type\": \"%c\","
+                     " \"n_nodes_raw\": %zu, \"n_anchors_raw\": %zu}%s\n",
+                     bi.bubble_id_orig, bi.type,
                      orig.node_ids.size(), orig.anchor_ids.size(),
-                     bi.absorbed_prefix, bi.absorbed_suffix,
                      i + 1 < mB.bubbles.size() ? "," : "");
     }
     std::fprintf(f, "  ],\n");
