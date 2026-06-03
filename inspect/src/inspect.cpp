@@ -204,6 +204,28 @@ struct Subgraph {
     std::vector<SuperBubble> super_bubbles;
 };
 
+// Position-indexed list of color=3 nodes per chrom (sorted by pos_start).
+// Built once at startup; used by build_subgraph to include the dup-interior shared
+// nodes whose posmap puts them between L_anchor and R_anchor.
+using PosIndex = std::map<uint16_t, std::vector<std::pair<uint32_t, uint32_t>>>;
+
+void build_pos_index(const std::vector<uint8_t>& color,
+                     const std::vector<uint64_t>& node_to_sig,
+                     const Posmap& pm,
+                     PosIndex& idx) {
+    const uint64_t K = color.size();
+    for (uint64_t i = 0; i < K; i++) {
+        if (color[i] != 3) continue;
+        uint64_t sig = node_to_sig[i];
+        auto it = pm.sig_pos.find(sig);
+        if (it == pm.sig_pos.end()) continue;
+        for (const Pos& p : it->second) {
+            idx[p.chrom_idx].push_back({p.pos_start, (uint32_t)i});
+        }
+    }
+    for (auto& kv : idx) std::sort(kv.second.begin(), kv.second.end());
+}
+
 void build_subgraph(const std::vector<Bubble>& bubs,
                     const std::vector<uint32_t>& target_bubble_ids,
                     const std::vector<std::vector<int32_t>>& adj,
@@ -213,6 +235,7 @@ void build_subgraph(const std::vector<Bubble>& bubs,
                     const std::vector<uint64_t>& node_to_sig,
                     const Posmap& pm,
                     const Seqs& seqs,
+                    const PosIndex& pos_index,
                     Subgraph& sg) {
     // Collect all node ids: interior of target bubbles + their color=3 neighbors
     std::unordered_set<uint32_t> nodes;
@@ -220,6 +243,59 @@ void build_subgraph(const std::vector<Bubble>& bubs,
         const Bubble& b = bubs[bid];
         for (uint32_t n : b.node_ids) nodes.insert(n);
         for (uint32_t a : b.anchor_ids) nodes.insert(a);
+    }
+
+    // Expansion: for each target bubble, find its bounding genomic region via the
+    // anchors' posmap entries, then include every color=3 node whose posmap puts
+    // it inside that region. This captures the dup body's shared interior (whose
+    // tcov/ncov ratio is the DUP signal) and any cycle-closing edges spanning the
+    // dup. Critical guard: LCP-core sigs can hash to multiple ref positions
+    // (murmur64 collisions), so we cluster the anchors' posmap entries per chrom
+    // and take only the densest tight cluster (≤ 1 Mbp span). This rejects
+    // LCP-collision phantom positions that would otherwise pull in the entire
+    // genome between the collision and the real locus.
+    constexpr uint32_t MAX_EXPANSION_SPAN = 1'000'000;
+    for (uint32_t bid : target_bubble_ids) {
+        const Bubble& b = bubs[bid];
+        // Gather all anchor posmap entries
+        std::map<uint16_t, std::vector<uint32_t>> per_chrom_positions;
+        for (uint32_t a : b.anchor_ids) {
+            uint64_t sig = node_to_sig[a];
+            auto it = pm.sig_pos.find(sig);
+            if (it == pm.sig_pos.end()) continue;
+            for (const Pos& p : it->second) {
+                per_chrom_positions[p.chrom_idx].push_back(p.pos_start);
+            }
+        }
+        // Find best (chrom, lo, hi): chrom with the most positions; within that
+        // chrom, the densest sliding window of width MAX_EXPANSION_SPAN.
+        uint16_t best_chrom = UINT16_MAX;
+        uint32_t best_count = 0;
+        uint32_t best_lo = 0, best_hi = 0;
+        for (auto& [ci, pos_vec] : per_chrom_positions) {
+            std::sort(pos_vec.begin(), pos_vec.end());
+            // Sliding window: for each i, find the largest j such that pos[j] - pos[i] <= span
+            for (size_t i = 0; i < pos_vec.size(); i++) {
+                size_t j = i;
+                while (j + 1 < pos_vec.size() && pos_vec[j + 1] - pos_vec[i] <= MAX_EXPANSION_SPAN) j++;
+                uint32_t count = (uint32_t)(j - i + 1);
+                if (count > best_count) {
+                    best_count = count;
+                    best_chrom = ci;
+                    best_lo = pos_vec[i];
+                    best_hi = pos_vec[j];
+                }
+            }
+        }
+        if (best_chrom == UINT16_MAX) continue;
+        auto pit = pos_index.find(best_chrom);
+        if (pit == pos_index.end()) continue;
+        const auto& v = pit->second;
+        auto lo_it = std::lower_bound(v.begin(), v.end(),
+                                      std::pair<uint32_t,uint32_t>{best_lo, 0});
+        for (auto it = lo_it; it != v.end() && it->first <= best_hi; ++it) {
+            nodes.insert(it->second);
+        }
     }
 
     // Create SubNode entries
@@ -540,13 +616,31 @@ std::vector<uint32_t> walk_color_path(uint32_t L_sub, uint32_t R_sub,
     return path;
 }
 
-// Merge a path of super-node sequences via bidirectional overlap concat.
+// Merge a path of super-node sequences in WALK ORDER (L stays at the start, R at
+// the end). Forward overlap only: `A.suffix vs B.prefix`. If forward overlap is 0,
+// we also try RC(B) — adjacent cores can have flipped strand-orientation bytes if
+// they originated from opposite-strand reads. If RC also fails, plain concat with
+// warning. Never swap A/B order (that would corrupt the L→R orientation Mode B
+// relies on for the trim).
 std::string merge_path(const std::vector<uint32_t>& path, const Subgraph& sg,
                        const std::string& ctx, std::vector<std::string>& warnings) {
     if (path.empty()) return "";
     std::string merged = sg.nodes[path[0]].seq;
     for (size_t i = 1; i < path.size(); i++) {
-        merged = concat_bidir(merged, sg.nodes[path[i]].seq, ctx, warnings);
+        const std::string& nxt = sg.nodes[path[i]].seq;
+        if (merged.empty()) { merged = nxt; continue; }
+        if (nxt.empty())    continue;
+        size_t kf = suffix_prefix_overlap(merged, nxt);
+        if (kf > 0) { merged.append(nxt, kf, nxt.size() - kf); continue; }
+        std::string nxt_rc = reverse_complement(nxt);
+        size_t krc = suffix_prefix_overlap(merged, nxt_rc);
+        if (krc > 0) {
+            merged.append(nxt_rc, krc, nxt_rc.size() - krc);
+            warnings.push_back("merge_path RC-joined (" + ctx + ")");
+            continue;
+        }
+        warnings.push_back("merge_path no-overlap forward (" + ctx + ")");
+        merged += nxt;
     }
     return merged;
 }
@@ -677,6 +771,12 @@ void emit_gfa(const Subgraph& sg, const std::string& path, bool skip_empty) {
                      sn.seq.size(), color_label(sn.color), color_hex(sn.color),
                      sn.ncov, sn.tcov, sn.members.size(), sn.node_id);
         if (sn.has_pos) std::fprintf(f, "\tPS:Z:%s:%u-%u:%u", sn.chrom_name.empty() ? "?" : sn.chrom_name.c_str(), sn.pos_start, sn.pos_end, sn.strand);
+        // Depth ratio (DUP signal): tumor coverage / normal coverage, averaged across members.
+        // Shared nodes with DR ≥ 1.5 are dup-region candidates; DR ≥ 1.8 is strong evidence.
+        if (sn.color == 3 && sn.ncov > 0) {
+            double dr = (double)sn.tcov / (double)sn.ncov;
+            std::fprintf(f, "\tDR:f:%.3f", dr);
+        }
         std::fputc('\n', f);
     }
     for (const auto& e : sg.edges) {
@@ -687,6 +787,57 @@ void emit_gfa(const Subgraph& sg, const std::string& path, bool skip_empty) {
                      sg.nodes[e.second].label.c_str());
     }
     std::fclose(f);
+}
+
+// ---------- cycle detection (DFS back-edges in the subgraph) ----------
+struct Cycle { std::vector<uint32_t> path; };
+
+std::vector<Cycle> find_cycles(const Subgraph& sg) {
+    const size_t N = sg.nodes.size();
+    std::vector<std::vector<uint32_t>> adj(N);
+    for (auto& e : sg.edges) { adj[e.first].push_back(e.second); adj[e.second].push_back(e.first); }
+
+    std::vector<Cycle> cycles;
+    std::vector<char> visited(N, 0);
+    std::vector<int32_t> parent(N, -1);
+    std::vector<uint32_t> depth(N, 0);
+
+    for (uint32_t start = 0; start < N; start++) {
+        if (visited[start]) continue;
+        // Iterative DFS
+        std::vector<std::pair<uint32_t, size_t>> stack;
+        stack.push_back({start, 0});
+        visited[start] = 1;
+        while (!stack.empty()) {
+            auto& [u, k] = stack.back();
+            if (k < adj[u].size()) {
+                uint32_t v = adj[u][k++];
+                if ((int32_t)v == parent[u]) continue;  // skip the edge we came in on
+                if (visited[v]) {
+                    // Back-edge: found a cycle. Reconstruct path v → ... → u → v.
+                    Cycle c;
+                    c.path.push_back(v);
+                    for (uint32_t x = u; x != v && (int32_t)x != -1;) {
+                        c.path.push_back(x);
+                        if (parent[x] == -1) break;
+                        x = (uint32_t)parent[x];
+                    }
+                    // Dedupe: only keep small unique cycles (limit per call)
+                    if (c.path.size() >= 3 && c.path.size() <= 30 && cycles.size() < 16) {
+                        cycles.push_back(std::move(c));
+                    }
+                    continue;
+                }
+                visited[v] = 1;
+                parent[v] = (int32_t)u;
+                depth[v] = depth[u] + 1;
+                stack.push_back({v, 0});
+            } else {
+                stack.pop_back();
+            }
+        }
+    }
+    return cycles;
 }
 
 // ---------- meta.json ----------
@@ -713,21 +864,69 @@ void emit_meta(const Subgraph& raw, const Subgraph& mA, const Subgraph& mB,
     std::fprintf(f, "  \"modeB_calls\": [\n");
     for (size_t i = 0; i < mB.super_bubbles.size(); i++) {
         const auto& sb = mB.super_bubbles[i];
+        // DUP evidence: tcov/ncov of L, R anchors + per-path shared-node DR stats.
+        // L_anchor and R_anchor reside at sub-ids L_sub_id and R_sub_id in mB.
+        const auto& L = mB.nodes[sb.L_sub_id];
+        const auto& R = mB.nodes[sb.R_sub_id];
+        double L_dr = L.ncov > 0 ? (double)L.tcov / (double)L.ncov : -1.0;
+        double R_dr = R.ncov > 0 ? (double)R.tcov / (double)R.ncov : -1.0;
+        // Mean DR across the shared interior portion of the n-path
+        // Also: DUP size estimate = sum(len * (DR - 1)) for shared nodes with DR > 1.
+        // For a clean tandem-DUP of length L bp, every base in the dup region has
+        // tcov ≈ 2 * ncov (DR = 2), so the sum equals L.
+        double n_path_dr_sum = 0.0; int n_path_dr_count = 0;
+        double dup_size_estimate = 0.0;
+        for (uint32_t sid : sb.n_path) {
+            const auto& sn = mB.nodes[sid];
+            if (sn.color == 3 && sn.ncov > 0) {
+                double dr = (double)sn.tcov / (double)sn.ncov;
+                n_path_dr_sum += dr;
+                n_path_dr_count++;
+                if (dr > 1.0) dup_size_estimate += (double)sn.seq.size() * (dr - 1.0);
+            }
+        }
+        double n_path_mean_dr = n_path_dr_count ? n_path_dr_sum / n_path_dr_count : -1.0;
+        // DUP hint: if no allele-level diff (sv_tag=="EQ") but the shared interior
+        // shows elevated tumor depth, the bubble is most likely a tandem dup
+        // whose junction sequence is captured elsewhere in the subgraph.
+        bool dup_hint = (sb.sv_tag == "EQ" && dup_size_estimate >= 50.0);
+
         std::fprintf(f, "    {\"L_sub\": %u, \"R_sub\": %u, \"sv_tag\": \"%s\","
                      " \"diff_n\": %u, \"diff_t\": %u,"
                      " \"n_path_len\": %zu, \"t_path_len\": %zu,"
                      " \"shared_prefix\": %zu, \"shared_suffix\": %zu,"
-                     " \"rc_applied\": %s, \"bubble_ids\": [",
+                     " \"rc_applied\": %s,"
+                     " \"L_anchor_dr\": %.3f, \"R_anchor_dr\": %.3f,"
+                     " \"n_path_shared_mean_dr\": %.3f,"
+                     " \"dup_size_estimate_bp\": %.0f,"
+                     " \"dup_hint\": %s,"
+                     " \"bubble_ids\": [",
                      sb.L_sub_id, sb.R_sub_id, sb.sv_tag.c_str(),
                      sb.diff_n, sb.diff_t,
                      sb.n_path.size(), sb.t_path.size(),
                      sb.shared_prefix, sb.shared_suffix,
-                     sb.rc_applied ? "true" : "false");
+                     sb.rc_applied ? "true" : "false",
+                     L_dr, R_dr, n_path_mean_dr,
+                     dup_size_estimate,
+                     dup_hint ? "true" : "false");
         for (size_t j = 0; j < sb.bubble_ids_orig.size(); j++)
             std::fprintf(f, "%s%u", j ? "," : "", sb.bubble_ids_orig[j]);
         std::fprintf(f, "]}%s\n", i + 1 < mB.super_bubbles.size() ? "," : "");
     }
     std::fprintf(f, "  ],\n");
+
+    // Cycles in the raw subgraph (key signal for DUP/INV: tandem-DUPs create a
+    // junction edge from end-of-copy back to start-of-copy, which closes a loop
+    // through the shared interior).
+    auto raw_cycles = find_cycles(raw);
+    std::fprintf(f, "  \"cycles\": [");
+    for (size_t i = 0; i < raw_cycles.size(); i++) {
+        std::fprintf(f, "%s[", i ? ", " : "");
+        for (size_t j = 0; j < raw_cycles[i].path.size(); j++)
+            std::fprintf(f, "%s\"%s\"", j ? "," : "", raw.nodes[raw_cycles[i].path[j]].label.c_str());
+        std::fprintf(f, "]");
+    }
+    std::fprintf(f, "],\n");
 
     // Per-input-bubble grouping info (which super-bubble each contributing bubble belongs to)
     std::fprintf(f, "  \"input_bubbles\": [\n");
@@ -837,6 +1036,13 @@ int main(int argc, char** argv) {
     for (auto& e : g.edges) { adj[e.first].push_back((int32_t)e.second); adj[e.second].push_back((int32_t)e.first); }
     std::fprintf(stderr, "[inspect]   adjacency built\n");
 
+    PosIndex pos_index;
+    build_pos_index(g.color, node_to_sig, pm, pos_index);
+    size_t total_pos_entries = 0;
+    for (auto& kv : pos_index) total_pos_entries += kv.second.size();
+    std::fprintf(stderr, "[inspect]   pos_index: %zu chroms, %zu (pos,node) entries (color=3 only)\n",
+                 pos_index.size(), total_pos_entries);
+
     std::vector<Bubble> bubs;
     decompose_with_ids(adj, g.color, bubs);
     std::fprintf(stderr, "[inspect]   decompose: %zu bubbles\n", bubs.size());
@@ -887,7 +1093,7 @@ int main(int argc, char** argv) {
     mkdir_p(out_dir);
 
     Subgraph raw;
-    build_subgraph(bubs, targets, adj, g.color, g.ncov, g.tcov, node_to_sig, pm, seqs, raw);
+    build_subgraph(bubs, targets, adj, g.color, g.ncov, g.tcov, node_to_sig, pm, seqs, pos_index, raw);
     std::fprintf(stderr, "[inspect] subgraph: %zu nodes, %zu edges\n", raw.nodes.size(), raw.edges.size());
 
     emit_gfa(raw, out_dir + "/raw.gfa", false);
