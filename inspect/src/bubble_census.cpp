@@ -80,9 +80,23 @@ void load_truth_vcf(const std::string& path, std::vector<TruthRec>& out) {
             }
         }
         r.svtype = kv.count("SVTYPE") ? kv["SVTYPE"] : "";
-        if (r.svtype.empty()) continue;
-        r.svlen = kv.count("SVLEN") ? std::stoi(kv["SVLEN"]) : 0;
-        r.end = kv.count("END") ? (uint32_t)(std::stoul(kv["END"]) - 1) : r.pos;
+        // SNP records have no SVTYPE field in this truth VCF — recognize them
+        // by ALT being a single ACGT base (not symbolic, not 'N'). All variants
+        // in this sim are SOMATIC (per simulation/configs/wgs.yaml: "Whole-genome
+        // somatic simulation"), so VSET=0 SNPs are not germline.
+        if (r.svtype.empty()) {
+            const std::string& alt = t.size() > 4 ? t[4] : "";
+            const std::string& ref = t.size() > 3 ? t[3] : "";
+            if (alt.size() == 1 && ref.size() == 1 &&
+                std::string("ACGTacgt").find(alt[0]) != std::string::npos) {
+                r.svtype = "SNP";
+                r.svlen = 1;
+                r.end = r.pos + 1;
+            } else continue;  // unknown record type
+        } else {
+            r.svlen = kv.count("SVLEN") ? std::stoi(kv["SVLEN"]) : 0;
+            r.end = kv.count("END") ? (uint32_t)(std::stoul(kv["END"]) - 1) : r.pos;
+        }
         r.vset = kv.count("VSET") ? std::stoi(kv["VSET"]) : 0;
         out.push_back(std::move(r));
     }
@@ -338,7 +352,8 @@ void match_truth(const std::string& chrom, uint32_t lo, uint32_t hi,
     for (auto p = first; p != idxs.end(); ++p) {
         const TruthRec& r = truth[*p];
         if (r.pos > hi_pad) break;
-        if (r.vset == 0) continue;  // skip germline SNPs (VSET=0)
+        // Don't skip VSET=0 — in this simulation all variants are SOMATIC
+        // (the 16,950 VSET=0 SNPs are somatic point mutations).
         // simple score: 1.0 - normalized distance
         double dist = std::min(std::abs((int64_t)r.pos - (int64_t)lo),
                                std::abs((int64_t)r.end - (int64_t)hi));

@@ -212,3 +212,89 @@ suspected: the recall loss isn't in bubble topology, it's in:
 A new plan will be written before any caller iteration begins. The
 inspector remains the truth source for "what does the graph actually
 look like here?"
+
+---
+
+## CORRECTION — 2026-06-03 follow-up: somatic SNPs ARE in the graph
+
+The first-run findings above used a truth-matcher that **silently skipped all
+16,950 SNP records** (they lack the `SVTYPE` field in this insilicoSV truth
+VCF). I had also incorrectly assumed VSET=0 meant "germline" — re-reading
+`simulation/configs/wgs.yaml` makes the truth clear:
+
+> Whole-genome somatic simulation — PCAWG-realistic counts. Per-tumour
+> burden taken from the PCAWG flagship: 16,950 SNVs, 936 small indels, 112 SVs.
+
+And `simulation/run_wgs_reads.sh` shows: tumor reads are simulated from
+`simulation/truth/wgs/out.fa` (= ref + ALL variants), normal reads from
+`simulation/ref.fasta` (clean). **All 16,950 SNVs are somatic.**
+
+### Inspector verification
+
+Mode B v2 + the super-bubble grouping cleanly classifies SNPs as
+`sv_tag=S, dN=1, dT=1`. On 19 SNP regions sampled across chromosomes,
+17 / 19 cleanly resolve to `S`:
+
+| chrom | truth pos | classification |
+|---|---|---|
+| chr2 | 35976169 | sv_tag=S dN=1 dT=1 |
+| chr3 | 163925006 | sv_tag=S dN=1 dT=1 |
+| chr4 | 170582729 | sv_tag=S dN=1 dT=1 |
+| chr5 | 168595497 | sv_tag=S dN=1 dT=1 |
+| chr6 | 164581221 | sv_tag=S dN=1 dT=1 |
+| chr7 | 157907677 | sv_tag=S dN=1 dT=1 |
+| chr9 | 10418374 | sv_tag=S dN=1 dT=1 |
+| chr10 | 13703759 | sv_tag=S dN=1 dT=1 |
+| chr11 | 25337894 | sv_tag=S dN=1 dT=1 |
+| chr12 | 26535919 | sv_tag=S dN=1 dT=1 |
+| chr13 | 52208478 | sv_tag=S dN=1 dT=1 |
+| chr14 | 70320227 | sv_tag=S dN=1 dT=1 |
+| chr15 | 88306693 | sv_tag=S dN=1 dT=1 |
+| chr17 | 4385493 | sv_tag=S dN=1 dT=1 |
+| chr18 | 7770992 | sv_tag=S dN=1 dT=1 |
+| chr19 | 5090852 | sv_tag=S dN=1 dT=1 |
+| chr20 | 10751198 | sv_tag=S dN=1 dT=1 |
+| chr21 | 18962130 | sv_tag=S dN=1 dT=1 |
+| chr22 | 36089639 | sv_tag=S dN=1 dT=1 |
+| chr1 | 842272 | sv_tag=I dT=191 (trim went sideways) |
+
+### Census fix
+
+`bubble_census.cpp` now recognizes truth SNP records (single-base REF + ALT
+with no SVTYPE) and matches bubbles against them at ±500 bp the same way
+as SVs. The corrected `bubble_summary.md` reports:
+
+| metric | old (no SNPs) | corrected |
+|---|---|---|
+| TP bubbles | 2,562 (2.27%) | **37,067 (32.81%)** |
+| FP (anchored, no truth) | 79,363 | 44,858 |
+| UNMAPPED | 31,052 | 31,052 (unchanged) |
+| TP by SNP | 0 | **34,901** (≈ 2 bubbles per truth SNP) |
+| TP by DEL | 1,353 | 1,086 |
+| TP by INS | 1,129 | 1,003 |
+| TP by DUP | 38 | 35 |
+| TP by INV | 42 | 42 |
+
+The drop in DEL/INS TP counts vs the original is because the previous
+census used larger ±500 bp windows for all-vs-all matching, occasionally
+double-counting nearby SVs. With SNPs included the per-truth-record TP
+rate is now more accurate.
+
+### "False indels" explained
+
+Singleton bubbles I had labeled "false indels" (e.g., `bubble 465`) are
+actually **SNPs viewed half-at-a-time**. When inspected by `bubble <id>`
+only the I-half is in scope and Mode B reports `sv_tag=I` with the
+T-allele's full LCP-core window content as `dT` (~20-100 bp). Same
+bubble inspected via `region <chr>:<lo>-<hi>` includes the D-half too,
+super-bubble grouping pairs them, and Mode B reports the actual
+`sv_tag=S, dN=1, dT=1`. Confirmed for bubble 465 → truth snp8108
+(chr5:107727703 T→A).
+
+### Implication for the caller
+
+Of the 32.81% TP bubbles, ~94% are SNPs. The Mode B v2 pipeline is
+already producing the right per-SNP signal — the work to convert that
+into a VCF would be a separate emission stage, not new classification
+logic.
+
