@@ -1,0 +1,10 @@
+# build artifacts
+seqs_probe
+bubble_census
+inspect
+*.d
+*.o
+census.log
+
+# downloaded gz blobs (regenerable via assets/README.md)
+*.txt.gz
