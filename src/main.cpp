@@ -1,8 +1,9 @@
 // svp (lcp-cortex): somatic SV caller over a 2-colour LCP-core graph built FROM READS
 // (normal vs tumor HiFi reads). READS ONLY; no assembly in the pipeline. Runs as three
 // resumable, checkpointed stages so the expensive LCP pass is paid once:
-//   svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir>   -> dir/counts.bin, dir/edges.bin
-//   svp graph   <dir>                                -> dir/graph.bin   (--min-mult K)
+//   svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir>   -> dir/counts.bin (post-prune sigs +
+//                                                       inline bytes), dir/edges.bin
+//   svp graph   <dir>                                -> dir/graph.bin   (colour + edges)
 //   svp bubbles <dir>                                -> dir/bubbles.tsv
 //   svp run     <normal.fq.gz> <tumor.fq.gz> <dir>   -> all, skipping completed stages
 #include "graph.h"
@@ -22,8 +23,9 @@ static bool exists(const std::string& p) { FILE* f = std::fopen(p.c_str(), "rb")
 static void usage() {
     std::fprintf(stderr,
         "usage:\n"
-        "  svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5] [--flank 10] [--margin 10] [--threads 16]\n"
-        "  svp graph   <dir> [--min-mult 3]\n"
+        "  svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5] [--flank 10] [--margin 10] [--min-mult 3] [--threads 16]\n"
+        "  svp graph   <dir>\n"
+        "  svp modea   <dir>\n"
         "  svp bubbles <dir> [--out <dir>/bubbles.tsv]\n"
         "  svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   (skips completed stages)\n");
 }
@@ -49,15 +51,18 @@ int main(int argc, char** argv) {
     }
     LCP_INIT();
 
-    if (cmd == "lcp" && pos.size() == 3) run_lcp(pos[0], pos[1], pos[2], level, flank, margin, threads);
-    else if (cmd == "graph" && pos.size() == 1) run_graph(pos[0], min_mult);
+    if (cmd == "lcp" && pos.size() == 3) run_lcp(pos[0], pos[1], pos[2], level, flank, margin, min_mult, threads);
+    else if (cmd == "graph" && pos.size() == 1) run_graph(pos[0]);
+    else if (cmd == "modea" && pos.size() == 1) run_modea(pos[0]);
     else if (cmd == "bubbles" && pos.size() == 1) run_bubbles(pos[0], out.empty() ? pos[0] + "/bubbles.tsv" : out);
     else if (cmd == "run" && pos.size() == 3) {
         const std::string& dir = pos[2];
         if (exists(dir + "/counts.bin") && exists(dir + "/edges.bin")) std::fprintf(stderr, "[skip] lcp: %s/counts.bin exists\n", dir.c_str());
-        else run_lcp(pos[0], pos[1], dir, level, flank, margin, threads);
+        else run_lcp(pos[0], pos[1], dir, level, flank, margin, min_mult, threads);
         if (exists(dir + "/graph.bin")) std::fprintf(stderr, "[skip] graph: %s/graph.bin exists\n", dir.c_str());
-        else run_graph(dir, min_mult);
+        else run_graph(dir);
+        if (exists(dir + "/modea.bin")) std::fprintf(stderr, "[skip] modea: %s/modea.bin exists\n", dir.c_str());
+        else run_modea(dir);
         run_bubbles(dir, out.empty() ? dir + "/bubbles.tsv" : out);
     } else { usage(); return 2; }
     return 0;
