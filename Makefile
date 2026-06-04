@@ -41,6 +41,10 @@ tools/call: tools/call.cpp $(BUILD)/MurmurHash3.o
 tools/bubble_recall: tools/bubble_recall.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
 
+# Per-block (Mode A super-node) TP/FP + sig recall vs the same assembly oracle.
+tools/block_recall: tools/block_recall.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
 # LCP-topology experiment binaries (read-only probes; docs/LCP_TOPOLOGY.md)
 LCP_EXP := lcp_bags lcp_triplet_bags lcp_collision_anatomy lcp_perturb lcp_rc_invariance lcp_crosslevel lcp_repeat_probe lcp_consistency
 tools/lcp_%: tools/lcp_%.cpp $(ANALYZE_DEPS)
