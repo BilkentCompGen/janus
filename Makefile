@@ -65,6 +65,10 @@ tools/sig_rc_pairing: tools/sig_rc_pairing.cpp $(ANALYZE_DEPS)
 tools/sig_rc_pairing_v2: tools/sig_rc_pairing_v2.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
 
+# Positional RC pairing oracle: match fwd/rc cores by chromosome position.
+tools/sig_rc_partner_oracle: tools/sig_rc_partner_oracle.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
 # LCP-topology experiment binaries (read-only probes; docs/LCP_TOPOLOGY.md)
 LCP_EXP := lcp_bags lcp_triplet_bags lcp_collision_anatomy lcp_perturb lcp_rc_invariance lcp_crosslevel lcp_repeat_probe lcp_consistency
 tools/lcp_%: tools/lcp_%.cpp $(ANALYZE_DEPS)
