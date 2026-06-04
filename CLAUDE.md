@@ -4,11 +4,15 @@ Guidance for Claude Code working in this repository.
 
 ## Project
 
-`svp` is a somatic structural-variant caller. Active branch: **`lcp-cortex-merged`** (this branch).
+`svp` is a somatic structural-variant caller. Active branch: **`graph-inspector`** (this branch).
 It builds a **2-colour LCP-core graph directly from reads** (normal vs tumor HiFi FASTQ) and
 emits candidate somatic bubbles. No assembly, no alignment, no reference graph — a single
 binary. Output is **coordinate-free** today (per-node multiplicity, not genome positions);
 mapping back to coordinates / a VCF is the next step.
+
+This branch adds the `inspect/` graph-inspector toolkit and the in-tree Mode A unitig
+compaction (`src/modea.cpp` → `svp modea`) on top of the `lcp-cortex-merged` caller. The
+caller-only branch (`lcp-cortex-merged`) is kept clean for the merge base.
 
 ### Two hard rules — do not violate
 
@@ -26,7 +30,8 @@ mapping back to coordinates / a VCF is the next step.
 | `main` | clean slate, scaffolding only |
 | `lcp-cortex` | original LCP-anchor (match.cpp) pipeline at HEAD `ae0c50e` |
 | `lcp-cortex-fast` | reads-only Cortex caller with fast gzip+LCP, but with the broken chain+union-find decomposition that hurt recall (kept for diff/reference) |
-| `lcp-cortex-merged` | **this branch** — fast gzip+LCP plumbing from `lcp-cortex-fast`, simple BFS connected-components bubble decomposition from the 2026-05-26 high-recall version. Target: ~99.6% recall / ~78% precision (the user-described "high recall / lower precision" regime) |
+| `lcp-cortex-merged` | merge base for this branch — fast gzip+LCP plumbing from `lcp-cortex-fast`, simple BFS connected-components bubble decomposition from the 2026-05-26 high-recall version. ~99.6% recall / ~78% precision |
+| `graph-inspector` | **this branch** — `inspect/` toolkit (seqs_probe / bubble_census / inspect + Python viz), Mode A unitig compaction in `src/modea.cpp`, plus the phantom-bubble and RC-pairing investigation tools in `tools/` |
 | `vg-rewrite` | prior assembly-input LCP-anchor rewrite (pre-reads) |
 | `backup` | previous monolithic LCP-graph impl. Source of `zstr.hpp`, `MurmurHash3.{h,cpp}` |
 | `experimental/modular-pipeline` | `svp2/` 6-stage modular pipeline; entry: `svp2/STATUS.md` |
@@ -46,22 +51,25 @@ make clean           # moves build/, svp, outputs/ -> ~/trash/svp-make-clean/
 `make run` overrides: `LEVEL` (lcptools depth, 5), `FLANK` (±bp signature window, 10),
 `MINMULT` (error-prune threshold, 3), `THREADS` (16), `READS_N`/`READS_T` (FASTQ paths).
 
-## CLI — three resumable, checkpointed stages
+## CLI — four resumable, checkpointed stages
 
 The expensive LCP pass is paid once; later stages are seconds and re-runnable.
 
 ```
-svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5 --flank 10 --margin 10 --threads 16]
-svp graph   <dir> [--min-mult 3]
+svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5 --flank 10 --margin 10 --min-mult 3 --threads 16]
+svp graph   <dir>
+svp modea   <dir>
 svp bubbles <dir> [--out <dir>/bubbles.tsv]
 svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   # runs all, skipping done stages
 ```
 
-`run` skips any stage whose checkpoint already exists, so re-tuning `--min-mult` re-runs only
-graph+bubbles (no re-LCP). Checkpoints are written atomically (`.tmp` + `rename`): an
-interrupted write never leaves a half-file that resume would mistake for complete.
+`--min-mult` is an `lcp`-stage flag (the prune runs inside `run_lcp` before `counts.bin` is
+written), NOT a `graph` flag — re-tuning it requires re-running `lcp`. `run` skips any stage
+whose checkpoint exists (`counts.bin`+`edges.bin`, `graph.bin`, `modea.bin`). Checkpoints are
+written atomically (`.tmp` + `rename`): an interrupted write never leaves a half-file that
+resume would mistake for complete.
 
-## Pipeline (`src/`, 546 LOC across 5 cpp files: graph 316 / cores 82 / main 64 / MurmurHash3 56 / io 28)
+## Pipeline (`src/`, 1001 LOC across 6 cpp files: graph 517 / modea 199 / cores 82 / main 69 / MurmurHash3 56 / io 28)
 
 1. **lcp** (`run_lcp`, `graph.cpp`) — one reader thread per FASTQ shard (so both samples
    inflate in parallel CPUs) + N-2 workers consuming colour-tagged batches. The reader is a
@@ -77,7 +85,13 @@ interrupted write never leaves a half-file that resume would mistake for complet
    (sequencing errors are multiplicity-1; `min_mult=3` removes 99.9% of them). Colour each
    survivor: 1 = normal-only, 2 = tumor-only (candidate somatic), 3 = shared. Map signature
    edges → node-id edges, dedupe. → `dir/graph.bin`. Seconds.
-3. **bubbles** (`run_bubbles`, `graph.cpp`) — **plain BFS connected-components on non-shared
+3. **modea** (`run_modea`, `modea.cpp`) — Mode A unitig compaction on the colour-1/2 (non-
+   shared) subgraph. Walks each maximal same-colour chain (in_deg/out_deg constraints), splices
+   the inline node bytes via exact KMP suffix/prefix overlap (k==0 is FATAL — implies upstream
+   data is broken), and emits one super-node per chain with its per-position coverage runs.
+   Pure cycles are preserved as singleton super-nodes ([[modea_preserves_cycles]]). → `dir/modea.bin`.
+   Mode B (allele-diff refinement on top of Mode A) lives in `inspect/`, not in `src/`.
+4. **bubbles** (`run_bubbles`, `graph.cpp`) — **plain BFS connected-components on non-shared
    nodes**. Backbone (colour=3) is NEVER traversed; each BFS component is one bubble; type
    from the colour bits seen during the walk (`D` = only colour-1, `I` = only colour-2, `C`
    = both). No anchor-merging / union-find — that variant over-merges adjacent loci. →
@@ -87,8 +101,14 @@ interrupted write never leaves a half-file that resume would mistake for complet
 `compute_sigs` are used by `tools/` only (the caller uses `extract_fast` directly for speed);
 `io.cpp::read_fasta_flat` is for the assembly-based GT/analysis tools only — never the caller.
 
-Read `docs/PERFORMANCE.md` for the gzip+lcptools speed details, and
-`docs/BUBBLE_CALLER_COMPARISON.md` for the bubble-algorithm history (assembly chr19 → reads WG).
+Relevant docs (read on demand, not all at once):
+- `docs/PERFORMANCE.md` — gzip+lcptools speed details
+- `docs/BUBBLE_CALLER_COMPARISON.md` — bubble-algorithm history (assembly chr19 → reads WG)
+- `docs/GRAPH_MODELS.md` — Mode A / Mode B compaction design
+- `docs/INSPECTOR_FINDINGS.md` — first-run findings from the inspector
+- `docs/VARIANT_CALLING_RESEARCH.md` — Severus/Sniffles2 audit, posmap/resolve/vcf plan
+- `docs/READ_ERROR_QC.md`, `docs/LCP_TOPOLOGY.md`, `docs/CORE_ANALYSIS.md` — read-mode QC, LCP probes, core overlap
+- `docs/VIZ_RESEARCH.md` — visualization background for the inspector
 
 ### Measured WG performance & recall (lcp-cortex-merged, AMD 9950X, 8 threads)
 
@@ -128,11 +148,32 @@ sigs into one node, halving the bubble count) — NOT a chain-merge that over-fu
 **Next:** map nodes back to genome positions for recall vs a truth VCF, and trim bubble allele
 sequences to call simple SNP/INS/DEL — both may use truth assemblies as the GT oracle (rule 1).
 
+## inspect/ — graph-inspector toolkit (this branch only)
+
+Diagnostic + visualization for the 2-colour graph. Separate `inspect/Makefile`; the parent
+build supplies `build/io.o`, `build/cores.o`, `build/MurmurHash3.o` (auto-invoked).
+
+```
+cd inspect && make            # builds seqs_probe, bubble_census, inspect
+./inspect/seqs_probe   <dir>                            # Stage 0: confirm seqs.bin schema
+./inspect/bubble_census <dir> <truth.vcf> <assets>      # Stage 1: WG sweep (~10 min) -> census.{bin,tsv}
+./inspect/inspect      <dir> {sv|bubble|region} <key>   # Stage 2: per-subgraph raw/modeA/modeB.gfa + meta.json
+python3 inspect/src/inspect_viz.py <dir>/inspect/<key>  # Stage 3: PNGs + index.html
+```
+
+Mode B (allele-diff refinement) is implemented inside `inspect`, not `src/` — it extends
+anchor super-nodes by shared prefixes/suffixes in place ([[modeB_on_modeA]]). Process every
+bubble including pathological ones — no `MAX_INTERNAL` truncation ([[no_artificial_caps]]).
+
 ## Code style — strict
 
 Read `docs/CODE_STYLE.md` before editing. C++17, no OOP, no user templates, no try/catch
-(fail-fast `[FATAL]` + `std::abort()`), avoid if-else trees, ≤30 LOC/function, ≤700 LOC total
-across `src/*.cpp`. Comments only when the WHY is non-obvious. `.o`/`.d` go to `build/`.
+(fail-fast `[FATAL]` + `std::abort()`), avoid if-else trees, ≤30 LOC/function. Comments only
+when the WHY is non-obvious. `.o`/`.d` go to `build/`.
+
+The historical "≤700 LOC across `src/*.cpp`" cap from the caller-only branch no longer holds
+on `graph-inspector` (modea adds ~200 LOC); the spirit (keep `src/` tight; push diagnostics
+to `tools/` or `inspect/`) still applies.
 
 ## Simulation (reads — the only caller input)
 
