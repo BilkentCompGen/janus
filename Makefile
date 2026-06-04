@@ -45,6 +45,26 @@ tools/bubble_recall: tools/bubble_recall.cpp $(ANALYZE_DEPS)
 tools/block_recall: tools/block_recall.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
 
+# Diagnostic: for each truth somatic sig classify its color + super-node color.
+tools/truth_sig_localizer: tools/truth_sig_localizer.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+# Diagnostic: dump |S| = (T \ R) truth-somatic sigs as raw u64 records.
+tools/truth_sig_dump: tools/truth_sig_dump.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+# Diagnostic: per-sig (n_fwd, n_rc, t_fwd, t_rc) provenance against assemblies.
+tools/sig_provenance: tools/sig_provenance.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+# Diagnostic: RC-pairing check — for each sig X, RC its bytes and see if any other sig has matching bytes.
+tools/sig_rc_pairing: tools/sig_rc_pairing.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+# Proper RC pairing: re-run LCP on RC bytes to recover the label, then hash + lookup.
+tools/sig_rc_pairing_v2: tools/sig_rc_pairing_v2.cpp $(ANALYZE_DEPS)
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
 # LCP-topology experiment binaries (read-only probes; docs/LCP_TOPOLOGY.md)
 LCP_EXP := lcp_bags lcp_triplet_bags lcp_collision_anatomy lcp_perturb lcp_rc_invariance lcp_crosslevel lcp_repeat_probe lcp_consistency
 tools/lcp_%: tools/lcp_%.cpp $(ANALYZE_DEPS)
