@@ -45,6 +45,10 @@ tools/bubble_recall: tools/bubble_recall.cpp $(ANALYZE_DEPS)
 tools/block_recall: tools/block_recall.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
 
+# Per-tag (S/D/I/C) Mode B bubble TP/FP + sig recall against a cached truth |S|.
+tools/modeb_recall: tools/modeb_recall.cpp $(BUILD)/graph.o $(BUILD)/cores.o $(BUILD)/io.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/graph.o $(BUILD)/cores.o $(BUILD)/io.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
 # Diagnostic: for each truth somatic sig classify its color + super-node color.
 tools/truth_sig_localizer: tools/truth_sig_localizer.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
@@ -68,6 +72,14 @@ tools/sig_rc_pairing_v2: tools/sig_rc_pairing_v2.cpp $(ANALYZE_DEPS)
 # Positional RC pairing oracle: match fwd/rc cores by chromosome position.
 tools/sig_rc_partner_oracle: tools/sig_rc_partner_oracle.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
+
+# Stage 0 validator: confirms remap+reverse RC trick is byte- and core-equivalent to ASCII RC.
+tools/rc_lcp_equiv: tools/rc_lcp_equiv.cpp $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Chirality probe: does parse2(R) recover what parse1(RC(R)) would give? Do parse1/parse2 sigs pool?
+tools/rc_parse2_check: tools/rc_parse2_check.cpp $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/MurmurHash3.o $(LDFLAGS)
 
 # LCP-topology experiment binaries (read-only probes; docs/LCP_TOPOLOGY.md)
 LCP_EXP := lcp_bags lcp_triplet_bags lcp_collision_anatomy lcp_perturb lcp_rc_invariance lcp_crosslevel lcp_repeat_probe lcp_consistency

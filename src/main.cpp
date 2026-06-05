@@ -26,6 +26,7 @@ static void usage() {
         "  svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5] [--flank 10] [--margin 10] [--min-mult 3] [--threads 16]\n"
         "  svp graph   <dir>\n"
         "  svp modea   <dir>\n"
+        "  svp modeb   <dir>\n"
         "  svp bubbles <dir> [--out <dir>/bubbles.tsv]\n"
         "  svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   (skips completed stages)\n");
 }
@@ -54,6 +55,7 @@ int main(int argc, char** argv) {
     if (cmd == "lcp" && pos.size() == 3) run_lcp(pos[0], pos[1], pos[2], level, flank, margin, min_mult, threads);
     else if (cmd == "graph" && pos.size() == 1) run_graph(pos[0]);
     else if (cmd == "modea" && pos.size() == 1) run_modea(pos[0]);
+    else if (cmd == "modeb" && pos.size() == 1) run_modeb(pos[0]);
     else if (cmd == "bubbles" && pos.size() == 1) run_bubbles(pos[0], out.empty() ? pos[0] + "/bubbles.tsv" : out);
     else if (cmd == "run" && pos.size() == 3) {
         const std::string& dir = pos[2];
@@ -63,6 +65,8 @@ int main(int argc, char** argv) {
         else run_graph(dir);
         if (exists(dir + "/modea.bin")) std::fprintf(stderr, "[skip] modea: %s/modea.bin exists\n", dir.c_str());
         else run_modea(dir);
+        if (exists(dir + "/modeb.bin")) std::fprintf(stderr, "[skip] modeb: %s/modeb.bin exists\n", dir.c_str());
+        else run_modeb(dir);
         run_bubbles(dir, out.empty() ? dir + "/bubbles.tsv" : out);
     } else { usage(); return 2; }
     return 0;

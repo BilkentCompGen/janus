@@ -55,7 +55,6 @@ static void add_sigs(const char* fa, int level, int flank, std::unordered_set<ui
     std::fprintf(stderr, "[bubble_recall] %s: %zu distinct core sigs (both strands)\n", fa, out.size());
 }
 
-struct SigCount { uint64_t sig; uint32_t n, t; };
 using IEdge = std::pair<uint32_t, uint32_t>;
 
 static FILE* xopen(const char* p, const char* m) { FILE* f = std::fopen(p, m); if (!f) { std::fprintf(stderr, "[FATAL] open %s\n", p); std::abort(); } return f; }
