@@ -20,3 +20,6 @@ void run_graph(const std::string& dir);
 void run_modea(const std::string& dir);
 void run_modeb(const std::string& dir);
 void run_bubbles(const std::string& dir, const std::string& out_tsv);
+void run_posmap(const std::string& dir, const std::string& ref_path, int level, int flank);
+void run_anchor(const std::string& dir);
+void run_vcf(const std::string& dir, const std::string& ref_path, const std::string& out_path, const std::string& dup_flags_path, const std::string& inv_flags_path);
