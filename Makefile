@@ -49,6 +49,34 @@ tools/block_recall: tools/block_recall.cpp $(ANALYZE_DEPS)
 tools/modeb_recall: tools/modeb_recall.cpp $(BUILD)/graph.o $(BUILD)/cores.o $(BUILD)/io.o $(BUILD)/MurmurHash3.o
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/graph.o $(BUILD)/cores.o $(BUILD)/io.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
 
+# DUP detector: flag I-tag bubbles whose T' substring-matches local ref context (tandem).
+tools/dup_detect: tools/dup_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Coverage-based DUP detector: scan Mode A c3 super-nodes for cov_t uplift, cluster.
+tools/dup_cov_detect: tools/dup_cov_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# INV detector: cross-bubble positional RC pairing between I-tag and D-tag residuals.
+tools/inv_detect: tools/inv_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Block-level INV detector: pair c1/c2 Mode A super-nodes whose block bytes are RC of each other.
+tools/inv_block_detect: tools/inv_block_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Position-overlap INV detector: c1 and c2 super-nodes anchored to the same ref region.
+tools/inv_overlap_detect: tools/inv_overlap_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Mode B dissector: dump every bubble's features to TSV for offline analysis.
+tools/modeb_dissect: tools/modeb_dissect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Cycle-SCC DUP detector: Tarjan SCC over the Mode A super-graph, emit small c3 cycles.
+tools/dup_cycle_detect: tools/dup_cycle_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
 # Diagnostic: for each truth somatic sig classify its color + super-node color.
 tools/truth_sig_localizer: tools/truth_sig_localizer.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)
