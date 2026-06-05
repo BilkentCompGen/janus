@@ -51,7 +51,7 @@ make clean           # moves build/, svp, outputs/ -> ~/trash/svp-make-clean/
 `make run` overrides: `LEVEL` (lcptools depth, 5), `FLANK` (±bp signature window, 10),
 `MINMULT` (error-prune threshold, 3), `THREADS` (16), `READS_N`/`READS_T` (FASTQ paths).
 
-## CLI — four resumable, checkpointed stages
+## CLI — five resumable, checkpointed stages
 
 The expensive LCP pass is paid once; later stages are seconds and re-runnable.
 
@@ -59,28 +59,41 @@ The expensive LCP pass is paid once; later stages are seconds and re-runnable.
 svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5 --flank 10 --margin 10 --min-mult 3 --threads 16]
 svp graph   <dir>
 svp modea   <dir>
+svp modeb   <dir>
 svp bubbles <dir> [--out <dir>/bubbles.tsv]
 svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   # runs all, skipping done stages
 ```
 
 `--min-mult` is an `lcp`-stage flag (the prune runs inside `run_lcp` before `counts.bin` is
 written), NOT a `graph` flag — re-tuning it requires re-running `lcp`. `run` skips any stage
-whose checkpoint exists (`counts.bin`+`edges.bin`, `graph.bin`, `modea.bin`). Checkpoints are
-written atomically (`.tmp` + `rename`): an interrupted write never leaves a half-file that
-resume would mistake for complete.
+whose checkpoint exists (`counts.bin`+`edges.bin`, `graph.bin`, `modea.bin`, `modeb.bin`).
+Checkpoints are written atomically (`.tmp` + `rename`): an interrupted write never leaves a
+half-file that resume would mistake for complete.
 
-## Pipeline (`src/`, 1001 LOC across 6 cpp files: graph 517 / modea 199 / cores 82 / main 69 / MurmurHash3 56 / io 28)
+`pre_prune.bin` (raw post-merge sigs, ~14 GB on WG) is written by `lcp` before the
+`min_mult` prune. If it exists, re-running `lcp` resumes from it and skips the gzip+pool+
+merge stages — turning a 24-min re-run into ~12 min, useful for `--min-mult` sweeps.
+
+## Pipeline (`src/`, 1488 LOC across 7 cpp files: graph 678 / modeb 372 / modea 199 / cores 82 / main 73 / MurmurHash3 56 / io 28)
 
 1. **lcp** (`run_lcp`, `graph.cpp`) — one reader thread per FASTQ shard (so both samples
    inflate in parallel CPUs) + N-2 workers consuming colour-tagged batches. The reader is a
    block-based gzread + manual `\n` scan (line-by-line `gzgets` is 3-5× slower because zlib
-   state crosses every line + per-line `std::string` ops dominate). Per read: uppercase,
-   call `extract_fast` (lcptools perf-session2 SoA API — inlined into `process_read`, no
-   intermediate `Core[]`/`uint64_t[]` vectors), keep interior cores (≥`margin` bp from both
-   ends), inline the flank-window `murmur64` for the signature. Workers emit `SigCol{sig,col}`
-   records + within-read `(sig_prev, sig_curr)` edges to thread-local vectors; the pool
-   merges via LSB radix sort + run-length reduce. Atomic-rename checkpoint:
-   `dir/counts.bin` (16 B per record: `sig, n, t`), `dir/edges.bin` (16 B per record).
+   state crosses every line + per-line `std::string` ops dominate). Per read, **two LCP
+   extractions**: (a) forward over the uppercased bytes, (b) RC via remap+reverse — walk the
+   read backward through a 256-byte complement LUT to produce the RC byte buffer, then call
+   `extract_fast` on it. This pools strand-pair coverage (≈2× per locus) so `min_mult` can
+   move from 3 → 8 and prune ~90% of phantom-error sigs (see [[phantom_root_cause]]). Both
+   passes inline the flank-window `murmur64(W, len, 0)` (seed=0, label-seed redundant per
+   [[label_seed_redundant]]); workers emit `SigCol{sig,col}` records + within-read
+   `(sig_prev, sig_curr)` edges to thread-local vectors with **per-worker edge dedup**
+   (`std::unordered_set` keyed by `prev * 0x9e3779b97f4a7c15 + g`) to keep raw edge volume
+   bounded. The pool runs **per-sample two-pass** (normal then tumor, halves peak pool RAM),
+   merges via LSB radix sort + run-length reduce. A pre-prune checkpoint `dir/pre_prune.bin`
+   (raw `SigCount` records, ~14 GB on WG, 1.7 s write) is dropped here for fast `min_mult`
+   re-tuning. After the prune, `process_read_fill` emits the surviving sigs' edges only.
+   Atomic-rename checkpoints: `dir/counts.bin` (16 B per record: `sig, n, t` + inline node
+   bytes), `dir/edges.bin` (16 B per record).
 2. **graph** (`run_graph`, `graph.cpp`) — drop signatures with `max(n,t) < min_mult`
    (sequencing errors are multiplicity-1; `min_mult=3` removes 99.9% of them). Colour each
    survivor: 1 = normal-only, 2 = tumor-only (candidate somatic), 3 = shared. Map signature
@@ -90,12 +103,27 @@ resume would mistake for complete.
    the inline node bytes via exact KMP suffix/prefix overlap (k==0 is FATAL — implies upstream
    data is broken), and emits one super-node per chain with its per-position coverage runs.
    Pure cycles are preserved as singleton super-nodes ([[modea_preserves_cycles]]). → `dir/modea.bin`.
-   Mode B (allele-diff refinement on top of Mode A) lives in `inspect/`, not in `src/`.
-4. **bubbles** (`run_bubbles`, `graph.cpp`) — **plain BFS connected-components on non-shared
+4. **modeb** (`run_modeb`, `modeb.cpp`) — N-allele vs T-allele mutual trim on top of Mode A's
+   super-graph. For every bubble `(S1, S2)` (c3 anchor pair with a parallel allele pair),
+   reconstruct each arm's byte sequence by splicing super-node blocks along the BFS path
+   (lowest-ID tiebreak, KMP suffix-prefix overlap reusing Mode A's `suffix_prefix`),
+   expand per-super-node RLE into a flat per-position cov_n/cov_t array with MAX over
+   overlap, RLE-recompress, mutual-trim by `pre = LCP(N, T)` / `suf = LCS(N, T)` (prefix-
+   priority clamp), and emit a BubbleTag record tagged `{EQ, D, I, S, C}`. Three bucket
+   classes (mirrors `tools/modea_audit.py`): `std_both` (c1+c2 parallel arms), `T_only_no_N`
+   (c2 arm + c3 backbone detour ≤8 hops as the implicit N allele), `N_only_no_T` (mirror).
+   When an orphan bucket has no c3 detour within 8 hops, the missing arm is treated as
+   empty bytes — the surviving arm becomes the I/D residual. modea.bin is NOT mutated
+   (logical attribution via `pre`/`suf` in BubbleTag avoids multi-bubble shared-anchor
+   conflicts). DUP cycles and INV are out of scope ([[modeB_on_modeA]] + future work).
+   → `dir/modeb.bin`. ~36 s on WG mm=10 (37,654 bubbles processed). The legacy
+   `inspect/inspect`'s `modeB.gfa` output is abandoned.
+5. **bubbles** (`run_bubbles`, `graph.cpp`) — **plain BFS connected-components on non-shared
    nodes**. Backbone (colour=3) is NEVER traversed; each BFS component is one bubble; type
    from the colour bits seen during the walk (`D` = only colour-1, `I` = only colour-2, `C`
    = both). No anchor-merging / union-find — that variant over-merges adjacent loci. →
    `dir/bubbles.tsv` (`type  n_nodes  normal_cov  tumor_cov`). Seconds.
+   (Eventually moves *after* Mode B once `modeb` produces the tagged residuals.)
 
 `src/svp.h` holds the one shared POD (`Core`) + the LCP primitives. `extract_cores` /
 `compute_sigs` are used by `tools/` only (the caller uses `extract_fast` directly for speed);
@@ -148,7 +176,13 @@ sigs into one node, halving the bubble count) — NOT a chain-merge that over-fu
 **Next:** map nodes back to genome positions for recall vs a truth VCF, and trim bubble allele
 sequences to call simple SNP/INS/DEL — both may use truth assemblies as the GT oracle (rule 1).
 
-## inspect/ — graph-inspector toolkit (this branch only)
+**Fresher baseline on `graph-inspector`** (dual fw+RC extraction + `min_mult=8`, 8 threads,
+2026-06-05): WG lcp wall = 24:04, peak RSS 96 GB, pre_prune raw sigs = 887,246,413,
+kept after mm=8 = 85,177,079 (9.60% survive), edges = 86,010,677. Recall / precision on
+this dataset not yet measured — `tools/bubble_recall` over the new `outputs/svp/wgs/` is the
+next thing to run.
+
+## inspect/ — legacy graph-inspector toolkit
 
 Diagnostic + visualization for the 2-colour graph. Separate `inspect/Makefile`; the parent
 build supplies `build/io.o`, `build/cores.o`, `build/MurmurHash3.o` (auto-invoked).
@@ -161,9 +195,11 @@ cd inspect && make            # builds seqs_probe, bubble_census, inspect
 python3 inspect/src/inspect_viz.py <dir>/inspect/<key>  # Stage 3: PNGs + index.html
 ```
 
-Mode B (allele-diff refinement) is implemented inside `inspect`, not `src/` — it extends
-anchor super-nodes by shared prefixes/suffixes in place ([[modeB_on_modeA]]). Process every
-bubble including pathological ones — no `MAX_INTERNAL` truncation ([[no_artificial_caps]]).
+`inspect/inspect`'s `modeB.gfa` output is a **legacy band-aid** — the production Mode B
+is being rebuilt as `src/modeb.cpp` (see Pipeline step 4). The `inspect/` tools remain
+useful as diagnostic viewers for individual subgraphs; do not port their Mode B logic.
+Process every bubble including pathological ones — no `MAX_INTERNAL` truncation
+([[no_artificial_caps]]).
 
 ## Code style — strict
 

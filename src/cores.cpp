@@ -36,7 +36,7 @@ static void flank_sigs(const std::string& seq, const std::vector<Core>& cs, int 
     for (size_t i = 0; i < cs.size(); i++) {
         const uint64_t L = cs[i].start > mu ? cs[i].start - mu : 0;
         const uint64_t R = cs[i].end + mu < n ? cs[i].end + mu : n;
-        out[i] = murmur64(seq.data() + L, (int)(R - L), cs[i].label);
+        out[i] = murmur64(seq.data() + L, (int)(R - L), 0);   // seed=0 matches the caller's emit_sig (label-seed redundant for flank>=0)
     }
 }
 
