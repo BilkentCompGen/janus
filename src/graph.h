@@ -18,4 +18,5 @@ struct CortexBubble { char type; uint32_t n_nodes; uint64_t normal_cov, tumor_co
 void run_lcp(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir, int level, int flank, int margin, int min_mult, int threads);
 void run_graph(const std::string& dir);
 void run_modea(const std::string& dir);
+void run_modeb(const std::string& dir);
 void run_bubbles(const std::string& dir, const std::string& out_tsv);
