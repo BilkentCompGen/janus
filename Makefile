@@ -77,6 +77,54 @@ tools/modeb_dissect: tools/modeb_dissect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BU
 tools/dup_cycle_detect: tools/dup_cycle_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
 
+# Truth DUP locator: for each truth DUP, find overlapping Mode A super-nodes + their topology.
+tools/truth_dup_locate: tools/truth_dup_locate.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Loop-based DUP detector: shortest cycle in the giant SCC anchored at cov-uplift c3 nodes.
+tools/dup_loop_detect: tools/dup_loop_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Bucket=2 origin probe: posmap hit rate of c1 chain super-nodes per real/phantom bubble.
+tools/bucket2_origin: tools/bucket2_origin.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Back-edge DUP detector: direct edges from "later" c3 super-node to "earlier" c3.
+tools/dup_backedge_detect: tools/dup_backedge_detect.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Phantom descent: dump every chain_id (n,t) + posmap entries in every bucket=2 D-tag bubble's c1 path.
+tools/phantom_descent: tools/phantom_descent.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Region color census: per bubble, count c1/c2/c3 super-nodes overlapping the region in posmap.
+tools/region_color_census: tools/region_color_census.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# DUP v2: coverage candidate + graph cycle confirmation.
+tools/dup_cov_graph: tools/dup_cov_graph.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Pre-prune-at-locus: stream pre_prune.bin and sum (n,t) for sigs anchoring in each query locus.
+tools/preprune_at_locus: tools/preprune_at_locus.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Genome-wide pre_prune binned totals: per-bin total_n, total_t, n_t_zero, n_n_zero, n_shared.
+tools/preprune_genome_bins: tools/preprune_genome_bins.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# modea region dump: for queries.tsv, dump super-nodes anchoring in each region + topology.
+tools/modea_dump_region: tools/modea_dump_region.cpp $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/graph.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Extract reads at a locus by k-mer hits against ref bytes.
+tools/extract_locus_reads: tools/extract_locus_reads.cpp $(BUILD)/io.o $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/io.o $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
+# Re-run LCP on a small FASTQ subset and dump per-read sigs.
+tools/relcp_at_locus: tools/relcp_at_locus.cpp $(BUILD)/MurmurHash3.o
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(BUILD)/MurmurHash3.o $(LDFLAGS)
+
 # Diagnostic: for each truth somatic sig classify its color + super-node color.
 tools/truth_sig_localizer: tools/truth_sig_localizer.cpp $(ANALYZE_DEPS)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $< $(ANALYZE_DEPS) $(LDFLAGS)

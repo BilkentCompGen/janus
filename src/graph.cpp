@@ -33,8 +33,9 @@ void atomic_close(FILE* f, const std::string& tmp, const std::string& dst) { std
 
 namespace {
 using SEdge = std::pair<uint64_t, uint64_t>;        // signature edge (edges.bin record)
-struct SigCol { uint64_t sig; uint32_t col; };      // per-emission record collected by workers
-                                                     // (col 0=normal, 1=tumor); reduced by sort.
+// Per-emission sigs are collected as bare uint64_t: each pool pass is a single colour
+// (normal OR tumor), so a per-record colour byte is pure waste. The run length of equal
+// sigs after sort IS the n-count (normal pass) / t-count (tumor pass); the other stays 0.
 
 // ASCII complement lookup. Default 'N' (non-ACGT collapses to 'N'); A/T and C/G swapped.
 // Used by the remap+reverse RC pass and by canonical-window hashing.
@@ -75,8 +76,8 @@ struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
 // the surviving-sig subset to avoid carrying 40+ GB of raw edges through the
 // pool stage). DUAL extract: forward bytes via parse1 + RC bytes via the
 // remap+reverse trick (≡ parse2). rc_buf is worker-local.
-void process_read(std::string& s, int col, int level, int flank, int margin,
-                  std::vector<SigCol>& lsigs, std::string& rc_buf) {
+void process_read(std::string& s, int level, int flank, int margin,
+                  std::vector<uint64_t>& lsigs, std::string& rc_buf) {
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
@@ -91,7 +92,7 @@ void process_read(std::string& s, int col, int level, int flank, int margin,
             const uint64_t L = st[i] > mu ? st[i] - mu : 0;
             const uint64_t R = en[i] + mu < len ? en[i] + mu : len;
             const uint64_t g = emit_sig(data + L, (int)(R - L));
-            lsigs.push_back({g, (uint32_t)col});
+            lsigs.push_back(g);
         }
     };
     run_pass(s.data());
@@ -175,7 +176,7 @@ struct Batch { std::vector<std::string> seqs; int col; };
 // block-based FASTQ parser (1 MB gzread + manual \n scan) — line-by-line gzgets was 3-5x
 // slower per reader thread (zlib state crossing + string ops dominated).
 void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin, int threads,
-              std::vector<SigCol>& all_sigs, std::mutex& smtx,
+              std::vector<uint64_t>& all_sigs, std::mutex& smtx,
               uint64_t& reads_n_out, uint64_t& reads_t_out) {
     const int nshards = (int)shards.size();
     const int nrd = std::min(nshards, std::max(2, threads / 4));   // ≥2 so both samples decompress in parallel
@@ -236,7 +237,7 @@ void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin
     };
     auto worker = [&]() {
         uint64_t local_busy_ns = 0, local_idle_ns = 0;
-        std::vector<SigCol> lsigs; lsigs.reserve(1u << 21);
+        std::vector<uint64_t> lsigs; lsigs.reserve(1u << 21);
         std::string rc_buf; rc_buf.reserve(1u << 16);   // worker-local RC buffer reused across reads
         uint64_t lnr_n = 0, lnr_t = 0;
         constexpr size_t FLUSH_THRESH = 1u << 21;       // ~2M entries (~24 MB sigs)
@@ -251,7 +252,7 @@ void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin
                 b = std::move(q.front()); q.pop(); cv_full.notify_one();
             }
             const auto t_b0 = std::chrono::steady_clock::now();
-            for (auto& s : b.seqs) { process_read(s, b.col, level, flank, margin, lsigs, rc_buf); (b.col == 0 ? lnr_n : lnr_t)++; }
+            for (auto& s : b.seqs) { process_read(s, level, flank, margin, lsigs, rc_buf); (b.col == 0 ? lnr_n : lnr_t)++; }
             local_busy_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_b0).count();
             if (lsigs.size() >= FLUSH_THRESH) {
                 std::lock_guard<std::mutex> lk(smtx);
@@ -371,26 +372,30 @@ void fill_pool(const std::vector<Shard>& shards, int level, int flank, int margi
     for (auto& t : wks) t.join();
 }
 
-// LSB radix sort over the .sig field (8 passes × 256 buckets). Output overwrites src.
-void radix_sort_sigs(std::vector<SigCol>& sigs) {
+// LSB radix sort over bare u64 sigs: 11-bit digit × 6 passes (66 ≥ 64). size_t hist +
+// offsets — N exceeds 2^32 at WG scale. Half the element bytes + 2 fewer passes than the
+// old 16-byte/8-pass SigCol sort. Output overwrites src.
+void radix_sort_u64(std::vector<uint64_t>& sigs) {
     const size_t N = sigs.size();
     if (N == 0) return;
-    std::vector<SigCol> tmp(N);
-    SigCol *src = sigs.data(), *dst = tmp.data();
-    uint32_t hist[256];
-    for (int pass = 0; pass < 8; pass++) {
+    std::vector<uint64_t> tmp(N);
+    uint64_t *src = sigs.data(), *dst = tmp.data();
+    constexpr int RADIX = 11, BUCKETS = 1 << RADIX;
+    constexpr uint64_t MASK = BUCKETS - 1;
+    size_t hist[BUCKETS];
+    for (int pass = 0; pass < 6; pass++) {
         std::memset(hist, 0, sizeof(hist));
-        const int sh = pass * 8;
-        for (size_t i = 0; i < N; i++) hist[(src[i].sig >> sh) & 0xFFu]++;
-        uint32_t acc = 0;
-        for (int b = 0; b < 256; b++) { uint32_t c = hist[b]; hist[b] = acc; acc += c; }
+        const int sh = pass * RADIX;
+        for (size_t i = 0; i < N; i++) hist[(src[i] >> sh) & MASK]++;
+        size_t acc = 0;
+        for (int b = 0; b < BUCKETS; b++) { size_t c = hist[b]; hist[b] = acc; acc += c; }
         for (size_t i = 0; i < N; i++) {
-            const uint32_t bk = (uint32_t)((src[i].sig >> sh) & 0xFFu);
+            const uint64_t bk = (src[i] >> sh) & MASK;
             dst[hist[bk]++] = src[i];
         }
-        SigCol *t = src; src = dst; dst = t;
+        uint64_t *t = src; src = dst; dst = t;
     }
-    if (src != sigs.data()) std::memcpy(sigs.data(), src, N * sizeof(SigCol));
+    if (src != sigs.data()) std::memcpy(sigs.data(), src, N * sizeof(uint64_t));
 }
 
 // LSB radix sort over (a, b) treated as a 16-byte key: 8 passes on .second, then 8 on .first.
@@ -416,13 +421,15 @@ void radix_sort_edges(std::vector<SEdge>& edges) {
     if (src != edges.data()) std::memcpy((void*)edges.data(), (void*)src, M * sizeof(SEdge));
 }
 
-// Reduce sorted SigCols into per-signature {n,t} count records (run-length merge).
-void reduce_sigs(const std::vector<SigCol>& sigs, std::vector<SigCount>& nodes) {
+// Reduce sorted u64 sigs into per-signature SigCount via run-length count. Each pool pass
+// is single-colour, so the run length is the n-count (normal) or t-count (tumor); the
+// other colour stays 0 and is combined later by merge_sorted_nodes.
+void reduce_sigs_u64(const std::vector<uint64_t>& sigs, std::vector<SigCount>& nodes, bool tumor) {
     nodes.reserve(sigs.size() / 2 + 1);
     for (size_t i = 0; i < sigs.size();) {
-        uint64_t g = sigs[i].sig; uint32_t n = 0, t = 0;
-        for (; i < sigs.size() && sigs[i].sig == g; i++) (sigs[i].col == 0 ? n : t)++;
-        nodes.push_back({g, n, t});
+        const uint64_t g = sigs[i]; uint32_t c = 0;
+        for (; i < sigs.size() && sigs[i] == g; i++) c++;
+        nodes.push_back(tumor ? SigCount{g, 0, c} : SigCount{g, c, 0});
     }
 }
 
@@ -494,7 +501,7 @@ static std::vector<SigCount> merge_sorted_nodes(const std::vector<SigCount>& a, 
 
 // ---- stage 1: LCP + count + prune + byte fill ----
 // Per-sample two-pass: pool normal alone, sort+reduce+dedup-edges, free raw
-// SigCol vector, THEN pool tumor alone. Peak in-pool RAM = one sample's raw
+// sig vector (bare u64), THEN pool tumor alone. Peak in-pool RAM = one sample's raw
 // emissions (~50 % of the dual-extract total) instead of both samples combined.
 // pre_prune.bin schema: u64 N + N × SigCount (sig, n, t). Holds the merged-but-
 // unpruned sig table — lets a subsequent --min-mult sweep skip the ~22-min pool
@@ -533,16 +540,16 @@ void run_lcp(const std::string& normal_fq, const std::string& tumor_fq, const st
         std::vector<SigCount> nodes_n, nodes_t;
         // ---- PASS A: normal (sigs only, no edges) ----
         {
-            std::vector<SigCol> sigs; std::mutex smtx;
+            std::vector<uint64_t> sigs; std::mutex smtx;
             uint64_t dummy_t = 0;
             run_pool(shards_n, level, flank, margin, threads, sigs, smtx, nr_n, dummy_t);
             tic.mark("pool_n");
             std::fprintf(stderr, "[lcp/n] sigs raw=%lu (%.1f GB)\n",
-                         (unsigned long)sigs.size(), sigs.size() * sizeof(SigCol) / 1e9);
-            radix_sort_sigs(sigs);
+                         (unsigned long)sigs.size(), sigs.size() * sizeof(uint64_t) / 1e9);
+            radix_sort_u64(sigs);
             tic.mark("radix_n");
-            reduce_sigs(sigs, nodes_n);
-            std::vector<SigCol>().swap(sigs);
+            reduce_sigs_u64(sigs, nodes_n, false);
+            std::vector<uint64_t>().swap(sigs);
             tic.mark("reduce_n");
             std::fprintf(stderr, "[lcp/n] nodes=%lu (%.1f GB)\n",
                          (unsigned long)nodes_n.size(), nodes_n.size() * sizeof(SigCount) / 1e9);
@@ -550,16 +557,16 @@ void run_lcp(const std::string& normal_fq, const std::string& tumor_fq, const st
 
         // ---- PASS B: tumor (sigs only) ----
         {
-            std::vector<SigCol> sigs; std::mutex smtx;
+            std::vector<uint64_t> sigs; std::mutex smtx;
             uint64_t dummy_n = 0;
             run_pool(shards_t, level, flank, margin, threads, sigs, smtx, dummy_n, nr_t);
             tic.mark("pool_t");
             std::fprintf(stderr, "[lcp/t] sigs raw=%lu (%.1f GB)\n",
-                         (unsigned long)sigs.size(), sigs.size() * sizeof(SigCol) / 1e9);
-            radix_sort_sigs(sigs);
+                         (unsigned long)sigs.size(), sigs.size() * sizeof(uint64_t) / 1e9);
+            radix_sort_u64(sigs);
             tic.mark("radix_t");
-            reduce_sigs(sigs, nodes_t);
-            std::vector<SigCol>().swap(sigs);
+            reduce_sigs_u64(sigs, nodes_t, true);
+            std::vector<uint64_t>().swap(sigs);
             tic.mark("reduce_t");
             std::fprintf(stderr, "[lcp/t] nodes=%lu (%.1f GB)\n",
                          (unsigned long)nodes_t.size(), nodes_t.size() * sizeof(SigCount) / 1e9);
@@ -587,6 +594,9 @@ void run_lcp(const std::string& normal_fq, const std::string& tumor_fq, const st
     tic.mark("prune");
     std::fprintf(stderr, "[lcp]   prune min_mult=%d kept=%lu of %lu (%.2f%%)\n",
                  min_mult, (unsigned long)nodes.size(), (unsigned long)pre_prune, 100.0 * nodes.size() / pre_prune);
+    std::vector<SigCount>(nodes).swap(nodes);   // prune drops ~95% of nodes but resize keeps the capacity;
+                                                // release the dead allocation (tens of GB at WG scale) so it
+                                                // isn't carried through fill_pool's idx/slot_buf/edges peak.
     std::unordered_map<uint64_t, uint32_t> idx; idx.reserve(nodes.size());
     for (uint32_t i = 0; i < nodes.size(); i++) idx.emplace(nodes[i].sig, i);
     std::vector<std::vector<uint8_t>> slot_buf(nodes.size());

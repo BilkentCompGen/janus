@@ -9,6 +9,7 @@ simulation
 outputs
 build
 /svp
+/colo829
 
 # experiment/throwaway analysis (not part of the tracked implementation)
 tools/*
