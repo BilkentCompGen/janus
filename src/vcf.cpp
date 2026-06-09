@@ -87,6 +87,22 @@ void load_bubble_pos(const std::string& dir, std::vector<BubblePos>& bps) {
     std::fclose(f);
 }
 
+// Optional phantom_filter.bin (from region_color_census). flags[i]=1 means "this bucket=2
+// D-tag bubble sits in a low-repeat region, allow emission". Without this file: behave as
+// before (drop all bucket=2 D-tag ≥50bp).
+void load_phantom_filter(const std::string& dir, std::vector<uint8_t>& flags, uint64_t B) {
+    flags.assign(B, 0);
+    FILE* f = std::fopen((dir + "/phantom_filter.bin").c_str(), "rb");
+    if (!f) return;
+    uint64_t N; if (std::fread(&N, 8, 1, f) != 1) { std::fclose(f); return; }
+    if (N != B) { std::fclose(f); std::fprintf(stderr, "[warn] phantom_filter.bin size %lu != bubbles %lu, ignoring\n", (unsigned long)N, (unsigned long)B); return; }
+    std::fread(flags.data(), 1, B, f);
+    std::fclose(f);
+    uint64_t set = 0; for (uint8_t v : flags) if (v) set++;
+    std::fprintf(stderr, "[vcf] phantom_filter.bin: %lu / %lu bubbles flagged allow-bucket2-D\n",
+                 (unsigned long)set, (unsigned long)B);
+}
+
 void load_dup_flags(const std::string& path, std::unordered_map<uint32_t, DupCall>& out) {
     if (path.empty()) return;
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -152,7 +168,7 @@ uint32_t bubble_span(const BubblePos& bp) {
     return (bp.s1_right > bp.s2_left) ? (bp.s1_right - bp.s2_left) : 0;
 }
 
-bool apply_filters(const BubbleTag& t, const BubblePos& bp, const CovRun* runs) {
+bool apply_filters(const BubbleTag& t, const BubblePos& bp, const CovRun* runs, bool allow_bucket2_d, bool inv_flagged) {
     if (t.tag == 'C' || t.tag == 'E') return false;
     if (bp.chrom_id == UINT32_MAX) return false;
     // Resolution gates
@@ -172,19 +188,21 @@ bool apply_filters(const BubbleTag& t, const BubblePos& bp, const CovRun* runs) 
 
     // ============ DEL ============
     if (t.tag == 'D') {
+        (void)allow_bucket2_d;
         if (nc < 3) return false;
         if (t.n_resid_len >= 50) {
-            // Phantom signature: 99.9% of FP DELs (≥50bp) come from orphan buckets (bucket=1
-            // or 2). Real DELs in orphan buckets exist but at <1% rate — not separable from
-            // phantoms by any feature we measured. Require std_both (bucket=0).
-            if (t.bucket != 0) return false;
-            // Anchor-chain depth: at least one anchor must have ≥20 sigs.
-            if (bp.n_anchor_s1 < 20 && bp.n_anchor_s2 < 20) return false;
-            if (t.pre + t.suf < 100) return false;
-            if (span < 10) return false;
-            const uint32_t cap = 3 * t.n_resid_len + 500;
-            if (span > cap) return false;
-            if (nc > 250) return false;
+            // Allow bucket=2 D-tag through if the inv_flags entry covers this bubble — the
+            // bucket=2 D-tag at an INV-signature locus emits as <INV>, not <DEL>.
+            if (t.bucket != 0 && !inv_flagged) return false;
+            if (t.bucket == 0) {
+                if (bp.n_anchor_s1 < 20 && bp.n_anchor_s2 < 20) return false;
+                if (t.pre + t.suf < 100) return false;
+                if (span < 10) return false;
+                const uint32_t cap = 3 * t.n_resid_len + 500;
+                if (span > cap) return false;
+                if (nc > 250) return false;
+            }
+            // bucket=2 + inv_flagged passes through unconditionally.
         }
         return true;
     }
@@ -358,7 +376,11 @@ void dispatch_emit(uint32_t bubble_id, const BubbleTag& t, const BubblePos& bp,
     auto inv_it = invs.find(bubble_id);
     auto dup_it = dups.find(bubble_id);
     if (dup_it != dups.end() && (t.tag == 'I' || t.tag == 'S' || t.tag == 'C')) { emit_dup(t, bp, dup_it->second, runs, chroms, out); return; }
-    if (t.tag == 'S' && inv_it != invs.end() && N.size() > 1)                   { emit_inv(t, bp, inv_it->second, runs, chroms, out); return; }
+    // INV emission for D-tag bucket=2 at INV-signature loci OR S-tag multi-bp INV.
+    if (inv_it != invs.end()) {
+        if (t.tag == 'D' && t.bucket == 2 && t.n_resid_len >= 50) { emit_inv(t, bp, inv_it->second, runs, chroms, out); return; }
+        if (t.tag == 'S' && N.size() > 1)                          { emit_inv(t, bp, inv_it->second, runs, chroms, out); return; }
+    }
     if (t.tag == 'I')                                                            { emit_ins(t, bp, T, runs, chroms, out); return; }
     if (t.tag == 'D')                                                            { emit_del(t, bp, N, runs, chroms, out); return; }
     if (t.tag == 'S' && N.size() == 1 && T.size() == 1)                          { emit_snp(t, bp, N, T, runs, chroms, out); return; }
@@ -376,6 +398,8 @@ void run_vcf(const std::string& dir, const std::string& /*ref_path*/, const std:
     std::vector<BubblePos> bps; load_bubble_pos(dir, bps);
     std::unordered_map<uint32_t, DupCall> dups; std::unordered_map<uint32_t, InvCall> invs;
     load_dup_flags(dup_flags_path, dups); load_inv_flags(inv_flags_path, invs);
+    std::vector<uint8_t> phantom_flags;
+    load_phantom_filter(dir, phantom_flags, tags.size());
     std::fprintf(stderr, "[vcf] %lu bubbles, %lu dup-flags, %lu inv-flags\n",
                  (unsigned long)tags.size(), (unsigned long)dups.size(), (unsigned long)invs.size());
 
@@ -383,7 +407,9 @@ void run_vcf(const std::string& dir, const std::string& /*ref_path*/, const std:
     uint64_t passed = 0, dropped = 0;
     uint64_t drop_C = 0, drop_unanchored = 0, drop_resolution = 0, drop_cov = 0, drop_phantom = 0;
     for (size_t i = 0; i < tags.size(); i++) {
-        if (!apply_filters(tags[i], bps[i], runs.data())) {
+        const bool allow_b2d = i < phantom_flags.size() && phantom_flags[i] != 0;
+        const bool inv_flagged = invs.find((uint32_t)i) != invs.end();
+        if (!apply_filters(tags[i], bps[i], runs.data(), allow_b2d, inv_flagged)) {
             dropped++;
             if (tags[i].tag == 'C' || tags[i].tag == 'E') drop_C++;
             else if (bps[i].chrom_id == UINT32_MAX) drop_unanchored++;
