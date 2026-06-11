@@ -9,6 +9,12 @@
 // read_fasta_flat serves the assembly-based GT/analysis tools only (never a caller input).
 struct Core { uint64_t start, end; uint32_t label; };
 
+// SoA LCP extraction over biolcp (src/extract_fast.cpp). end is exclusive; label is the
+// native content fingerprint used directly as the signature (no flank-window murmur).
+extern "C" void extract_fast(const char* str, int len, uint64_t offset, int target_level,
+                             int* n_out, const uint64_t** starts_out,
+                             const uint64_t** ends_out, const uint32_t** labels_out);
+
 void read_fasta_flat(const std::string& path, int flank, std::string& out, std::vector<uint64_t>& rec_start, std::vector<uint64_t>& rec_end);
 void read_fasta_flat_named(const std::string& path, int flank, std::string& out, std::vector<uint64_t>& rec_start, std::vector<uint64_t>& rec_end, std::vector<std::string>& names);
 void extract_cores(const std::string& seq, const std::vector<uint64_t>& rec_start, const std::vector<uint64_t>& rec_end, int level, std::vector<Core>& out);
