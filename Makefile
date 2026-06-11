@@ -1,7 +1,9 @@
 CXX      := g++
-CXXFLAGS := -std=c++17 -O3 -Wall -Wextra -Wpedantic -MMD
+# -DLARGE_GENOME: biolcp struct core uses 64-bit start/end (no offset truncation on a
+# whole-genome reference). MUST match the flag the static lib is built with (below).
+CXXFLAGS := -std=c++17 -O3 -march=native -DLARGE_GENOME -Wall -Wextra -Wpedantic -MMD
 INC      := -Ilib/lcptools -Isrc
-LDFLAGS  := -Llib/lcptools -llcptools -lz
+LDFLAGS  := -Llib/lcptools -llcptools -lz -lm
 
 BUILD  := build
 SRC    := $(wildcard src/*.cpp)
@@ -186,8 +188,11 @@ run-list:
 
 install-deps: install-deps-lcptools install-deps-pbsim3 install-deps-ccs
 
+# biolcp branch: DNA-optimised lcptools. Its own Makefile installs to /usr/local (needs
+# root) so we build the static archive in-place here. -DLARGE_GENOME must match svp's
+# CXXFLAGS (64-bit core start/end). -march=native: same box builds + runs.
 install-deps-lcptools:
-	$(MAKE) -C lib/lcptools
+	cd lib/lcptools && gcc -O3 -march=native -DLARGE_GENOME -c encoding.c core.c lps.c && ar rcs liblcptools.a encoding.o core.o lps.o
 
 # pbsim3 ships generated autotools but the bundled config.guess/config.sub are
 # absent — autoreconf -fi installs them, then standard configure+make.
