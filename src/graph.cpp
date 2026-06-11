@@ -1,9 +1,6 @@
 #include "graph.h"
 #include "MurmurHash3.h"
-
-extern "C" void extract_fast(const char *str, int len, uint64_t offset, int target_level,
-                             int *n_out, const uint64_t **starts_out,
-                             const uint64_t **ends_out, const uint32_t **labels_out);
+// extract_fast is declared in svp.h (provided by src/extract_fast.cpp over biolcp).
 
 #include <zlib.h>
 #include <sys/stat.h>
