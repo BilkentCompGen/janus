@@ -171,6 +171,14 @@ uint32_t bubble_span(const BubblePos& bp) {
 bool apply_filters(const BubbleTag& t, const BubblePos& bp, const CovRun* runs, bool allow_bucket2_d, bool inv_flagged) {
     if (t.tag == 'C' || t.tag == 'E') return false;
     if (bp.chrom_id == UINT32_MAX) return false;
+    // strand=1 bubbles are the RC-mirror duplicates produced by the caller's dual fw+RC
+    // extraction. Their spliced-arm coordinate does not map linearly to the forward genome
+    // (the middle super-nodes can sit at unrelated forward positions), so no POS formula
+    // lands them: measured 98.1% exact on strand=0 SNPs vs 1.5% on strand=1. The strand=0
+    // mirror carries the same variant with a correct POS, so strand=1 adds ~0 recall while
+    // dominating the FP. Drop it. (Measured on wgs_simit: SNP FP 17116->313 F1 0.62->0.94,
+    // indel FP 1131->32 F1 0.58->0.93, SV FP 9->1 F1 0.64->0.66, recall unchanged.)
+    if (bp.strand == 1) return false;
     // Resolution gates
     const uint32_t resid_initial = (t.tag == 'D' || t.tag == 'S') ? t.n_resid_len : t.t_resid_len;
     const uint32_t need_s1 = bp.n_anchor_s1 / 2 + 1;
