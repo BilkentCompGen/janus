@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace {
-struct SuperNode { uint32_t chain_len, block_len, runs_len; uint8_t color; };
+struct SuperNode { uint32_t block_len, runs_len; uint8_t color; };
 struct CovRun    { uint32_t end_pos, n_cov, t_cov; };
 
 // KMP-based longest k such that A[la-k:la] == B[0:k]. The fall-back at i==la-1 only
@@ -116,28 +116,23 @@ void build_super_edges(const std::vector<IEdge>& edges,
 void emit_super_node(const std::vector<uint32_t>& chain, const std::vector<uint16_t>& seqlen,
                      const uint8_t* payload, const std::vector<uint64_t>& seq_off,
                      const std::vector<uint32_t>& ncov, const std::vector<uint32_t>& tcov, const std::vector<uint8_t>& color,
-                     std::vector<SuperNode>& snodes, std::vector<uint32_t>& chain_ids, std::vector<uint16_t>& overlaps,
+                     std::vector<SuperNode>& snodes,
                      std::vector<uint8_t>& blocks, std::vector<CovRun>& runs, std::vector<uint32_t>& node_to_super,
                      std::vector<uint8_t>& block_buf, std::vector<uint16_t>& overlap_buf, std::vector<CovRun>& runs_buf) {
     const uint32_t sid = (uint32_t)snodes.size();
     for (uint32_t nid : chain) node_to_super[nid] = sid;
     splice_chain(chain, seqlen, payload, seq_off, block_buf, overlap_buf);
     compute_runs(chain, seqlen, ncov, tcov, overlap_buf, block_buf.size(), runs_buf);
-    snodes.push_back({(uint32_t)chain.size(), (uint32_t)block_buf.size(), (uint32_t)runs_buf.size(), color[chain[0]]});
-    chain_ids.insert(chain_ids.end(), chain.begin(), chain.end());
-    overlaps.insert(overlaps.end(), overlap_buf.begin(), overlap_buf.end());
+    snodes.push_back({(uint32_t)block_buf.size(), (uint32_t)runs_buf.size(), color[chain[0]]});
     blocks.insert(blocks.end(), block_buf.begin(), block_buf.end());
     runs.insert(runs.end(), runs_buf.begin(), runs_buf.end());
 }
 
 void write_modea_bin(const std::string& path, const std::vector<SuperNode>& snodes,
-                     const std::vector<uint32_t>& chain_ids, const std::vector<uint16_t>& overlaps,
                      const std::vector<uint8_t>& blocks, const std::vector<CovRun>& runs, const std::vector<IEdge>& super_edges) {
     const std::string tmp = path + ".tmp";
     FILE* f = xopen(tmp, "wb");
     uint64_t S = snodes.size();      wr(f, &S, 8);  wr(f, snodes.data(),      S  * sizeof(SuperNode));
-    uint64_t tc = chain_ids.size();  wr(f, &tc, 8); wr(f, chain_ids.data(),   tc * 4);
-    uint64_t to = overlaps.size();   wr(f, &to, 8); wr(f, overlaps.data(),    to * 2);
     uint64_t tb = blocks.size();     wr(f, &tb, 8); wr(f, blocks.data(),      tb);
     uint64_t tr = runs.size();       wr(f, &tr, 8); wr(f, runs.data(),        tr * sizeof(CovRun));
     uint64_t E = super_edges.size(); wr(f, &E, 8);  wr(f, super_edges.data(), E  * sizeof(IEdge));
@@ -169,8 +164,8 @@ void run_modea(const std::string& dir) {
     for (const IEdge& e : edges) { out_deg[e.first]++; in_deg[e.second]++; succ[e.first] = e.second; pred[e.second] = e.first; }
     std::vector<char> visited(K, 0);
     std::vector<SuperNode> snodes; snodes.reserve(K / 2);
-    std::vector<uint32_t> chain_ids, node_to_super(K, UINT32_MAX), chain;
-    std::vector<uint16_t> overlaps, overlap_buf;
+    std::vector<uint32_t> node_to_super(K, UINT32_MAX), chain;
+    std::vector<uint16_t> overlap_buf;
     std::vector<uint8_t> blocks, block_buf;
     std::vector<CovRun> runs, runs_buf;
     for (uint32_t u = 0; u < (uint32_t)K; u++) {
@@ -179,7 +174,7 @@ void run_modea(const std::string& dir) {
         if (!left_end) continue;
         walk_chain(u, succ, in_deg, out_deg, color, visited, chain);
         emit_super_node(chain, seqlen, payload.data(), seq_off, ncov, tcov, color,
-                        snodes, chain_ids, overlaps, blocks, runs, node_to_super,
+                        snodes, blocks, runs, node_to_super,
                         block_buf, overlap_buf, runs_buf);
     }
     uint64_t cycle_singletons = 0;
@@ -187,12 +182,12 @@ void run_modea(const std::string& dir) {
         if (visited[u]) continue;
         chain.assign(1, u); visited[u] = 1; cycle_singletons++;
         emit_super_node(chain, seqlen, payload.data(), seq_off, ncov, tcov, color,
-                        snodes, chain_ids, overlaps, blocks, runs, node_to_super,
+                        snodes, blocks, runs, node_to_super,
                         block_buf, overlap_buf, runs_buf);
     }
     std::vector<IEdge> super_edges;
     build_super_edges(edges, node_to_super, super_edges);
-    write_modea_bin(dir + "/modea.bin", snodes, chain_ids, overlaps, blocks, runs, super_edges);
+    write_modea_bin(dir + "/modea.bin", snodes, blocks, runs, super_edges);
     std::fprintf(stderr, "[modea] K=%lu -> S=%lu (cycle-singletons=%lu) edges=%lu->%lu block=%.2fGB runs=%lu -> %s/modea.bin\n",
                  (unsigned long)K, (unsigned long)snodes.size(), (unsigned long)cycle_singletons,
                  (unsigned long)E, (unsigned long)super_edges.size(), blocks.size() / 1e9, (unsigned long)runs.size(), dir.c_str());
