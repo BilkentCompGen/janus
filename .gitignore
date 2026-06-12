@@ -9,6 +9,7 @@ simulation
 outputs
 build
 /svp
+/svp.*
 /colo829
 
 # experiment/throwaway analysis (not part of the tracked implementation)
@@ -17,3 +18,4 @@ tools/*
 docs/analysis
 experiments
 scripts/fakebin
+/li2020.pdf
