@@ -230,9 +230,12 @@ Reads are generated whole-genome:
 - `lib/lcptools` — LCP core extraction. **Must be on the `biolcp` branch** (DNA-optimised;
   `make install-deps-lcptools` archives it in-place with `-DLARGE_GENOME`, which svp's
   CXXFLAGS must match — 64-bit core start/end). `src/extract_fast.cpp` adapts biolcp's
-  `init_lps`/`lps_deepen` to svp's SoA `extract_fast` interface. The signature stays the
-  flank-window murmur, NOT the native label — the label is content-only and breaks modea/modeb
-  byte-splice locality (recall 0.495→0.045); see `docs/BIOLCP_MIGRATION.md`. Static lib is
+  `init_lps`/`lps_deepen` to svp's SoA `extract_fast` interface. Signature stays
+  `murmur64(core ± 10bp flank)`: the ±10 flank is LOAD-BEARING (makes each node locus-specific
+  -> consistent stored bytes for the modea/modeb splice). Measured: dropping the flank craters
+  recall (`murmur64(core)` SNP 0.913->0.40, 58k modea zero-overlap seams), and the native
+  32-bit boundary-only `label` is worse (0.495->0.045). Neither helps speed (the murmur is not
+  the bottleneck; the serial merge tail is). See `docs/BIOLCP_MIGRATION.md`. Static lib is
   stale-prone; rebuild if you see segfaults on struct fields after pulling `lib/`.
 - `lib/pbsim3` — long-read simulator (autotools; `autoreconf -fi` for `config.guess/sub`).
 - `lib/ccs` — PacBio CCS v6.4.0 static binary.
