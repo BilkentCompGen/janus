@@ -26,7 +26,7 @@
 
 namespace {
 
-struct SuperNode { uint32_t chain_len, block_len, runs_len; uint8_t color; };
+struct SuperNode { uint32_t block_len, runs_len; uint8_t color; };
 struct CovRun    { uint32_t end_pos, n_cov, t_cov; };
 
 // Mirror tools/modea_audit.py:44 — per-branch DFS budget. Tracks compatibility.
@@ -45,25 +45,22 @@ struct BubbleTag {
     uint32_t n_runs_off, n_runs_len, t_runs_off, t_runs_len;
 };
 
-uint64_t expected_modea_size(uint64_t S, uint64_t tc, uint64_t to, uint64_t tb, uint64_t tr, uint64_t E) {
-    return 8 + S * sizeof(SuperNode) + 8 + tc * 4 + 8 + to * 2 + 8 + tb + 8 + tr * sizeof(CovRun) + 8 + E * sizeof(IEdge);
+uint64_t expected_modea_size(uint64_t S, uint64_t tb, uint64_t tr, uint64_t E) {
+    return 8 + S * sizeof(SuperNode) + 8 + tb + 8 + tr * sizeof(CovRun) + 8 + E * sizeof(IEdge);
 }
 
 void read_modea(const std::string& dir,
-                std::vector<SuperNode>& snodes, std::vector<uint32_t>& chain_ids,
-                std::vector<uint16_t>& overlaps, std::vector<uint8_t>& blocks,
+                std::vector<SuperNode>& snodes, std::vector<uint8_t>& blocks,
                 std::vector<CovRun>& runs, std::vector<IEdge>& super_edges) {
     const std::string path = dir + "/modea.bin";
     struct stat st; if (::stat(path.c_str(), &st)) { std::fprintf(stderr, "[FATAL] stat %s\n", path.c_str()); std::abort(); }
     FILE* f = xopen(path, "rb");
     uint64_t S; rd(f, &S, 8); snodes.resize(S); rd(f, snodes.data(), S * sizeof(SuperNode));
-    uint64_t tc; rd(f, &tc, 8); chain_ids.resize(tc); rd(f, chain_ids.data(), tc * 4);
-    uint64_t to; rd(f, &to, 8); overlaps.resize(to); rd(f, overlaps.data(), to * 2);
     uint64_t tb; rd(f, &tb, 8); blocks.resize(tb); rd(f, blocks.data(), tb);
     uint64_t tr; rd(f, &tr, 8); runs.resize(tr); rd(f, runs.data(), tr * sizeof(CovRun));
     uint64_t E;  rd(f, &E,  8); super_edges.resize(E); rd(f, super_edges.data(), E * sizeof(IEdge));
     std::fclose(f);
-    const uint64_t expect = expected_modea_size(S, tc, to, tb, tr, E);
+    const uint64_t expect = expected_modea_size(S, tb, tr, E);
     if ((uint64_t)st.st_size != expect) { std::fprintf(stderr, "[FATAL] modea.bin size %lu != expected %lu\n", (unsigned long)st.st_size, (unsigned long)expect); std::abort(); }
 }
 
@@ -72,14 +69,12 @@ void build_out_adj(const std::vector<IEdge>& super_edges, uint64_t S, std::vecto
     for (const IEdge& e : super_edges) out_adj[e.first].push_back(e.second);
 }
 
-struct OffsetTable { std::vector<uint64_t> chain_off, ovr_off, blk_off, runs_off; };
+struct OffsetTable { std::vector<uint64_t> blk_off, runs_off; };
 
 void build_offset_table(const std::vector<SuperNode>& snodes, OffsetTable& t) {
     const uint64_t S = snodes.size();
-    t.chain_off.assign(S + 1, 0); t.ovr_off.assign(S + 1, 0); t.blk_off.assign(S + 1, 0); t.runs_off.assign(S + 1, 0);
+    t.blk_off.assign(S + 1, 0); t.runs_off.assign(S + 1, 0);
     for (uint64_t i = 0; i < S; i++) {
-        t.chain_off[i + 1] = t.chain_off[i] + snodes[i].chain_len;
-        t.ovr_off[i + 1]   = t.ovr_off[i]   + (snodes[i].chain_len ? snodes[i].chain_len - 1 : 0);
         t.blk_off[i + 1]   = t.blk_off[i]   + snodes[i].block_len;
         t.runs_off[i + 1]  = t.runs_off[i]  + snodes[i].runs_len;
     }
@@ -345,9 +340,9 @@ void summarize_bubbles(const std::vector<BubblePair>& bubbles, uint64_t& n_std, 
 }  // namespace
 
 void run_modeb(const std::string& dir) {
-    std::vector<SuperNode> snodes; std::vector<uint32_t> chain_ids; std::vector<uint16_t> overlaps;
+    std::vector<SuperNode> snodes;
     std::vector<uint8_t> blocks; std::vector<CovRun> runs; std::vector<IEdge> super_edges;
-    read_modea(dir, snodes, chain_ids, overlaps, blocks, runs, super_edges);
+    read_modea(dir, snodes, blocks, runs, super_edges);
     std::vector<uint8_t> color(snodes.size()); for (size_t i = 0; i < snodes.size(); i++) color[i] = snodes[i].color;
     std::vector<std::vector<uint32_t>> out_adj; build_out_adj(super_edges, snodes.size(), out_adj);
     OffsetTable ot; build_offset_table(snodes, ot);
