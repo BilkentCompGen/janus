@@ -1,6 +1,0 @@
-# SNP-region investigations: each SNP gets a ±200 bp window
-region 1:125620-126020
-region 1:691870-692270
-region 1:842072-842472
-region 1:857415-857815
-region 1:2090965-2091365
