@@ -25,8 +25,18 @@ void compute_sigs(const std::string& seq, const std::vector<Core>& cs, int m, in
 struct SigCount { uint64_t sig; uint32_t n, t; };
 using IEdge = std::pair<uint32_t, uint32_t>;
 
+// modea.bin node schema: modea.cpp writes these, modeb.cpp reads them back — the two
+// definitions must stay byte-identical, so they live here rather than in each anon namespace.
+// pad zero-inits the 3 alignment bytes after color (sizeof is 12); without it those bytes
+// are uninitialized heap and leak to disk, making the checkpoint non-reproducible.
+struct SuperNode { uint32_t block_len, runs_len; uint8_t color; uint8_t pad[3] = {}; };
+struct CovRun    { uint32_t end_pos, n_cov, t_cov; };
+
 // Fail-fast checkpoint IO helpers. Defined in graph.cpp; declared here so modea.cpp can use them.
 FILE* xopen(const std::string& p, const char* m);
 void  wr(FILE* f, const void* p, size_t n);
 void  rd(FILE* f, void* p, size_t n);
 void  atomic_close(FILE* f, const std::string& tmp, const std::string& dst);
+
+// KMP longest k such that A[la-k:la] == B[0:k]. Defined in modea.cpp; shared with modeb.cpp.
+uint32_t suffix_prefix(const uint8_t* A, uint32_t la, const uint8_t* B, uint32_t lb);

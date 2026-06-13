@@ -4,12 +4,14 @@
 #include <string>
 #include <vector>
 
-// 2-colour LCP-core graph built FROM READS (never an assembly), as 3 resumable stages
+// 2-colour LCP-core graph built FROM READS (never an assembly), as 5 resumable stages
 // checkpointed under a work <dir>:
 //   lcp     : reads -> per-sig multiplicity + within-read directed edges, prune by min_mult,
 //             second LCP pass fills window bytes per kept sig
 //             -> <dir>/counts.bin (post-prune sigs + inline bytes), <dir>/edges.bin
 //   graph   : counts+edges -> colour, resolve to directed node-id edges -> <dir>/graph.bin
+//   modea   : graph -> unitig-compacted super-graph with per-base coverage -> <dir>/modea.bin
+//   modeb   : modea -> bubble-zipped super-graph with explicit edge overlaps -> <dir>/modeb.bin
 //   bubbles : graph -> permissive Cortex bubble decomposition -> <out_tsv>
 // Colour 1 = normal-only, 2 = tumor-only (candidate somatic), 3 = shared backbone.
 // type 'D' = normal-only, 'I' = tumor-only (somatic), 'C' = mixed.
