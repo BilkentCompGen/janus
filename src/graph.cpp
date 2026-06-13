@@ -397,32 +397,6 @@ void fill_pool(const std::vector<Shard>& shards, int level, int flank, int margi
     for (auto& t : wks) t.join();
 }
 
-// LSB radix sort over bare u64 sigs: 11-bit digit × 6 passes (66 ≥ 64). size_t hist +
-// offsets — N exceeds 2^32 at WG scale. Half the element bytes + 2 fewer passes than the
-// old 16-byte/8-pass SigCol sort. Output overwrites src.
-void radix_sort_u64(std::vector<uint64_t>& sigs) {
-    const size_t N = sigs.size();
-    if (N == 0) return;
-    std::vector<uint64_t> tmp(N);
-    uint64_t *src = sigs.data(), *dst = tmp.data();
-    constexpr int RADIX = 11, BUCKETS = 1 << RADIX;
-    constexpr uint64_t MASK = BUCKETS - 1;
-    size_t hist[BUCKETS];
-    for (int pass = 0; pass < 6; pass++) {
-        std::memset(hist, 0, sizeof(hist));
-        const int sh = pass * RADIX;
-        for (size_t i = 0; i < N; i++) hist[(src[i] >> sh) & MASK]++;
-        size_t acc = 0;
-        for (int b = 0; b < BUCKETS; b++) { size_t c = hist[b]; hist[b] = acc; acc += c; }
-        for (size_t i = 0; i < N; i++) {
-            const uint64_t bk = (src[i] >> sh) & MASK;
-            dst[hist[bk]++] = src[i];
-        }
-        uint64_t *t = src; src = dst; dst = t;
-    }
-    if (src != sigs.data()) std::memcpy(sigs.data(), src, N * sizeof(uint64_t));
-}
-
 // LSB radix sort over (a, b) treated as a 16-byte key: 8 passes on .second, then 8 on .first.
 void radix_sort_edges(std::vector<SEdge>& edges) {
     const size_t M = edges.size();
@@ -444,18 +418,6 @@ void radix_sort_edges(std::vector<SEdge>& edges) {
         SEdge *t = src; src = dst; dst = t;
     }
     if (src != edges.data()) std::memcpy((void*)edges.data(), (void*)src, M * sizeof(SEdge));
-}
-
-// Reduce sorted u64 sigs into per-signature SigCount via run-length count. Each pool pass
-// is single-colour, so the run length is the n-count (normal) or t-count (tumor); the
-// other colour stays 0 and is combined later by merge_sorted_nodes.
-void reduce_sigs_u64(const std::vector<uint64_t>& sigs, std::vector<SigCount>& nodes, bool tumor) {
-    nodes.reserve(sigs.size() / 2 + 1);
-    for (size_t i = 0; i < sigs.size();) {
-        const uint64_t g = sigs[i]; uint32_t c = 0;
-        for (; i < sigs.size() && sigs[i] == g; i++) c++;
-        nodes.push_back(tumor ? SigCount{g, 0, c} : SigCount{g, c, 0});
-    }
 }
 
 // Permissive Cortex bubble = a maximal connected run of non-shared (colour != 3) nodes,
@@ -481,18 +443,6 @@ void decompose(const std::vector<std::vector<int32_t>>& adj, const std::vector<u
         out.push_back({(char)(seen == 1 ? 'D' : seen == 2 ? 'I' : 'C'), nn, nc, tc});
     }
 }
-// Per-sample noise gate: keep sigs whose count clears min_mult. Called on EACH colour's
-// table independently, before the merge — so a sig with only normal=2 sequencing errors is
-// dropped from the normal table while a real tumor=50 survives in the tumor table, and the
-// merge then records it tumor-only instead of "shared". Each per-sample table has one
-// nonzero colour, so max(n,t) reduces to that colour's count. In-place.
-void prune_by_mult(std::vector<SigCount>& nodes, int min_mult) {
-    const uint32_t mm = (uint32_t)min_mult;
-    size_t k = 0;
-    for (const SigCount& c : nodes) if ((c.n > c.t ? c.n : c.t) >= mm) nodes[k++] = c;
-    nodes.resize(k);
-}
-
 // Concatenate slot_buf[i] into payload + record seqlen[i]. Frees each slot as it goes.
 // Aborts on empty slot — pass 2 reads the same FASTQs as pass 1 so every kept sig must
 // be re-seen at least once.

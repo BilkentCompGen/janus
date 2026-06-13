@@ -25,9 +25,7 @@
 
 namespace {
 
-struct SuperNode { uint32_t block_len, runs_len; uint8_t color; };
-struct CovRun    { uint32_t end_pos, n_cov, t_cov; };
-struct GEdge     { uint32_t from, to, overlap; };
+struct GEdge { uint32_t from, to, overlap; };
 
 constexpr uint32_t NODE_BUDGET = 500;   // per-branch DFS budget (mirrors the audit)
 
@@ -68,24 +66,6 @@ void build_offset_table(const std::vector<SuperNode>& snodes, OffsetTable& t) {
         t.blk_off[i + 1]  = t.blk_off[i]  + snodes[i].block_len;
         t.runs_off[i + 1] = t.runs_off[i] + snodes[i].runs_len;
     }
-}
-
-// KMP longest exact suffix-of-A == prefix-of-B.
-uint32_t suffix_prefix(const uint8_t* A, uint32_t la, const uint8_t* B, uint32_t lb) {
-    if (la == 0 || lb == 0) return 0;
-    std::vector<uint32_t> fail(lb, 0);
-    for (uint32_t i = 1, j = 0; i < lb; i++) {
-        while (j > 0 && B[i] != B[j]) j = fail[j - 1];
-        if (B[i] == B[j]) j++;
-        fail[i] = j;
-    }
-    uint32_t j = 0;
-    for (uint32_t i = 0; i < la; i++) {
-        while (j > 0 && A[i] != B[j]) j = fail[j - 1];
-        if (A[i] == B[j]) j++;
-        if (j == lb) { if (i + 1 == la) return lb; j = fail[j - 1]; }
-    }
-    return j;
 }
 
 // BFS from s1 to s2; interior nodes restricted by a colour bitmask, start out-neighbour by
