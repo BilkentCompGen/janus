@@ -28,7 +28,7 @@ void read_fasta_flat(const std::string& path, int flank, std::string& out, std::
 }
 
 // Same as read_fasta_flat but also captures the chromosome name from each '>' header
-// (first whitespace-delimited token after '>'). Used by posmap to emit chroms.tsv.
+// (first whitespace-delimited token after '>').
 void read_fasta_flat_named(const std::string& path, int flank, std::string& out, std::vector<uint64_t>& rec_start, std::vector<uint64_t>& rec_end, std::vector<std::string>& names) {
     gzFile f = gzopen(path.c_str(), "rb");
     if (!f) { std::fprintf(stderr, "[FATAL] gzopen %s\n", path.c_str()); std::abort(); }

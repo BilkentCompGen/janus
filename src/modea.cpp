@@ -7,10 +7,6 @@
 #include <string>
 #include <vector>
 
-namespace {
-struct SuperNode { uint32_t block_len, runs_len; uint8_t color; };
-struct CovRun    { uint32_t end_pos, n_cov, t_cov; };
-
 // KMP-based longest k such that A[la-k:la] == B[0:k]. The fall-back at i==la-1 only
 // triggers if B fully matched as a suffix of A — that case must return lb, not fail[lb-1].
 uint32_t suffix_prefix(const uint8_t* A, uint32_t la, const uint8_t* B, uint32_t lb) {
@@ -29,6 +25,8 @@ uint32_t suffix_prefix(const uint8_t* A, uint32_t la, const uint8_t* B, uint32_t
     }
     return j;
 }
+
+namespace {
 
 void walk_chain(uint32_t u, const std::vector<uint32_t>& succ,
                 const std::vector<uint32_t>& in_deg, const std::vector<uint32_t>& out_deg,

@@ -1,9 +1,11 @@
 // svp (lcp-cortex): somatic SV caller over a 2-colour LCP-core graph built FROM READS
-// (normal vs tumor HiFi reads). READS ONLY; no assembly in the pipeline. Runs as three
+// (normal vs tumor HiFi reads). READS ONLY; no assembly in the pipeline. Runs as five
 // resumable, checkpointed stages so the expensive LCP pass is paid once:
 //   svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir>   -> dir/counts.bin (post-prune sigs +
 //                                                       inline bytes), dir/edges.bin
 //   svp graph   <dir>                                -> dir/graph.bin   (colour + edges)
+//   svp modea   <dir>                                -> dir/modea.bin   (unitig super-graph)
+//   svp modeb   <dir>                                -> dir/modeb.bin   (bubble-zipped graph)
 //   svp bubbles <dir>                                -> dir/bubbles.tsv
 //   svp run     <normal.fq.gz> <tumor.fq.gz> <dir>   -> all, skipping completed stages
 #include "graph.h"
