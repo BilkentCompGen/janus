@@ -126,46 +126,35 @@ void emit_super_node(const std::vector<uint32_t>& chain, const std::vector<uint1
     runs.insert(runs.end(), runs_buf.begin(), runs_buf.end());
 }
 
-void write_modea_bin(const std::string& path, const std::vector<SuperNode>& snodes,
-                     const std::vector<uint8_t>& blocks, const std::vector<CovRun>& runs, const std::vector<IEdge>& super_edges) {
-    const std::string tmp = path + ".tmp";
-    FILE* f = xopen(tmp, "wb");
-    uint64_t S = snodes.size();      wr(f, &S, 8);  wr(f, snodes.data(),      S  * sizeof(SuperNode));
-    uint64_t tb = blocks.size();     wr(f, &tb, 8); wr(f, blocks.data(),      tb);
-    uint64_t tr = runs.size();       wr(f, &tr, 8); wr(f, runs.data(),        tr * sizeof(CovRun));
-    uint64_t E = super_edges.size(); wr(f, &E, 8);  wr(f, super_edges.data(), E  * sizeof(IEdge));
-    atomic_close(f, tmp, path);
-}
-
 }  // namespace
 
-// ---- stage 3: unitig compactor over the directed colored graph ----
-void run_modea(const std::string& dir) {
+// ---- stage 3: unitig compaction over the directed colored graph, IN MEMORY ----
+// Builds the Mode A super-graph (unitig-compacted, per-base coverage) directly into the
+// caller's vectors — no modea.bin round-trip. run_modeb consumes these straight away.
+void build_super_graph(const std::string& dir, std::vector<SuperNode>& snodes,
+                       std::vector<uint8_t>& blocks, std::vector<CovRun>& runs, std::vector<IEdge>& super_edges) {
     FILE* fg = xopen(dir + "/graph.bin", "rb");
     uint64_t K; rd(fg, &K, 8);
     std::vector<uint8_t> color(K);                rd(fg, color.data(), K);
     std::vector<uint32_t> ncov(K), tcov(K);       rd(fg, ncov.data(), K * 4); rd(fg, tcov.data(), K * 4);
     uint64_t E; rd(fg, &E, 8);
     std::vector<IEdge> edges(E);                  rd(fg, edges.data(), E * sizeof(IEdge));
+    // self-contained graph.bin (2-pass `graph`): the per-node sequence payload follows the
+    // edges inline (total, seqlen[K], payload) -- no separate counts.bin round-trip.
+    uint64_t total_payload; rd(fg, &total_payload, 8);
+    std::vector<uint16_t> seqlen(K);              rd(fg, seqlen.data(), K * 2);
+    std::vector<uint8_t> payload(total_payload);  rd(fg, payload.data(), total_payload);
     std::fclose(fg);
-    FILE* fc = xopen(dir + "/counts.bin", "rb");
-    uint64_t Kc; rd(fc, &Kc, 8);
-    if (Kc != K) { std::fprintf(stderr, "[FATAL] modea: counts.bin K=%lu != graph.bin K=%lu\n", (unsigned long)Kc, (unsigned long)K); std::abort(); }
-    std::vector<SigCount> sigs(K);                rd(fc, sigs.data(), K * sizeof(SigCount));
-    uint64_t total_payload; rd(fc, &total_payload, 8);
-    std::vector<uint16_t> seqlen(K);              rd(fc, seqlen.data(), K * 2);
-    std::vector<uint8_t> payload(total_payload);  rd(fc, payload.data(), total_payload);
-    std::fclose(fc);
     std::vector<uint64_t> seq_off(K + 1, 0);
     for (uint64_t i = 0; i < K; i++) seq_off[i + 1] = seq_off[i] + seqlen[i];
     std::vector<uint32_t> in_deg(K, 0), out_deg(K, 0), succ(K, UINT32_MAX), pred(K, UINT32_MAX);
     for (const IEdge& e : edges) { out_deg[e.first]++; in_deg[e.second]++; succ[e.first] = e.second; pred[e.second] = e.first; }
     std::vector<char> visited(K, 0);
-    std::vector<SuperNode> snodes; snodes.reserve(K / 2);
+    snodes.clear(); snodes.reserve(K / 2);
     std::vector<uint32_t> node_to_super(K, UINT32_MAX), chain;
     std::vector<uint16_t> overlap_buf;
-    std::vector<uint8_t> blocks, block_buf;
-    std::vector<CovRun> runs, runs_buf;
+    std::vector<uint8_t> block_buf;
+    std::vector<CovRun> runs_buf;
     for (uint32_t u = 0; u < (uint32_t)K; u++) {
         if (visited[u]) continue;
         const bool left_end = (in_deg[u] != 1) || (out_deg[pred[u]] != 1) || (color[pred[u]] != color[u]);
@@ -183,10 +172,8 @@ void run_modea(const std::string& dir) {
                         snodes, blocks, runs, node_to_super,
                         block_buf, overlap_buf, runs_buf);
     }
-    std::vector<IEdge> super_edges;
     build_super_edges(edges, node_to_super, super_edges);
-    write_modea_bin(dir + "/modea.bin", snodes, blocks, runs, super_edges);
-    std::fprintf(stderr, "[modea] K=%lu -> S=%lu (cycle-singletons=%lu) edges=%lu->%lu block=%.2fGB runs=%lu -> %s/modea.bin\n",
+    std::fprintf(stderr, "[supergraph] K=%lu -> S=%lu (cycle-singletons=%lu) edges=%lu->%lu block=%.2fGB runs=%lu\n",
                  (unsigned long)K, (unsigned long)snodes.size(), (unsigned long)cycle_singletons,
-                 (unsigned long)E, (unsigned long)super_edges.size(), blocks.size() / 1e9, (unsigned long)runs.size(), dir.c_str());
+                 (unsigned long)E, (unsigned long)super_edges.size(), blocks.size() / 1e9, (unsigned long)runs.size());
 }
