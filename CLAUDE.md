@@ -7,9 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `svp` is a **reference-free somatic structural-variant caller**. It builds a 2-colour
 LCP-core graph directly from reads (normal vs tumor HiFi FASTQ) and progressively
 simplifies it: raw sig graph → unitig-compacted super-graph (Mode A) → bubble-zipped
-super-graph at base-pair resolution (Mode B). No assembly, no alignment, no reference
-graph — a single binary. Output is **coordinate-free** (per-node sequence + per-base
-coverage, not genome positions).
+super-graph at base-pair resolution (Mode B). Mode A and Mode B are **one `modeb` stage**
+— Mode A is built in RAM and consumed in place, never written to disk. No assembly, no
+alignment, no reference graph — a single binary. Output is **coordinate-free** (per-node
+sequence + per-base coverage, not genome positions).
 
 Active branch: **`graph-inspector`**. The pipeline currently ends at **Mode B** — the
 downstream VCF-emission tail (`posmap`/`anchor`/`vcf`), the `inspect/` toolkit, and the
@@ -43,7 +44,7 @@ make clean           # moves build/, svp, outputs/ -> ~/trash/svp-make-clean/
 archives lcptools in-place with the same flag. Rebuild the static lib if you see
 segfaults on struct fields after pulling `lib/`.
 
-## CLI — five resumable, checkpointed stages
+## CLI — four resumable, checkpointed stages
 
 The expensive LCP pass is paid once; later stages are seconds-to-minutes and re-runnable.
 `run` skips any stage whose checkpoint already exists. Checkpoints are written atomically
@@ -52,8 +53,7 @@ The expensive LCP pass is paid once; later stages are seconds-to-minutes and re-
 ```
 svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5 --flank 10 --margin 10 --min-mult 3 --threads 16]
 svp graph   <dir>
-svp modea   <dir>
-svp modeb   <dir>
+svp modeb   <dir>     # Mode A unitig compaction (in RAM) then Mode B bubble-zip -> modeb.bin
 svp bubbles <dir> [--out <dir>/bubbles.tsv]
 svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   # runs all, skipping done stages
 ```
@@ -63,10 +63,10 @@ svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   # runs all, skipping
 `pre_prune.bin` (the per-sample-filtered merged sig table) is written by `lcp`; if it
 exists, re-running `lcp` resumes from it and skips the gzip+pool+merge stages.
 
-**Schema changes invalidate old checkpoints**: `modea.bin`/`modeb.bin` from before a
-struct change FATAL cleanly on a size mismatch — regenerate the stage.
+**Schema changes invalidate old checkpoints**: a `modeb.bin` from before a struct change
+FATALs cleanly on a size mismatch — regenerate the stage.
 
-## Pipeline (`src/`, ~1680 LOC across 11 files; graph 689 / modeb 412 / modea 194)
+## Pipeline (`src/`, ~1630 LOC across 11 files; graph 639 / modeb 410 / modea 182)
 
 A FASTQ input is a single file or a directory of shards. Stages and their on-disk schemas:
 
@@ -85,34 +85,39 @@ A FASTQ input is a single file or a directory of shards. Stages and their on-dis
    tumor-only (candidate somatic), 3 = shared**. Map sig-edges → node-id edges, dedupe.
    → `dir/graph.bin` (`u64 K`, `color[K]`, `ncov[K]` u32, `tcov[K]` u32, `u64 E`,
    `IEdge[E]`). Seconds.
-3. **modea** (`run_modea`, `modea.cpp`) — **unitig compaction**. Walk each maximal
-   same-colour chain (in/out-degree 1), splice the inline node bytes via exact KMP
-   suffix/prefix overlap (`suffix_prefix`; `k==0` is FATAL — adjacent L5 cores always
-   overlap ~85 bp), emit one super-node per chain carrying its per-base coverage runs.
-   Pure cycles are preserved as singleton super-nodes. → `dir/modea.bin`:
+3. **modeb** (`run_modeb`, `modeb.cpp`) — the single graph-simplification stage. It first
+   builds the **Mode A** super-graph **in RAM** (`build_super_graph`, `modea.cpp`) — unitig
+   compaction: walk each maximal same-colour chain (in/out-degree 1), splice the inline node
+   bytes via exact KMP suffix/prefix overlap (`suffix_prefix`; `k==0` is FATAL — adjacent L5
+   cores always overlap ~85 bp), emit one super-node per chain with its per-base coverage
+   runs; pure cycles become singleton super-nodes. The node schema is
    `SuperNode{u32 block_len, u32 runs_len, u8 color}[S]` + concatenated `blocks` (bytes) +
-   `CovRun{u32 end_pos, n_cov, t_cov}[]` (coverage) + `super_edges` (`IEdge[]`). Per-node
-   slices are found by prefix-summing `block_len`/`runs_len`.
-4. **modeb** (`run_modeb`, `modeb.cpp`) — **emit the whole graph, further simplified**
-   (it does NOT extract per-bubble records — that was the old design). Every Mode A
-   super-node passes through; each `std_both` bubble (a `(S1,S2)` colour-3 anchor pair
-   with parallel c1 and c2 arms) is **zipped to base-pair resolution**: the prefix/suffix
-   common across **all** of an anchor's bubble arms is absorbed into the anchor (grown),
-   and each arm becomes one residual super-node holding just its divergent middle. EQ
-   bubbles (identical alleles) collapse to a direct edge. Coverage is max-merged where
-   alleles share a region. Output schema = Mode A's node schema + edges that carry an
-   **explicit overlap**: `GEdge{u32 from, u32 to, u32 overlap}` — reconstruct a path by
-   dropping `overlap` head bytes of `to` before concatenating. **Bubble seams abut
-   (overlap 0)** — the two arms diverge at exactly one base so no overlap can span it;
-   pass-through edges keep the Mode A suffix/prefix overlap. An anchor is grown only when
-   every edge on the grown side is a zipped arm (else growing its tail would corrupt a
-   surviving backbone edge's overlap). **v1 scope: `std_both` only** — orphan buckets
-   (tumor-only INS / normal-only DEL) and tangles (multi-path, cycles) pass through
-   unzipped. → `dir/modeb.bin` (same node schema as `modea.bin` + `GEdge[]`).
-5. **bubbles** (`run_bubbles`, `graph.cpp`) — plain BFS connected-components on the
+   `CovRun{u32 end_pos, n_cov, t_cov}[]` + `super_edges` (`IEdge[]`); per-node slices are
+   found by prefix-summing `block_len`/`runs_len`. **This Mode A graph is never written to
+   disk** — modeb consumes it directly.
+   Then **Mode B**: emit the whole graph, further simplified (it does NOT extract per-bubble
+   records — that was the old design). Every Mode A super-node passes through; each
+   `std_both` bubble (a `(S1,S2)` colour-3 anchor pair with parallel c1 and c2 arms) is
+   **zipped to base-pair resolution**: the prefix/suffix common across **all** of an anchor's
+   bubble arms is absorbed into the anchor (grown), and each arm becomes one residual
+   super-node holding just its divergent middle. EQ bubbles (identical alleles) collapse to a
+   direct edge. Coverage is max-merged where alleles share a region. Output schema = the Mode
+   A node schema + edges that carry an **explicit overlap**: `GEdge{u32 from, u32 to, u32
+   overlap}` — reconstruct a path by dropping `overlap` head bytes of `to` before
+   concatenating. **Bubble seams abut (overlap 0)** — the two arms diverge at exactly one base
+   so no overlap can span it; pass-through edges keep the Mode A suffix/prefix overlap. An
+   anchor is grown only when every edge on the grown side is a zipped arm (else growing its
+   tail would corrupt a surviving backbone edge's overlap). **v1 scope: `std_both` only** —
+   orphan buckets (tumor-only INS / normal-only DEL) and tangles (multi-path, cycles) pass
+   through unzipped. → `dir/modeb.bin` (node schema above + `GEdge[]`).
+   *Implementation notes:* arm coverage is kept RLE (`CovRun`), not flat per-base `uint32`,
+   and only the slices actually read are expanded — this is what keeps peak RSS bounded.
+   Adjacency is CSR; the bubble BFS/DFS use generation-stamped scratch (no per-call O(S)
+   alloc).
+4. **bubbles** (`run_bubbles`, `graph.cpp`) — plain BFS connected-components on the
    non-shared nodes of `graph.bin` (backbone colour-3 never traversed). Each component is
    one bubble; type `D` (colour-1 only), `I` (colour-2 only), `C` (both). Operates on
-   `graph.bin`, **independent of modea/modeb**. → `dir/bubbles.tsv`.
+   `graph.bin`, **independent of modeb**. → `dir/bubbles.tsv`.
 
 `src/svp.h` holds the shared POD (`Core`, `SigCount`, `IEdge`) + LCP primitives +
 checkpoint IO helpers (`xopen`/`wr`/`rd`/`atomic_close`). `extract_cores`/`compute_sigs`
@@ -150,6 +155,10 @@ directly.
 
 - **modeb v1**: orphan buckets and tangles pass through unzipped — orphan (INS/DEL)
   zipping against the backbone detour is the obvious v2.
+- **Mode A build peak**: the merged `modeb` peak is now entirely the in-RAM Mode A build,
+  which holds `counts.bin` payload + output blocks simultaneously (≈15 GB + 5.82 GB at WG).
+  `mmap`-ing the payload region (read-only) would make it evictable page cache and lift the
+  hard allocation ceiling for COLO829 full-coverage — output stays byte-identical.
 - **No sequence-reconstruction verifier** for the Mode B output graph yet (only structural
   accounting was checked). A reader that splices the output back and compares to the
   alleles would be the hard proof.
@@ -162,10 +171,16 @@ directly.
 
 - `lcp` (WG, dual fw+RC, 8 threads): ~24 min wall, ~96 GB peak RSS; ~887 M raw sigs,
   ~85 M kept after the prune, ~86 M edges.
-- `modea` (`wgs_mm10`): 85,152,754 nodes → **931,910 super-nodes**, 85.9 M edges →
+- Mode A build (`wgs_mm10`): 85,152,754 nodes → **931,910 super-nodes**, 85.9 M edges →
   1.69 M super-edges, 5.82 GB blocks.
-- `modeb` (`wgs_mm10`): 931,910 → 930,045 nodes, 37,654 bubbles (33,176 `std_both` zipped,
+- Mode B (`wgs_mm10`): 931,910 → 930,045 nodes, 37,654 bubbles (33,176 `std_both` zipped,
   4,478 passed), 64,491 residual arms, 1,861 EQ collapses.
+- **modea+modeb merge** (smoke set, K=12.25 M, S=132,840; warm cache): the old two-stage
+  path peaked at modeb **13.27 GB** RSS (flat per-base `uint32` arm coverage = 9.6 GB of it);
+  the merged single `modeb` peaks at **4.27 GB** (now entirely the Mode A build) in ~34 s
+  vs ~41 s, with no 884 MB `modea.bin` round-trip and byte-identical `modeb.bin`. The
+  remaining ceiling is the Mode A build holding `counts.bin` payload + output blocks together
+  (≈15 GB + 5.82 GB at WG) — `mmap`-ing the payload is the open next step for COLO829 scale.
 
 ## Code style — strict
 
@@ -198,7 +213,7 @@ generated whole-genome. Long runs survive disconnect in a detached `screen`:
 
 | Branch | What's there |
 |---|---|
-| `graph-inspector` | **this branch** — read → graph → Mode A → Mode B core (VCF tail, inspect/, tools trimmed) |
+| `graph-inspector` | **this branch** — read → graph → Mode B (Mode A built in RAM) core (VCF tail, inspect/, tools trimmed) |
 | `lcp-cortex-merged` | merge base: fast gzip+LCP + simple BFS bubble decomposition; ~99.6% recall / ~78% precision |
 | `lcp-cortex`, `lcp-cortex-fast` | earlier LCP-anchor pipelines (kept for diff/reference) |
 | `main` | clean slate, scaffolding only |

@@ -25,10 +25,11 @@ void compute_sigs(const std::string& seq, const std::vector<Core>& cs, int m, in
 struct SigCount { uint64_t sig; uint32_t n, t; };
 using IEdge = std::pair<uint32_t, uint32_t>;
 
-// modea.bin node schema: modea.cpp writes these, modeb.cpp reads them back — the two
-// definitions must stay byte-identical, so they live here rather than in each anon namespace.
-// pad zero-inits the 3 alignment bytes after color (sizeof is 12); without it those bytes
-// are uninitialized heap and leak to disk, making the checkpoint non-reproducible.
+// Super-graph node schema: modea.cpp's build_super_graph fills these in RAM, modeb.cpp's
+// run_modeb consumes them and writes the same node layout to modeb.bin — shared here so the
+// build and the writer stay byte-identical. pad zero-inits the 3 alignment bytes after color
+// (sizeof is 12); without it those bytes are uninitialized heap and leak to disk, making
+// modeb.bin non-reproducible.
 struct SuperNode { uint32_t block_len, runs_len; uint8_t color; uint8_t pad[3] = {}; };
 struct CovRun    { uint32_t end_pos, n_cov, t_cov; };
 
