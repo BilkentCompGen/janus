@@ -1,5 +1,6 @@
 #include "graph.h"
 #include "MurmurHash3.h"
+#include "btllib/bloom_filter.hpp"   // vendored: plain (atomic, lock-free) BloomFilter
 // extract_fast is declared in svp.h (provided by src/extract_fast.cpp over biolcp).
 
 #include <zlib.h>
@@ -168,6 +169,40 @@ std::vector<std::string> collect_shards(const std::string& path) {
 struct Shard { std::string path; int col; };
 struct Batch { std::vector<std::string> seqs; int col; };
 
+// ---- bloom cascade counting (replaces the exact per-shard hashmap) ----
+// Per shard: (min_mult-1) plain bloom filters + an exact survivor map. Each occurrence of
+// a sig advances it one filter deeper; once present in all (min_mult-1) filters, every
+// further occurrence increments surv[sig]. So surv holds exactly the sigs seen >= min_mult
+// times, with count = surv[sig] + (min_mult-1) (the first min_mult-1 hits are absorbed by
+// the filters). Bloom collisions can promote a sig early (false survivor); they never drop
+// one (FN=0). A shard is advanced only under its gmtx lock, so within a shard the cascade
+// is serial and counts are exact -- the only deviation from the exact pipeline is bloom FP.
+constexpr int BLOOM_HASHES = 4;
+constexpr size_t BLOOM_BYTES_PER_FILTER = 4u << 20;   // 4 MB/shard/level (~19 bits/elem at ~110M distinct / 64 shards)
+
+inline void bloom_hashes(uint64_t x, uint64_t* h) {
+    for (int i = 0; i < BLOOM_HASHES; i++) {           // splitmix64 -> BLOOM_HASHES independent hashes from one sig
+        x += 0x9e3779b97f4a7c15ULL;
+        uint64_t z = x;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        h[i] = z ^ (z >> 31);
+    }
+}
+struct ShardCascade {
+    std::vector<btllib::BloomFilter*> filt;
+    std::unordered_map<uint64_t, uint32_t> surv;
+    void init(int depth) { for (int i = 0; i < depth; i++) filt.push_back(new btllib::BloomFilter(BLOOM_BYTES_PER_FILTER, BLOOM_HASHES)); }
+    ~ShardCascade() { for (auto* f : filt) delete f; }
+    void add(uint64_t s, const uint64_t* h, uint32_t cnt) {   // advance `cnt` occurrences of sig s (caller holds the shard lock)
+        for (uint32_t j = 0; j < cnt; j++) {
+            bool promoted = true;
+            for (auto* f : filt) if (!f->contains_insert(h)) { promoted = false; break; }
+            if (promoted) surv[s]++;
+        }
+    }
+};
+
 // Reader/worker split with both samples in one pool: 1 reader per shard (so both .fastq.gz
 // inflate in parallel CPUs) + N workers consuming colour-tagged batches. The reader is a
 // block-based FASTQ parser (1 MB gzread + manual \n scan) — line-by-line gzgets was 3-5x
@@ -175,7 +210,8 @@ struct Batch { std::vector<std::string> seqs; int col; };
 void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin, int threads,
               int min_mult, bool is_tumor, std::vector<SigCount>& out_nodes, uint64_t& reads_out) {
     constexpr int NSHARD = 64;
-    std::unordered_map<uint64_t, uint32_t> gmap[NSHARD];   // sharded global count map (one mutex each)
+    ShardCascade casc[NSHARD];                             // sharded bloom-cascade counter (one mutex each)
+    for (int sh = 0; sh < NSHARD; sh++) casc[sh].init(min_mult - 1);
     std::mutex gmtx[NSHARD];
     const int nshards = (int)shards.size();
     const int nrd = std::min(nshards, std::max(2, threads / 4));   // ≥2 so both samples decompress in parallel
@@ -248,7 +284,7 @@ void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin
             for (int sh = 0; sh < NSHARD; sh++) {
                 if (by[sh].empty()) continue;
                 std::lock_guard<std::mutex> lk(gmtx[sh]);
-                for (const auto& kv : by[sh]) gmap[sh][kv.first] += kv.second;
+                for (const auto& kv : by[sh]) { uint64_t h[BLOOM_HASHES]; bloom_hashes(kv.first, h); casc[sh].add(kv.first, h, kv.second); }
             }
             lmap.clear();
         };
@@ -291,16 +327,146 @@ void run_pool(const std::vector<Shard>& shards, int level, int flank, int margin
                  100.0 * wb_s / (wb_s + wi_s + 1e-9),
                  wi_s > qf_s * 2 ? "reader(inflate)" : qf_s > wi_s * 2 ? "worker(LCP)" : "balanced");
     reads_out = greads.load();
-    // ---- filter BEFORE sort: keep survivors (count >= min_mult), then sort ONLY those ----
-    const uint32_t mm = (uint32_t)min_mult;
-    size_t uniq = 0; for (int sh = 0; sh < NSHARD; sh++) uniq += gmap[sh].size();
-    out_nodes.clear(); out_nodes.reserve(uniq / 2 + 1);
+    // ---- survivors come straight out of the cascade: surv holds exactly the sigs promoted
+    // (seen >= min_mult), with exact count = surv_val + (min_mult-1). Sort by sig. ----
+    const uint32_t add = (uint32_t)(min_mult - 1);
+    size_t surv_tot = 0; for (int sh = 0; sh < NSHARD; sh++) surv_tot += casc[sh].surv.size();
+    out_nodes.clear(); out_nodes.reserve(surv_tot);
     for (int sh = 0; sh < NSHARD; sh++)
-        for (const auto& kv : gmap[sh])
-            if (kv.second >= mm)
-                out_nodes.push_back(is_tumor ? SigCount{kv.first, 0, kv.second} : SigCount{kv.first, kv.second, 0});
+        for (const auto& kv : casc[sh].surv) {
+            const uint32_t c = kv.second + add;
+            out_nodes.push_back(is_tumor ? SigCount{kv.first, 0, c} : SigCount{kv.first, c, 0});
+        }
     std::sort(out_nodes.begin(), out_nodes.end(), [](const SigCount& a, const SigCount& b){ return a.sig < b.sig; });
-    std::fprintf(stderr, "[lcp]   counted %zu uniq sigs -> %zu survive min_mult=%d\n", uniq, out_nodes.size(), min_mult);
+    std::fprintf(stderr, "[lcp]   bloom cascade -> %zu survive min_mult=%d\n", out_nodes.size(), min_mult);
+}
+
+// Both samples in ONE pool: shards_all (normal+tumor) -> 2 readers decompress in parallel
+// (overlapping the two gzip streams that the old per-sample run_pool x2 ran sequentially),
+// feeding workers that route each colour-tagged batch into its own per-shard cascade
+// (casc[0]=normal, casc[1]=tumor). Survivors are merged into one (n,t) record per sig.
+// Affordable now only because the bloom cascades are RAM-bounded -- two exact hashmaps of
+// all 103M distinct sigs would not coexist; the whole point of the bloom is to buy this.
+void run_pool_both(const std::vector<Shard>& shards, int level, int flank, int margin, int threads,
+                   int min_mult, std::vector<SigCount>& out_nodes, uint64_t& reads_n, uint64_t& reads_t) {
+    constexpr int NSHARD = 64;
+    ShardCascade casc[2][NSHARD];                          // [0]=normal, [1]=tumor; one mutex each per colour
+    for (int c = 0; c < 2; c++) for (int sh = 0; sh < NSHARD; sh++) casc[c][sh].init(min_mult - 1);
+    std::mutex gmtx[2][NSHARD];
+    const int nshards = (int)shards.size();
+    const int nrd = std::min(nshards, std::max(2, threads / 4));   // 2 shards -> 2 readers, both samples in parallel
+    const int nw  = std::max(1, threads - nrd);
+    std::atomic<size_t> next{0}, done{0};
+    std::atomic<uint64_t> greads[2]{ {0}, {0} };
+    std::atomic<int> readers_left{nrd};
+    std::atomic<uint64_t> tot_rd_ns{0}, tot_w_busy_ns{0}, tot_w_idle_ns{0}, tot_q_full_ns{0};
+    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
+    std::queue<Batch> q;
+    constexpr size_t Q_CAP = 256, BATCH = 64;
+    constexpr unsigned BLOCK = 1u << 20;
+    auto reader = [&]() {
+        const auto t_start = std::chrono::steady_clock::now();
+        uint64_t local_q_full_ns = 0;
+        std::vector<char> buf(BLOCK);
+        std::vector<std::string> batch; batch.reserve(BATCH);
+        std::string carry; int col_local = 0;
+        auto flush = [&]() {
+            if (batch.empty()) return;
+            const auto t_w0 = std::chrono::steady_clock::now();
+            std::unique_lock<std::mutex> lk(qmtx);
+            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
+            local_q_full_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_w0).count();
+            q.push(Batch{std::move(batch), col_local}); cv_empty.notify_one();
+            batch.clear(); batch.reserve(BATCH);
+        };
+        size_t si;
+        while ((si = next.fetch_add(1)) < shards.size()) {
+            col_local = shards[si].col;
+            gzFile f = gzopen(shards[si].path.c_str(), "rb");
+            if (!f) { std::fprintf(stderr, "[FATAL] gzopen %s\n", shards[si].path.c_str()); std::abort(); }
+            gzbuffer(f, 1u << 20);
+            int line_no = 0; carry.clear();
+            int got;
+            while ((got = gzread(f, buf.data(), BLOCK)) > 0) {
+                const char* base = buf.data(); const char* end = base + got; const char* start = base;
+                for (const char* p = base; p < end; p++) if (*p == '\n') {
+                    const size_t n = (size_t)(p - start);
+                    if (line_no == 1) {
+                        if (carry.empty()) batch.emplace_back(start, n);
+                        else { carry.append(start, n); batch.push_back(std::move(carry)); carry.clear(); }
+                        if (batch.size() >= BATCH) flush();
+                    } else if (!carry.empty()) carry.clear();
+                    line_no = (line_no + 1) & 3; start = p + 1;
+                }
+                if (start < end && line_no == 1) carry.append(start, end - start);
+            }
+            gzclose(f);
+            std::fprintf(stderr, "[graph] shard %zu/%d done (col=%d)\n", (size_t)done.fetch_add(1) + 1, nshards, col_local);
+        }
+        flush();
+        if (readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(qmtx); cv_empty.notify_all(); }
+        tot_rd_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_start).count();
+        tot_q_full_ns += local_q_full_ns;
+    };
+    auto worker = [&]() {
+        uint64_t local_busy_ns = 0, local_idle_ns = 0;
+        std::vector<uint64_t> lsig[2]; lsig[0].reserve(1u << 20); lsig[1].reserve(1u << 20);
+        std::unordered_map<uint64_t, uint32_t> lmap[2]; lmap[0].reserve(1u << 20); lmap[1].reserve(1u << 20);
+        std::string rc_buf; rc_buf.reserve(1u << 16);
+        uint64_t lreads[2] = {0, 0};
+        auto drain = [&](int c) { for (uint64_t g : lsig[c]) lmap[c][g]++; lsig[c].clear(); };
+        auto flush = [&](int c) {
+            drain(c);
+            std::vector<std::vector<std::pair<uint64_t, uint32_t>>> by(NSHARD);
+            for (const auto& kv : lmap[c]) by[kv.first & (NSHARD - 1)].push_back(kv);
+            for (int sh = 0; sh < NSHARD; sh++) {
+                if (by[sh].empty()) continue;
+                std::lock_guard<std::mutex> lk(gmtx[c][sh]);
+                for (const auto& kv : by[sh]) { uint64_t h[BLOOM_HASHES]; bloom_hashes(kv.first, h); casc[c][sh].add(kv.first, h, kv.second); }
+            }
+            lmap[c].clear();
+        };
+        while (true) {
+            Batch b;
+            {
+                const auto t_i0 = std::chrono::steady_clock::now();
+                std::unique_lock<std::mutex> lk(qmtx);
+                cv_empty.wait(lk, [&]{ return !q.empty() || readers_left.load() == 0; });
+                local_idle_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_i0).count();
+                if (q.empty()) break;
+                b = std::move(q.front()); q.pop(); cv_full.notify_one();
+            }
+            const int c = b.col & 1;
+            const auto t_b0 = std::chrono::steady_clock::now();
+            for (auto& s : b.seqs) { process_read(s, level, flank, margin, lsig[c], rc_buf); lreads[c]++; }
+            local_busy_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_b0).count();
+            if (lsig[c].size() >= (1u << 20)) drain(c);
+            if (lmap[c].size() >= (1u << 22)) flush(c);
+        }
+        flush(0); flush(1);
+        greads[0] += lreads[0]; greads[1] += lreads[1];
+        tot_w_busy_ns += local_busy_ns;
+        tot_w_idle_ns += local_idle_ns;
+    };
+    std::vector<std::thread> rds, wks;
+    for (int i = 0; i < nrd; i++) rds.emplace_back(reader);
+    for (int i = 0; i < nw;  i++) wks.emplace_back(worker);
+    for (auto& t : rds) t.join();
+    for (auto& t : wks) t.join();
+    std::fprintf(stderr, "[graph] pool(both): %d reader(s) + %d worker(s) on %d shard(s); reader-wall sum=%.1fs worker-busy=%.1fs idle=%.1fs\n",
+                 nrd, nw, nshards, tot_rd_ns.load() / 1e9, tot_w_busy_ns.load() / 1e9, tot_w_idle_ns.load() / 1e9);
+    reads_n = greads[0].load(); reads_t = greads[1].load();
+    // ---- merge the two cascades into one (n,t) record per surviving sig, per shard ----
+    const uint32_t add = (uint32_t)(min_mult - 1);
+    out_nodes.clear();
+    for (int sh = 0; sh < NSHARD; sh++) {
+        std::unordered_map<uint64_t, SigCount> m; m.reserve(casc[0][sh].surv.size() + casc[1][sh].surv.size());
+        for (const auto& kv : casc[0][sh].surv) { SigCount& x = m[kv.first]; x.sig = kv.first; x.n = kv.second + add; }
+        for (const auto& kv : casc[1][sh].surv) { SigCount& x = m[kv.first]; x.sig = kv.first; x.t = kv.second + add; }
+        for (const auto& p : m) out_nodes.push_back(p.second);
+    }
+    std::sort(out_nodes.begin(), out_nodes.end(), [](const SigCount& a, const SigCount& b){ return a.sig < b.sig; });
+    std::fprintf(stderr, "[graph]   bloom cascade (both) -> %zu survive min_mult=%d\n", out_nodes.size(), min_mult);
 }
 
 void radix_sort_edges(std::vector<SEdge>& edges);   // fwd decl (defined below); used for fill_pool's periodic edge compaction
@@ -364,9 +530,9 @@ void fill_pool(const std::vector<Shard>& shards, int level, int flank, int margi
     auto worker = [&]() {
         std::string rc_buf; rc_buf.reserve(1u << 16);
         std::vector<SEdge> ledges; ledges.reserve(1u << 22);
-        std::unordered_set<uint64_t> seen; seen.reserve(1u << 24);   // 16 M-entry edge-key cache (~640 MB / worker peak)
+        std::unordered_set<uint64_t> seen; seen.reserve(1u << 22);   // 4 M-entry edge-key cache (~160 MB / worker; was 16M/640MB)
         constexpr size_t E_FLUSH = 1u << 22;     // 4M edges (~64 MB) flush trigger
-        constexpr size_t SEEN_CAP = 1u << 24;    // cap seen at 16M; clear on overflow
+        constexpr size_t SEEN_CAP = 1u << 22;    // cap seen at 4M; clear on overflow (more compaction, ~7GB less RAM)
         constexpr size_t EDGE_COMPACT = 1u << 28;   // collapse all_edges (sort+unique) past ~268M to bound fill_pool RAM
         while (true) {
             Batch b;
@@ -612,6 +778,81 @@ void run_graph(const std::string& dir) {
     std::fprintf(stderr, "[graph] nodes=%lu edges=%lu -> %s/graph.bin\n",
                  (unsigned long)kept, (unsigned long)E, dir.c_str());
 }
+
+// ---- merged stage: reads -> bloom-count -> stream-fill -> self-contained graph.bin ----
+// graph.bin v2 schema: u64 K, u8 color[K], u32 ncov[K], u32 tcov[K], u64 E, IEdge[E],
+//                      u64 total_payload, u16 seqlen[K], u8 payload[total_payload].
+// The per-node +-flank window now lives in graph.bin (modea no longer needs counts.bin).
+// The payload is written by streaming each slot straight to disk and freeing it -- there is
+// no second contiguous copy, which is what removed the old lcp/pack_payload RAM peak.
+void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir,
+                     int level, int flank, int margin, int min_mult, int threads) {
+    init_comp_lut();
+    mkdir(dir.c_str(), 0755);
+    const std::vector<std::string> ns = collect_shards(normal_fq), ts = collect_shards(tumor_fq);
+    std::vector<Shard> shards_n, shards_t, shards_all;
+    for (const auto& p : ns) shards_n.push_back({p, 0});
+    for (const auto& p : ts) shards_t.push_back({p, 1});
+    shards_all = shards_n; shards_all.insert(shards_all.end(), shards_t.begin(), shards_t.end());
+    std::fprintf(stderr, "[graph] normal=%zu shards, tumor=%zu shards, threads=%d min_mult=%d (merged: bloom-count + fill + emit)\n",
+                 ns.size(), ts.size(), threads, min_mult);
+    Tic tic("graph");
+
+    // ---- pass 1: bloom-cascade count BOTH samples in one parallel pool -> survivors with (n,t) ----
+    std::vector<SigCount> nodes; uint64_t nr_n = 0, nr_t = 0;
+    run_pool_both(shards_all, level, flank, margin, threads, min_mult, nodes, nr_n, nr_t);
+    const uint64_t K = nodes.size();
+    tic.mark("pool_both");
+    std::fprintf(stderr, "[graph]   survivors=%lu\n", (unsigned long)K);
+
+    // ---- colour + id map (node id = sig-sorted index; sigs themselves are NOT persisted) ----
+    std::vector<uint8_t> color(K); std::vector<uint32_t> ncov(K), tcov(K);
+    std::unordered_map<uint64_t, uint32_t> idx; idx.reserve(K);
+    for (uint64_t i = 0; i < K; i++) {
+        const SigCount& c = nodes[i];
+        idx.emplace(c.sig, (uint32_t)i);
+        color[i] = c.n && c.t ? 3 : c.n ? 1 : 2; ncov[i] = c.n; tcov[i] = c.t;
+    }
+    std::vector<SigCount>().swap(nodes);
+
+    // ---- pass 2: fill each node's sequence once + emit adjacency (sig pairs) ----
+    std::vector<std::vector<uint8_t>> slot_buf(K);
+    std::vector<std::atomic<uint8_t>> claimed(K); for (auto& c : claimed) c.store(0);
+    std::vector<SEdge> edges; std::mutex emtx;
+    fill_pool(shards_all, level, flank, margin, threads, idx, slot_buf, claimed, edges, emtx);
+    tic.mark("fill_pool");
+
+    // ---- resolve sig-edges -> node-id edges, sort/dedup ----
+    std::vector<IEdge> ie; ie.reserve(edges.size());
+    for (const SEdge& e : edges) {
+        auto a = idx.find(e.first), b = idx.find(e.second);
+        if (a != idx.end() && b != idx.end() && a->second != b->second) ie.push_back(IEdge(a->second, b->second));
+    }
+    std::vector<SEdge>().swap(edges);
+    std::sort(ie.begin(), ie.end()); ie.erase(std::unique(ie.begin(), ie.end()), ie.end());
+    tic.mark("resolve_edges");
+
+    // ---- seqlen + total; slots stay scattered until the streaming write ----
+    std::vector<uint16_t> seqlen(K); uint64_t total = 0;
+    for (uint64_t i = 0; i < K; i++) {
+        if (slot_buf[i].empty()) { std::fprintf(stderr, "[FATAL] empty slot %lu (pass-2 missed a kept sig)\n", (unsigned long)i); std::abort(); }
+        seqlen[i] = (uint16_t)slot_buf[i].size(); total += slot_buf[i].size();
+    }
+
+    // ---- write self-contained graph.bin v2; stream each slot to disk and free it (no 2nd payload copy) ----
+    const std::string gp = dir + "/graph.bin";
+    FILE* fg = xopen(gp + ".tmp", "wb");
+    uint64_t Kw = K; wr(fg, &Kw, 8);
+    wr(fg, color.data(), K); wr(fg, ncov.data(), K * 4); wr(fg, tcov.data(), K * 4);
+    uint64_t E = ie.size(); wr(fg, &E, 8); wr(fg, ie.data(), E * sizeof(IEdge));
+    wr(fg, &total, 8); wr(fg, seqlen.data(), K * 2);
+    for (uint64_t i = 0; i < K; i++) { wr(fg, slot_buf[i].data(), slot_buf[i].size()); std::vector<uint8_t>().swap(slot_buf[i]); }
+    atomic_close(fg, gp + ".tmp", gp);
+    tic.mark("write");
+    std::fprintf(stderr, "[graph] normal_reads=%lu tumor_reads=%lu nodes=%lu edges=%lu payload=%.1f GB -> %s/graph.bin (self-contained v2)\n",
+                 (unsigned long)nr_n, (unsigned long)nr_t, (unsigned long)K, (unsigned long)E, total / 1e9, dir.c_str());
+}
+
 
 // ---- stage 3: decompose into bubbles ----
 void run_bubbles(const std::string& dir, const std::string& out_tsv) {

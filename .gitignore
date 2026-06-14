@@ -19,3 +19,7 @@ docs/analysis
 experiments
 scripts/fakebin
 /li2020.pdf
+
+# bloom-counting build artifacts
+/svp_bloom*
+/build_bloom/

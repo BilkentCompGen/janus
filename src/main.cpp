@@ -4,8 +4,8 @@
 //   svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir>   -> dir/counts.bin (post-prune sigs +
 //                                                       inline bytes), dir/edges.bin
 //   svp graph   <dir>                                -> dir/graph.bin   (colour + edges)
-//   svp modea   <dir>                                -> dir/modea.bin   (unitig super-graph)
-//   svp modeb   <dir>                                -> dir/modeb.bin   (bubble-zipped graph)
+//   svp modeb   <dir>                                -> dir/modeb.bin   (in-memory Mode A unitig
+//                                                       compaction, then bubble-zipped graph)
 //   svp bubbles <dir>                                -> dir/bubbles.tsv
 //   svp run     <normal.fq.gz> <tumor.fq.gz> <dir>   -> all, skipping completed stages
 #include "graph.h"
@@ -27,7 +27,6 @@ static void usage() {
         "usage:\n"
         "  svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5] [--flank 10] [--margin 10] [--min-mult 3] [--threads 16]\n"
         "  svp graph   <dir>\n"
-        "  svp modea   <dir>\n"
         "  svp modeb   <dir>\n"
         "  svp bubbles <dir> [--out <dir>/bubbles.tsv]\n"
         "  svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   (skips completed stages)\n");
@@ -36,7 +35,7 @@ static void usage() {
 int main(int argc, char** argv) {
     if (argc < 2) { usage(); return 2; }
     const std::string cmd = argv[1];
-    int level = 5, flank = 10, margin = 10, min_mult = 3, threads = 16;
+    int level = 5, flank = 10, margin = 10, min_mult = 10, threads = 16;
     std::string out;
     std::vector<std::string> pos;
     for (int i = 2; i < argc; i++) {
@@ -55,18 +54,14 @@ int main(int argc, char** argv) {
     LCP_INIT();
 
     if (cmd == "lcp" && pos.size() == 3) run_lcp(pos[0], pos[1], pos[2], level, flank, margin, min_mult, threads);
-    else if (cmd == "graph" && pos.size() == 1) run_graph(pos[0]);
-    else if (cmd == "modea" && pos.size() == 1) run_modea(pos[0]);
+    else if (cmd == "graph" && pos.size() == 3) run_graph_reads(pos[0], pos[1], pos[2], level, flank, margin, min_mult, threads);   // 2-pass: reads -> graph.bin
+    else if (cmd == "graph" && pos.size() == 1) run_graph(pos[0]);                                                                  // legacy: counts.bin -> graph.bin (A/B baseline)
     else if (cmd == "modeb" && pos.size() == 1) run_modeb(pos[0]);
     else if (cmd == "bubbles" && pos.size() == 1) run_bubbles(pos[0], out.empty() ? pos[0] + "/bubbles.tsv" : out);
     else if (cmd == "run" && pos.size() == 3) {
         const std::string& dir = pos[2];
-        if (exists(dir + "/counts.bin") && exists(dir + "/edges.bin")) std::fprintf(stderr, "[skip] lcp: %s/counts.bin exists\n", dir.c_str());
-        else run_lcp(pos[0], pos[1], dir, level, flank, margin, min_mult, threads);
         if (exists(dir + "/graph.bin")) std::fprintf(stderr, "[skip] graph: %s/graph.bin exists\n", dir.c_str());
-        else run_graph(dir);
-        if (exists(dir + "/modea.bin")) std::fprintf(stderr, "[skip] modea: %s/modea.bin exists\n", dir.c_str());
-        else run_modea(dir);
+        else run_graph_reads(pos[0], pos[1], dir, level, flank, margin, min_mult, threads);   // 2-pass reads -> graph.bin
         if (exists(dir + "/modeb.bin")) std::fprintf(stderr, "[skip] modeb: %s/modeb.bin exists\n", dir.c_str());
         else run_modeb(dir);
         run_bubbles(dir, out.empty() ? dir + "/bubbles.tsv" : out);

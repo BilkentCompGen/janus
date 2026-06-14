@@ -1,10 +1,12 @@
-// modeb: collapse the Mode A super-graph one step further and emit the WHOLE graph —
-// not extracted parts. Every Mode A super-node passes through; for each std_both (S1,S2)
-// bubble the prefix/suffix shared across ALL of an anchor's bubble arms is absorbed into
-// the anchor (grown), leaving each arm as just its divergent middle at base-pair
-// resolution. Coverage is the per-base (n,t) track, max-merged on shared regions.
+// modeb: the single graph-simplification stage. It builds the Mode A super-graph in RAM
+// (unitig compaction; see build_super_graph in modea.cpp), then collapses it one step
+// further and emits the WHOLE graph — not extracted parts. Every Mode A super-node passes
+// through; for each std_both (S1,S2) bubble the prefix/suffix shared across ALL of an
+// anchor's bubble arms is absorbed into the anchor (grown), leaving each arm as just its
+// divergent middle at base-pair resolution. Coverage is the per-base (n,t) track,
+// max-merged on shared regions.
 //
-// Output schema = modea.bin's node schema (SuperNode{block_len,runs_len,colour} + blocks
+// Output schema = the Mode A node schema (SuperNode{block_len,runs_len,colour} + blocks
 // + runs) PLUS edges that carry an explicit overlap: reconstruct a path by dropping
 // `overlap` bytes from the head of each `to` node before concatenating. Bubble-seam edges
 // (grown-anchor -> residual -> anchor) have overlap 0 — the arms diverge at exactly one
@@ -19,7 +21,6 @@
 #include <algorithm>
 #include <queue>
 #include <string>
-#include <sys/stat.h>
 #include <unordered_map>
 #include <vector>
 
@@ -32,29 +33,20 @@ constexpr uint32_t NODE_BUDGET = 500;   // per-branch DFS budget (mirrors the au
 struct PairInfo { uint32_t c1_branches = 0, c2_branches = 0; bool direct = false, cycle = false; };
 struct BubblePair { uint32_t s1, s2; uint8_t bucket; };   // 0=std_both, 1=T_only_no_N, 2=N_only_no_T
 
-uint64_t expected_modea_size(uint64_t S, uint64_t tb, uint64_t tr, uint64_t E) {
-    return 8 + S * sizeof(SuperNode) + 8 + tb + 8 + tr * sizeof(CovRun) + 8 + E * sizeof(IEdge);
-}
+// CSR adjacency: neighbours of u are nbr[off[u] .. off[u+1]). One flat allocation instead
+// of S per-node vectors; counting-sort fill preserves edge-insertion order per node.
+struct CSR { std::vector<uint32_t> off, nbr; };
 
-void read_modea(const std::string& dir,
-                std::vector<SuperNode>& snodes, std::vector<uint8_t>& blocks,
-                std::vector<CovRun>& runs, std::vector<IEdge>& super_edges) {
-    const std::string path = dir + "/modea.bin";
-    struct stat st; if (::stat(path.c_str(), &st)) { std::fprintf(stderr, "[FATAL] stat %s\n", path.c_str()); std::abort(); }
-    FILE* f = xopen(path, "rb");
-    uint64_t S; rd(f, &S, 8); snodes.resize(S); rd(f, snodes.data(), S * sizeof(SuperNode));
-    uint64_t tb; rd(f, &tb, 8); blocks.resize(tb); rd(f, blocks.data(), tb);
-    uint64_t tr; rd(f, &tr, 8); runs.resize(tr); rd(f, runs.data(), tr * sizeof(CovRun));
-    uint64_t E;  rd(f, &E,  8); super_edges.resize(E); rd(f, super_edges.data(), E * sizeof(IEdge));
-    std::fclose(f);
-    const uint64_t expect = expected_modea_size(S, tb, tr, E);
-    if ((uint64_t)st.st_size != expect) { std::fprintf(stderr, "[FATAL] modea.bin size %lu != expected %lu\n", (unsigned long)st.st_size, (unsigned long)expect); std::abort(); }
-}
-
-void build_adj(const std::vector<IEdge>& super_edges, uint64_t S,
-               std::vector<std::vector<uint32_t>>& out_adj, std::vector<std::vector<uint32_t>>& in_adj) {
-    out_adj.assign(S, {}); in_adj.assign(S, {});
-    for (const IEdge& e : super_edges) { out_adj[e.first].push_back(e.second); in_adj[e.second].push_back(e.first); }
+void build_csr(const std::vector<IEdge>& super_edges, uint64_t S, bool fwd, CSR& g) {
+    g.off.assign(S + 1, 0);
+    for (const IEdge& e : super_edges) g.off[(fwd ? e.first : e.second) + 1]++;
+    for (uint64_t i = 0; i < S; i++) g.off[i + 1] += g.off[i];
+    g.nbr.resize(super_edges.size());
+    std::vector<uint32_t> w(g.off.begin(), g.off.begin() + S);   // per-node write cursor
+    for (const IEdge& e : super_edges) {
+        const uint32_t u = fwd ? e.first : e.second, v = fwd ? e.second : e.first;
+        g.nbr[w[u]++] = v;
+    }
 }
 
 struct OffsetTable { std::vector<uint64_t> blk_off, runs_off; };
@@ -70,29 +62,31 @@ void build_offset_table(const std::vector<SuperNode>& snodes, OffsetTable& t) {
 
 // BFS from s1 to s2; interior nodes restricted by a colour bitmask, start out-neighbour by
 // start_mask. Deterministic (layer order, lowest-ID parent tiebreak). path = [s1, ..., s2].
-bool bfs_path(uint32_t s1, uint32_t s2, const std::vector<std::vector<uint32_t>>& out_adj,
-              const std::vector<uint8_t>& color, uint8_t start_mask, uint8_t interior_mask, uint32_t max_hops,
-              std::vector<uint32_t>& path) {
+// seen/parent/dist are caller-owned scratch reused across calls; a node belongs to THIS
+// call iff seen[v]==gen, so there is no per-call O(S) allocation or reset.
+bool bfs_path(uint32_t s1, uint32_t s2, const CSR& og, const std::vector<uint8_t>& color,
+              uint8_t start_mask, uint8_t interior_mask, uint32_t max_hops,
+              std::vector<uint32_t>& seen, std::vector<uint32_t>& parent, std::vector<uint32_t>& dist,
+              uint32_t gen, std::vector<uint32_t>& path) {
     path.clear();
-    const uint64_t S = out_adj.size();
-    std::vector<uint32_t> parent(S, UINT32_MAX), dist(S, UINT32_MAX);
-    parent[s1] = s1; dist[s1] = 0;
+    seen[s1] = gen; parent[s1] = s1; dist[s1] = 0;
     std::queue<uint32_t> q; q.push(s1);
     while (!q.empty()) {
         const uint32_t u = q.front(); q.pop();
         if (dist[u] >= max_hops) continue;
         const uint8_t mask = (u == s1) ? start_mask : interior_mask;
-        for (uint32_t v : out_adj[u]) {
+        for (uint32_t i = og.off[u]; i < og.off[u + 1]; i++) {
+            const uint32_t v = og.nbr[i];
             if (v == s2 && color[v] == 3) {
-                if (parent[v] == UINT32_MAX || u < parent[v]) { parent[v] = u; dist[v] = dist[u] + 1; }
+                if (seen[v] != gen || u < parent[v]) { seen[v] = gen; parent[v] = u; dist[v] = dist[u] + 1; }
                 continue;
             }
             if (!(mask & (1u << (color[v] - 1)))) continue;
-            if (parent[v] != UINT32_MAX) continue;
-            parent[v] = u; dist[v] = dist[u] + 1; q.push(v);
+            if (seen[v] == gen) continue;
+            seen[v] = gen; parent[v] = u; dist[v] = dist[u] + 1; q.push(v);
         }
     }
-    if (parent[s2] == UINT32_MAX) return false;
+    if (seen[s2] != gen) return false;
     for (uint32_t cur = s2; cur != s1; cur = parent[cur]) { path.push_back(cur); if (parent[cur] == cur) return false; }
     path.push_back(s1); std::reverse(path.begin(), path.end()); return true;
 }
@@ -152,6 +146,21 @@ void expand_node_cov(uint32_t nid, const std::vector<SuperNode>& snodes,
     }
 }
 
+// Expand an arm's RLE coverage into flat cn/ct over positions [lo, hi). Arms keep coverage
+// RLE (not flat uint32 per base) — a long multi-node bubble path would otherwise carry
+// 8 bytes/base resident for the whole stage; only these contiguous slices are ever read.
+void cov_slice(const std::vector<CovRun>& cov, uint32_t lo, uint32_t hi,
+               std::vector<uint32_t>& cn, std::vector<uint32_t>& ct) {
+    cn.assign(hi - lo, 0); ct.assign(hi - lo, 0);
+    uint32_t prev = 0;
+    for (const CovRun& r : cov) {
+        const uint32_t a = std::max(prev, lo), b = std::min(r.end_pos, hi);
+        for (uint32_t p = a; p < b; p++) { cn[p - lo] = r.n_cov; ct[p - lo] = r.t_cov; }
+        prev = r.end_pos;
+        if (prev >= hi) break;
+    }
+}
+
 // Compress flat cov_n/cov_t into CovRun RLE.
 void rle_emit(const std::vector<uint32_t>& cov_n, const std::vector<uint32_t>& cov_t, std::vector<CovRun>& out) {
     out.clear(); const uint64_t L = cov_n.size(); if (L == 0) return;
@@ -165,38 +174,41 @@ void rle_emit(const std::vector<uint32_t>& cov_n, const std::vector<uint32_t>& c
 }
 
 // DFS from branch start x, color != 3 interior, record every c3 closure node reached.
-void dfs_branch(uint32_t s1, uint32_t x, const std::vector<uint8_t>& color,
-                const std::vector<std::vector<uint32_t>>& out_adj,
+// vis/stack are caller-owned scratch; a node is visited in THIS call iff vis[n]==gen.
+void dfs_branch(uint32_t s1, uint32_t x, const std::vector<uint8_t>& color, const CSR& og,
+                std::vector<uint32_t>& vis, uint32_t gen, std::vector<uint32_t>& stack,
                 std::vector<uint32_t>& closed, bool& cycle_hit) {
     closed.clear(); cycle_hit = false;
-    std::vector<char> visited(out_adj.size(), 0);
-    std::vector<uint32_t> stack; stack.push_back(x); visited[x] = 1;
+    stack.clear(); stack.push_back(x); vis[x] = gen;
     uint32_t nodes = 0;
     while (!stack.empty() && nodes < NODE_BUDGET) {
         const uint32_t n = stack.back(); stack.pop_back(); nodes++;
-        for (uint32_t nx : out_adj[n]) {
+        for (uint32_t i = og.off[n]; i < og.off[n + 1]; i++) {
+            const uint32_t nx = og.nbr[i];
             if (nx == s1) { cycle_hit = true; continue; }
             if (color[nx] == 3) { closed.push_back(nx); continue; }
-            if (visited[nx]) { cycle_hit = true; continue; }
-            visited[nx] = 1; stack.push_back(nx);
+            if (vis[nx] == gen) { cycle_hit = true; continue; }
+            vis[nx] = gen; stack.push_back(nx);
         }
     }
 }
 
 // Iterate every c3 S1, enumerate (S1, S2) closures by branch colour, classify into buckets.
-void enumerate_bubbles(const std::vector<uint8_t>& color, const std::vector<std::vector<uint32_t>>& out_adj,
+void enumerate_bubbles(const std::vector<uint8_t>& color, const CSR& og,
                        std::vector<BubblePair>& out, uint64_t& direct_only, uint64_t& cycle_skipped, uint64_t& multi_path) {
     out.clear(); direct_only = cycle_skipped = multi_path = 0;
     const uint64_t S = color.size();
-    std::vector<uint32_t> closed; std::unordered_map<uint64_t, PairInfo> pair_info;
+    std::vector<uint32_t> vis(S, 0), stack, closed; uint32_t gen = 0;
+    std::unordered_map<uint64_t, PairInfo> pair_info;
     for (uint32_t s1 = 0; s1 < (uint32_t)S; s1++) {
         if (color[s1] != 3) continue;
         pair_info.clear();
-        for (uint32_t x : out_adj[s1]) { if (color[x] == 3) pair_info[((uint64_t)s1 << 32) | x].direct = true; }
-        for (uint32_t x : out_adj[s1]) {
+        for (uint32_t i = og.off[s1]; i < og.off[s1 + 1]; i++) { const uint32_t x = og.nbr[i]; if (color[x] == 3) pair_info[((uint64_t)s1 << 32) | x].direct = true; }
+        for (uint32_t i = og.off[s1]; i < og.off[s1 + 1]; i++) {
+            const uint32_t x = og.nbr[i];
             if (color[x] == 3) continue;
             const uint8_t branch_c = color[x]; bool cy = false;
-            dfs_branch(s1, x, color, out_adj, closed, cy);
+            dfs_branch(s1, x, color, og, vis, ++gen, stack, closed, cy);
             for (uint32_t s2 : closed) {
                 PairInfo& p = pair_info[((uint64_t)s1 << 32) | s2];
                 if (branch_c == 1) p.c1_branches++; else p.c2_branches++;
@@ -229,7 +241,7 @@ uint32_t out_add(OutGraph& g, const std::vector<uint8_t>& bytes,
     return id;
 }
 
-struct Arm { uint32_t s1, s2; std::vector<uint8_t> bytes; std::vector<uint32_t> cn, ct; uint8_t color; };
+struct Arm { uint32_t s1, s2; std::vector<uint8_t> bytes; std::vector<CovRun> cov; uint8_t color; };
 struct ZBubble { int arm_n, arm_t; };
 
 // Longest common prefix / suffix length over a set of allele byte vectors.
@@ -272,10 +284,10 @@ void write_modeb_graph(const std::string& path, const OutGraph& g) {
 void run_modeb(const std::string& dir) {
     std::vector<SuperNode> snodes;
     std::vector<uint8_t> blocks; std::vector<CovRun> runs; std::vector<IEdge> super_edges;
-    read_modea(dir, snodes, blocks, runs, super_edges);
+    build_super_graph(dir, snodes, blocks, runs, super_edges);    // Mode A, straight into RAM
     const uint32_t S = (uint32_t)snodes.size();
     std::vector<uint8_t> color(S); for (uint32_t i = 0; i < S; i++) color[i] = snodes[i].color;
-    std::vector<std::vector<uint32_t>> out_adj, in_adj; build_adj(super_edges, S, out_adj, in_adj);
+    CSR out_adj, in_adj; build_csr(super_edges, S, true, out_adj); build_csr(super_edges, S, false, in_adj);
     OffsetTable ot; build_offset_table(snodes, ot);
 
     std::vector<BubblePair> bubbles; uint64_t direct_only = 0, cycle_skipped = 0, multi_path = 0;
@@ -285,12 +297,14 @@ void run_modeb(const std::string& dir) {
     constexpr uint8_t M1 = 0x1, M2 = 0x2, M12 = M1 | M2;
     std::vector<Arm> arms; std::vector<ZBubble> zb;
     std::vector<char> consumed(S, 0), is_anchor(S, 0);
+    std::vector<uint32_t> bseen(S, 0), bpar(S, 0), bdist(S, 0); uint32_t bgen = 0;   // bfs scratch
+    std::vector<uint32_t> fcn, fct;                                                  // reused flat cov buffers
     uint64_t zipped = 0, passed = 0;
     for (const BubblePair& bp : bubbles) {
         if (bp.bucket != 0) { passed++; continue; }            // v1: only std_both is zipped
         std::vector<uint32_t> pn, pt;
-        if (!bfs_path(bp.s1, bp.s2, out_adj, color, M1, M12, NODE_BUDGET, pn) ||
-            !bfs_path(bp.s1, bp.s2, out_adj, color, M2, M12, NODE_BUDGET, pt)) { passed++; continue; }
+        if (!bfs_path(bp.s1, bp.s2, out_adj, color, M1, M12, NODE_BUDGET, bseen, bpar, bdist, ++bgen, pn) ||
+            !bfs_path(bp.s1, bp.s2, out_adj, color, M2, M12, NODE_BUDGET, bseen, bpar, bdist, ++bgen, pt)) { passed++; continue; }
         bool conflict = false;                                  // don't double-consume a shared interior
         for (size_t i = 1; i + 1 < pn.size() && !conflict; i++) conflict = consumed[pn[i]];
         for (size_t i = 1; i + 1 < pt.size() && !conflict; i++) conflict = consumed[pt[i]];
@@ -302,8 +316,8 @@ void run_modeb(const std::string& dir) {
         std::vector<uint64_t> sgn, sgt;
         splice_arm(pn, snodes, blocks, ot, an.bytes, sgn);
         splice_arm(pt, snodes, blocks, ot, at.bytes, sgt);
-        expand_arm_coverage(pn, snodes, runs, ot, sgn, an.bytes.size(), an.cn, an.ct);
-        expand_arm_coverage(pt, snodes, runs, ot, sgt, at.bytes.size(), at.cn, at.ct);
+        expand_arm_coverage(pn, snodes, runs, ot, sgn, an.bytes.size(), fcn, fct); rle_emit(fcn, fct, an.cov);
+        expand_arm_coverage(pt, snodes, runs, ot, sgt, at.bytes.size(), fcn, fct); rle_emit(fcn, fct, at.cov);
         const int in = (int)arms.size(); arms.push_back(std::move(an));
         const int it = (int)arms.size(); arms.push_back(std::move(at));
         zb.push_back({in, it}); zipped++;
@@ -314,17 +328,17 @@ void run_modeb(const std::string& dir) {
     for (int i = 0; i < (int)arms.size(); i++) { s1_arms[arms[i].s1].push_back(i); s2_arms[arms[i].s2].push_back(i); }
     std::unordered_map<uint32_t, uint32_t> grow_pre, grow_suf;
     for (auto& kv : s1_arms) {
-        bool priv = true; for (uint32_t v : out_adj[kv.first]) if (!consumed[v]) { priv = false; break; }
+        bool priv = true; for (uint32_t i = out_adj.off[kv.first]; i < out_adj.off[kv.first + 1]; i++) if (!consumed[out_adj.nbr[i]]) { priv = false; break; }
         if (priv) grow_pre[kv.first] = lcp_over(arms, kv.second);
     }
     for (auto& kv : s2_arms) {
-        bool priv = true; for (uint32_t v : in_adj[kv.first]) if (!consumed[v]) { priv = false; break; }
+        bool priv = true; for (uint32_t i = in_adj.off[kv.first]; i < in_adj.off[kv.first + 1]; i++) if (!consumed[in_adj.nbr[i]]) { priv = false; break; }
         if (priv) grow_suf[kv.first] = lcs_over(arms, kv.second);
     }
 
     // ---- Phase 3a: emit kept nodes (interiors dropped; anchors grown) ----
     OutGraph g; std::vector<uint32_t> new_id(S, UINT32_MAX);
-    std::vector<uint32_t> own_cn, own_ct;
+    std::vector<uint32_t> own_cn, own_ct, scn, sct;
     for (uint32_t nid = 0; nid < S; nid++) {
         if (consumed[nid]) continue;
         const uint32_t bl = snodes[nid].block_len;
@@ -339,16 +353,20 @@ void run_modeb(const std::string& dir) {
         b.reserve(add_suf + bl + add_pre); cn.reserve(add_suf + bl + add_pre); ct.reserve(add_suf + bl + add_pre);
         if (add_suf) { const std::vector<int>& idx = s2_arms[nid]; const Arm& a0 = arms[idx[0]]; const uint32_t L0 = (uint32_t)a0.bytes.size();
             for (uint32_t p = 0; p < add_suf; p++) b.push_back(a0.bytes[L0 - gs + p]);
-            for (uint32_t p = 0; p < add_suf; p++) { uint32_t mn = 0, mt = 0;
-                for (int i : idx) { const Arm& a = arms[i]; const uint32_t L = (uint32_t)a.bytes.size(); mn = std::max(mn, a.cn[L - gs + p]); mt = std::max(mt, a.ct[L - gs + p]); }
-                cn.push_back(mn); ct.push_back(mt); } }
+            std::vector<uint32_t> mn(add_suf, 0), mt(add_suf, 0);
+            for (int i : idx) { const Arm& a = arms[i]; const uint32_t L = (uint32_t)a.bytes.size();
+                cov_slice(a.cov, L - gs, L - gs + add_suf, scn, sct);
+                for (uint32_t p = 0; p < add_suf; p++) { mn[p] = std::max(mn[p], scn[p]); mt[p] = std::max(mt[p], sct[p]); } }
+            for (uint32_t p = 0; p < add_suf; p++) { cn.push_back(mn[p]); ct.push_back(mt[p]); } }
         for (uint32_t p = 0; p < bl; p++) b.push_back(blk[p]);
         for (uint32_t p = 0; p < bl; p++) { cn.push_back(own_cn[p]); ct.push_back(own_ct[p]); }
         if (add_pre) { const std::vector<int>& idx = s1_arms[nid]; const Arm& a0 = arms[idx[0]];
             for (uint32_t p = 0; p < add_pre; p++) b.push_back(a0.bytes[bl + p]);
-            for (uint32_t p = 0; p < add_pre; p++) { uint32_t mn = 0, mt = 0;
-                for (int i : idx) { const Arm& a = arms[i]; mn = std::max(mn, a.cn[bl + p]); mt = std::max(mt, a.ct[bl + p]); }
-                cn.push_back(mn); ct.push_back(mt); } }
+            std::vector<uint32_t> mn(add_pre, 0), mt(add_pre, 0);
+            for (int i : idx) { const Arm& a = arms[i];
+                cov_slice(a.cov, bl, bl + add_pre, scn, sct);
+                for (uint32_t p = 0; p < add_pre; p++) { mn[p] = std::max(mn[p], scn[p]); mt[p] = std::max(mt[p], sct[p]); } }
+            for (uint32_t p = 0; p < add_pre; p++) { cn.push_back(mn[p]); ct.push_back(mt[p]); } }
         new_id[nid] = out_add(g, b, cn, ct, 3);
     }
 
@@ -363,7 +381,7 @@ void run_modeb(const std::string& dir) {
             const uint32_t n1 = new_id[a.s1], n2 = new_id[a.s2];
             if (hi <= lo) { g.edges.push_back({n1, n2, 0}); collapsed++; continue; }   // alleles identical -> direct
             std::vector<uint8_t> rb(a.bytes.begin() + lo, a.bytes.begin() + hi);
-            std::vector<uint32_t> rcn(a.cn.begin() + lo, a.cn.begin() + hi), rct(a.ct.begin() + lo, a.ct.begin() + hi);
+            std::vector<uint32_t> rcn, rct; cov_slice(a.cov, lo, hi, rcn, rct);
             const uint32_t rid = out_add(g, rb, rcn, rct, a.color);
             g.edges.push_back({n1, rid, 0}); g.edges.push_back({rid, n2, 0}); residuals++;
         }
