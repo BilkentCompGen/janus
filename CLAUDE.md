@@ -1,228 +1,68 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+_Project-specific guidance. Global behavioral rules + cross-project map: `/home/claude/CLAUDE.md`._
 
-## Project
+---
 
-`svp` is a **reference-free somatic structural-variant caller**. It builds a 2-colour
-LCP-core graph directly from reads (normal vs tumor HiFi FASTQ) and progressively
-simplifies it: raw sig graph → unitig-compacted super-graph (Mode A) → bubble-zipped
-super-graph at base-pair resolution (Mode B). Mode A and Mode B are **one `modeb` stage**
-— Mode A is built in RAM and consumed in place, never written to disk. No assembly, no
-alignment, no reference graph — a single binary. Output is **coordinate-free** (per-node
-sequence + per-base coverage, not genome positions).
+`svp` — reference-free somatic SV caller. Builds a 2-colour LCP-core graph straight from reads (normal vs tumor HiFi FASTQ), simplifies it, and emits a coordinate-free graph (per-node sequence + per-base coverage, no genome positions). C++17, one binary. No assembly, no alignment, no reference. Flow: **`run` = `graph → simplify`** (two stages, that's all). `min_mult=10`, no prune. State: `main` @ `eb0194e` **plus uncommitted working-tree changes** — `graph` decodes `.gz` with **rapidgzip** (parallel, in-process) and skips pass-2 LCP via a **cross-pass core-boundary cache**; the legacy `lcp`/`counts.bin` path, the `bubbles` diagnostic, and the orphaned assembly helpers have been removed.
 
-Active branch: **`graph-inspector`**. The pipeline currently ends at **Mode B** — the
-downstream VCF-emission tail (`posmap`/`anchor`/`vcf`), the `inspect/` toolkit, and the
-exploratory `tools/` were removed (see git history `b68a980`); the repo is intentionally
-trimmed to the read → graph → Mode B core.
+## Hard rules
+- **Reads only** (two FASTQ). An assembly/`.fa` is a ground-truth oracle, never a caller input.
+- **Whole-genome only**; sim scope comes from the config, never hard-coded.
 
-### Two hard rules — do not violate
+## Foundations
+- **LCP core** (lcptools `biolcp`, level 5): a locally-consistent parse — the same locus yields the same core in any context. Adjacent L5 cores overlap ~85 bp, so nodes splice by exact KMP suffix/prefix (**zero overlap = FATAL**).
+- **Signature** = `murmur64(core ± 10 bp flank, seed 0)`. The ±flank makes each sig locus-specific so a node's stored window bytes are consistent across reads (the splice depends on it); dropping it craters recall.
+- **2 colours**: `(n && t) ? 3 : n ? 1 : 2` → **1 normal-only, 2 tumor-only (somatic), 3 shared**.
+- **Dual fwd+RC** extraction per read (the parse isn't RC-symmetric): pools both-strand coverage (so `min_mult` prunes errors) but doubles node count and hides inversions as somatic. The two strands produce **independent** sigs (no per-emission canonicalization — that would break the KMP byte-splice). See `docs/FOUNDATIONS.md`.
 
-1. **The caller consumes READS ONLY** — two FASTQ inputs (normal, tumor). An
-   assembly/`.fa` is **never** a caller input. Assemblies are allowed only as a
-   ground-truth / analysis oracle (extract their LCP cores, match
-   read-derived cores by signature — LCP is deterministic, so equal signature = exact
-   match, no alignment).
-2. **Whole-genome only.** Nothing chromosome-specific in the caller. Sim scope is chosen
-   by the simulation config, never hard-coded.
+## Pipeline
+`run` = `graph → simplify`. Both stages are resumable — `run` skips a stage whose output (`graph.bin` / `simplify.bin`) already exists; every checkpoint is `.tmp` + `rename`. **Interactive map: `docs/pipeline.html`** (serve it; it diagrams both stages and the on-disk formats).
+
+### `graph <normal.fq.gz> <tumor.fq.gz> <dir>` → `graph.bin`  (`run_graph_reads`)
+Two passes over the same FASTQs, self-contained:
+1. **Count** (`run_pool_both`): both samples in **one** pool. One pipe-reader per `.gz` reads plain FASTQ from a **rapidgzip** decode process (`open_decode` → `popen`); workers LCP each read (fwd + RC) → `emit_sig` → count in a sharded **bloom cascade**, one cascade per colour (`min_mult-1` plain bloom filters + exact survivor map). Per-colour `min_mult` gate happens **inside** the cascade, before the n/t merge (a normal-error sig drops, leaving the locus tumor-only). Bloom only over-keeps (FN = 0). Survivors sorted by sig → node id = sorted index (raw sigs are **not** persisted).
+2. **Fill** (`fill_pool`): re-decode the same FASTQs; for each survivor fill its ±flank window bytes (atomic single-writer claim) and emit adjacent-signature edges (per-worker deduped, periodic radix-compact, final dedup after resolve).
+→ `graph.bin` **v2**: `K, color[K], ncov[K], tcov[K], E, IEdge[E], total_payload, seqlen[K], payload[]` (window bytes inline). Pass-2 abort if any kept sig's slot is empty.
+
+**rapidgzip cross-pass cache** (`CoreCache`, `SVP_NOCACHE` disables): pass 1 records each read's filtered core boundaries (`uint16 start,width`, fwd+rc); pass 2 replays them instead of re-running `extract_fast` (drops the fill pass's LCP cost to ~0). Keyed by `(shard, read-index)` — deterministic because the same `.gz` → same rapidgzip bytes → same parse order. Reads > 65535 bp → flagged `reext`, pass 2 falls back to `extract_fast`.
+
+### `simplify <dir>` → `simplify.bin`  (`run_simplify`; compaction via `build_super_graph`)
+The single graph-simplification stage — two phases, the second the namesake:
+1. **Compaction — in RAM** (`build_super_graph`, `compact.cpp`): reads `graph.bin`, walks each maximal same-colour in/out-degree-1 chain, splices member windows by KMP overlap, RLE per-base coverage (`max` on overlaps); pure cycles → singletons. Never written to disk; consumed directly. (Log tag `[compact]`.)
+2. **Bubble zip** (`simplify.cpp`): enumerate `(S1,S2)` colour-3 anchor bubbles (budgeted DFS, `NODE_BUDGET=500`), bucketed std_both/T_only/N_only. **v1 zips only `std_both`**; direct/cycle/multi-path pass through. For each zip: BFS the c1 + c2 arms, absorb the prefix/suffix shared across all of an anchor's arms into the **grown** anchor (only when "private" — every neighbour on that side is a consumed arm), leave each arm's divergent middle as a residual node, collapse equal alleles to a direct edge. Emits the **whole** simplified graph. (Log tag `[simplify]`.)
+→ `simplify.bin`: `S + SuperNode[S] + blocks + runs(CovRun) + GEdge{from,to,overlap}` (drop `overlap` head bytes of `to` to reconstruct; bubble-seam edges have overlap 0, pass-through edges recompute KMP overlap on output bytes). Kept lean by CSR adjacency, **RLE arm coverage** (not flat per-base), generation-stamped BFS/DFS scratch. `SuperNode` has `pad[3]={}` so the file is byte-reproducible.
+
+> "Bubble" here is the graph-topology object the zip operates on (an anchor pair with two allele arms) — the heart of the stage. It is unrelated to the deleted `bubbles.tsv` diagnostic.
 
 ## Build & run
-
 ```
-make install-deps    # one-time: builds lib/lcptools (liblcptools.a) on the biolcp branch
-make                 # builds ./svp from src/*.cpp
-make run             # whole-genome read run: reads/normal vs reads/wgs -> outputs/svp/wgs/
-make clean           # moves build/, svp, outputs/ -> ~/trash/svp-make-clean/
+make install-deps     # lib/lcptools (biolcp) + Badread venv + rapidgzip venv
+make                  # ./svp from src/*.cpp + btllib bloom objects
+./svp run <n.fq.gz> <t.fq.gz> <dir> [--min-mult 10 --threads 16]
 ```
+Run `svp` from the repo root (the `make run` target does) so the default rapidgzip path resolves. **`-DLARGE_GENOME` is load-bearing — it must match `lib/lcptools`'s build** (64-bit core start/end) or structs corrupt. Defaults: `--level 5 --flank 10 --margin 10 --min-mult 10 --threads 16`. Keep `margin ≥ flank`. No prune — build at the threshold you want. svp no longer links zlib (`-lz` dropped); all decode is rapidgzip.
 
-`make run` overrides: `LEVEL` (lcptools depth, 5), `FLANK` (±bp signature window, 10),
-`MINMULT` (error-prune threshold, 3), `THREADS` (16), `READS_N`/`READS_T` (FASTQ paths).
+**rapidgzip** is a runtime dependency installed by `make install-deps` into `lib/rapidgzip/venv` (self-contained venv, repo-local — survives reboots, unlike the old `/tmp` location). The `graph` stage `popen`s it; default `lib/rapidgzip/venv/bin/rapidgzip`, override with `SVP_RAPIDGZIP`. Other tunables: `SVP_DECP` (rapidgzip threads/file), `SVP_FILL_NW` (fill worker count), `SVP_NOCACHE` (disable the cross-pass cache).
 
-**Build flag `-DLARGE_GENOME` is load-bearing and must match `lib/lcptools`'s build**
-(64-bit LCP core start/end on a whole-genome reference). `make install-deps-lcptools`
-archives lcptools in-place with the same flag. Rebuild the static lib if you see
-segfaults on struct fields after pulling `lib/`.
+## Libraries
+- **rapidgzip** (`lib/rapidgzip/venv`, v0.16) — parallel single-stream gzip inflate (~1.5 GB/s @ ~4 cores vs zlib's ~120 MB/s/core). The gz decoder for `graph`; invoked at runtime via `popen` (`open_decode`, `graph.cpp`), **not** linked.
+- **lcptools** (`lib/lcptools`, branch `biolcp`, `-DLARGE_GENOME`) — LCP cores; `extract_fast.cpp` adapts `init_lps_offset`/`lps_deepen`.
+- **btllib** — only the plain atomic `BloomFilter` headers (svp re-implements a non-atomic `PlainBloom` for the count cascade; the cascade runs under a per-shard lock so atomics were redundant). **MurmurHash3** (vendored) — the signature hash.
+- Sim/eval (in `lib/`): **insilicoSV** (truth genome+VCF), **Badread** (HiFi read sim), **Severus** (intended baseline, not wired).
+- `tools/` (git-tracked, **not** built by `make`; compiled out-of-band): `lcp_bench` (in-RAM thread-scaling micro-benchmark of the LCP hot path) and `lcp_stream` (LCP-only CPU cost over the real `.gz`, zlib decode). Both **VERBATIM-copy** `graph.cpp`'s `process_read` (it lives in an anon namespace) — they silently drift if the production parser changes. (`.gitignore` still whitelists a long-gone `tools/bubble_recall.cpp`.)
 
-## CLI — four resumable, checkpointed stages
+## Source layout (`src/`)
+`graph.cpp` (the `graph` stage + readers/pools/bloom/cache/IO helpers), `compact.cpp` (`build_super_graph` — unitig compaction, phase 1 of `simplify`), `simplify.cpp` (`run_simplify` — bubble zip, phase 2), `extract_fast.cpp` (biolcp SoA adapter), `main.cpp` (CLI), `MurmurHash3.*`, `svp.h` (shared PODs + IO + `suffix_prefix`), `graph.h` (stage decls). One binary, one Makefile, no CMake/CI.
 
-The expensive LCP pass is paid once; later stages are seconds-to-minutes and re-runnable.
-`run` skips any stage whose checkpoint already exists. Checkpoints are written atomically
-(`.tmp` + `rename`).
+## Benchmarks
+`ref.fasta → insilicoSV (truth out.fa + out.vcf) → Badread (normal from ref, tumor from out.fa) → svp`. Active sim `hard` (WG ~30×). `scripts/sim_reads_badread.sh`, `scripts/gen_badread_reads_wg.sh`, `simulation/Makefile`. `colo829/` is real tumor/normal HiFi (~107 GB / ~112 GB) + a lifted somatic-SV truthset; its last `run.log` was **OOM-killed** after the normal pool — no completed colo829 output yet (and that runner passed a `--ref` flag the CLI never accepted). See `BENCHMARK.md` for the full `graph`-stage record.
 
-```
-svp lcp     <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5 --flank 10 --margin 10 --min-mult 3 --threads 16]
-svp graph   <dir>
-svp modeb   <dir>     # Mode A unitig compaction (in RAM) then Mode B bubble-zip -> modeb.bin
-svp bubbles <dir> [--out <dir>/bubbles.tsv]
-svp run     <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   # runs all, skipping done stages
-```
+## Performance (measured 2026-06-17, `hard` WG, mm=10, 16 threads pinned `taskset -c 0-15`)
+**`graph` = 18.3 min** (count 512 s + fill 502 s + serial tail ~82 s), 73.9% of the 16-core budget, peak RSS ~52 GB — vs 23.4 min for committed `eb0194e` (zlib + atomic bloom + re-LCP), output-equivalent (~86.4 M survivors, 88 M edges, 14.9 GB payload; `graph.bin` ≈ 16.5 GB, `simplify.bin` ≈ 7 GB). The two irreducible costs are LCP `extract_fast` (~3.66k core-s, count pass only now) + gzip decode (~1.67k core-s); the remaining lever is the fill-pass feed coupling and the `idx.find` on the 86 M-entry survivor map. `simplify` ≈ a few min after `graph`. **ALWAYS `--threads 16` + `taskset -c 0-15`** (see `BENCHMARK.md` — `--threads 32` breaks the budget and oversubscribes the readers + rapidgzip children).
 
-`--min-mult` is an **`lcp`-stage** flag (the prune runs inside `run_lcp` before
-`counts.bin` is written), NOT a `graph` flag — re-tuning it requires re-running `lcp`.
-`pre_prune.bin` (the per-sample-filtered merged sig table) is written by `lcp`; if it
-exists, re-running `lcp` resumes from it and skips the gzip+pool+merge stages.
+## Code style
+`docs/CODE_STYLE.md`: C++17, no OOP / no user templates / no try-catch (fail-fast `[FATAL]` + `abort`), avoid if-else trees, ≤30 LOC/function, comments only when the WHY is non-obvious. 0-based half-open coords (`core.end` exclusive). One binary, one Makefile, no CMake/CI.
 
-**Schema changes invalidate old checkpoints**: a `modeb.bin` from before a struct change
-FATALs cleanly on a size mismatch — regenerate the stage.
-
-## Pipeline (`src/`, ~1630 LOC across 11 files; graph 639 / modeb 410 / modea 182)
-
-A FASTQ input is a single file or a directory of shards. Stages and their on-disk schemas:
-
-1. **lcp** (`run_lcp`, `graph.cpp`) — reads → per-sig multiplicity + within-read edges.
-   A pool of reader threads (work-steal shards, block gzread + manual `\n` scan) feed a
-   bounded queue drained by worker threads. **Per read, two LCP extractions**: forward,
-   and reverse-complement (remap+reverse through a 256-byte complement LUT). Each surviving
-   core's signature = `murmur64(core ± flank bytes, seed 0)`. Runs **per-sample two-pass**
-   (normal then tumor; halves peak pool RAM), each sample filtered at `count >= min_mult`
-   **before** the merge. A second pass (`fill_pool`) re-LCPs to fill each kept sig's window
-   bytes and emit per-worker-deduped adjacent-sig edges.
-   → `dir/counts.bin` (`u64 N`, `N × SigCount{u64 sig, u32 n, u32 t}`, `u64 total`,
-   `N × u16 seqlen`, `payload` = the ±flank window bytes per sig) + `dir/edges.bin`
-   (`u64 M`, `M × IEdge{u32,u32}` sig pairs) + `dir/pre_prune.bin` (resume checkpoint).
-2. **graph** (`run_graph`, `graph.cpp`) — colour each sig: **1 = normal-only, 2 =
-   tumor-only (candidate somatic), 3 = shared**. Map sig-edges → node-id edges, dedupe.
-   → `dir/graph.bin` (`u64 K`, `color[K]`, `ncov[K]` u32, `tcov[K]` u32, `u64 E`,
-   `IEdge[E]`). Seconds.
-3. **modeb** (`run_modeb`, `modeb.cpp`) — the single graph-simplification stage. It first
-   builds the **Mode A** super-graph **in RAM** (`build_super_graph`, `modea.cpp`) — unitig
-   compaction: walk each maximal same-colour chain (in/out-degree 1), splice the inline node
-   bytes via exact KMP suffix/prefix overlap (`suffix_prefix`; `k==0` is FATAL — adjacent L5
-   cores always overlap ~85 bp), emit one super-node per chain with its per-base coverage
-   runs; pure cycles become singleton super-nodes. The node schema is
-   `SuperNode{u32 block_len, u32 runs_len, u8 color}[S]` + concatenated `blocks` (bytes) +
-   `CovRun{u32 end_pos, n_cov, t_cov}[]` + `super_edges` (`IEdge[]`); per-node slices are
-   found by prefix-summing `block_len`/`runs_len`. **This Mode A graph is never written to
-   disk** — modeb consumes it directly.
-   Then **Mode B**: emit the whole graph, further simplified (it does NOT extract per-bubble
-   records — that was the old design). Every Mode A super-node passes through; each
-   `std_both` bubble (a `(S1,S2)` colour-3 anchor pair with parallel c1 and c2 arms) is
-   **zipped to base-pair resolution**: the prefix/suffix common across **all** of an anchor's
-   bubble arms is absorbed into the anchor (grown), and each arm becomes one residual
-   super-node holding just its divergent middle. EQ bubbles (identical alleles) collapse to a
-   direct edge. Coverage is max-merged where alleles share a region. Output schema = the Mode
-   A node schema + edges that carry an **explicit overlap**: `GEdge{u32 from, u32 to, u32
-   overlap}` — reconstruct a path by dropping `overlap` head bytes of `to` before
-   concatenating. **Bubble seams abut (overlap 0)** — the two arms diverge at exactly one base
-   so no overlap can span it; pass-through edges keep the Mode A suffix/prefix overlap. An
-   anchor is grown only when every edge on the grown side is a zipped arm (else growing its
-   tail would corrupt a surviving backbone edge's overlap). **v1 scope: `std_both` only** —
-   orphan buckets (tumor-only INS / normal-only DEL) and tangles (multi-path, cycles) pass
-   through unzipped. → `dir/modeb.bin` (node schema above + `GEdge[]`).
-   *Implementation notes:* arm coverage is kept RLE (`CovRun`), not flat per-base `uint32`,
-   and only the slices actually read are expanded — this is what keeps peak RSS bounded.
-   Adjacency is CSR; the bubble BFS/DFS use generation-stamped scratch (no per-call O(S)
-   alloc).
-4. **bubbles** (`run_bubbles`, `graph.cpp`) — plain BFS connected-components on the
-   non-shared nodes of `graph.bin` (backbone colour-3 never traversed). Each component is
-   one bubble; type `D` (colour-1 only), `I` (colour-2 only), `C` (both). Operates on
-   `graph.bin`, **independent of modeb**. → `dir/bubbles.tsv`.
-
-`src/svp.h` holds the shared POD (`Core`, `SigCount`, `IEdge`) + LCP primitives +
-checkpoint IO helpers (`xopen`/`wr`/`rd`/`atomic_close`). `extract_cores`/`compute_sigs`
-(`cores.cpp`) and `read_fasta_flat` (`io.cpp`) serve the assembly-based GT/analysis tool
-only — never the caller, which uses `extract_fast` (`extract_fast.cpp`, the biolcp adapter)
-directly.
-
-## Load-bearing facts (verify in code before changing)
-
-- **The ±flank window is load-bearing.** The signature is `murmur64(core ± 10bp flank)`,
-  not the core alone — the flank makes each node locus-specific, so the stored window
-  bytes are consistent across reads and the modea/modeb byte-splice works. Measured:
-  dropping the flank craters recall and produces zero-overlap splice seams.
-- **Dual fw+RC extraction → two nodes per locus.** Every locus appears as both `W` and
-  `RC(W)`, each carrying ~full both-strand coverage. This pools strand coverage (lets
-  `min_mult` go high to prune ~90% of error sigs) but **doubles** the node/bubble count
-  and makes inversions invisible as somatic: the inverted *body* becomes colour-3 (shared
-  with normal's RC pass); only the breakpoint *junction* cores are tumor-only, and those
-  are novel sequence so they have no reference position. Folding strand pairs is a known
-  future step.
-- **Coverage representation.** Each super-node carries a per-base `(normal, tumor)` depth
-  track, run-length-encoded as `CovRun{end_pos, n_cov, t_cov}` (a run covers
-  `[prev_end, end_pos)`). Overlaps between constituent nodes resolve by **max per colour**.
-  Both `n` and `t` live in one run because a shared (c3) base genuinely has both depths;
-  on c1/c2 nodes one field is always 0 (redundant with colour, kept for the c3/merge case).
-- **`margin` guard.** A core must sit ≥`margin` from both read ends. With the default
-  `margin == flank` the ±flank window is always full and in-bounds. Footgun: `flank >
-  margin` truncates edge-proximal windows → the same locus gets two signatures → split
-  node. Keep `margin >= flank`.
-- **Per-sample `min_mult` gate is the central precision/recall knob.** Each sample is
-  filtered independently *before* the merge, so a shared locus with normal count below
-  `min_mult` is recorded tumor-only (somatic). More aggressive at higher `min_mult`.
-
-## Known gaps / next steps
-
-- **modeb v1**: orphan buckets and tangles pass through unzipped — orphan (INS/DEL)
-  zipping against the backbone detour is the obvious v2.
-- **Mode A build peak**: the merged `modeb` peak is now entirely the in-RAM Mode A build,
-  which holds `counts.bin` payload + output blocks simultaneously (≈15 GB + 5.82 GB at WG).
-  `mmap`-ing the payload region (read-only) would make it evictable page cache and lift the
-  hard allocation ceiling for COLO829 full-coverage — output stays byte-identical.
-- **No sequence-reconstruction verifier** for the Mode B output graph yet (only structural
-  accounting was checked). A reader that splices the output back and compares to the
-  alleles would be the hard proof.
-- **`run_lcp` gzread bug** (`graph.cpp:216`, `:345`): `gzread` error (`-1`) is treated as
-  EOF, so a corrupt/truncated `.fastq.gz` is silently accepted — add a `got < 0` FATAL.
-- **Dead code in `graph.cpp`**: `radix_sort_u64`, `reduce_sigs_u64`, `prune_by_mult` are
-  defined but never called (the pool counts in a hashmap and filters in `run_pool`).
-
-### Measured (AMD 9950X)
-
-- `lcp` (WG, dual fw+RC, 8 threads): ~24 min wall, ~96 GB peak RSS; ~887 M raw sigs,
-  ~85 M kept after the prune, ~86 M edges.
-- Mode A build (`wgs_mm10`): 85,152,754 nodes → **931,910 super-nodes**, 85.9 M edges →
-  1.69 M super-edges, 5.82 GB blocks.
-- Mode B (`wgs_mm10`): 931,910 → 930,045 nodes, 37,654 bubbles (33,176 `std_both` zipped,
-  4,478 passed), 64,491 residual arms, 1,861 EQ collapses.
-- **modea+modeb merge** (smoke set, K=12.25 M, S=132,840; warm cache): the old two-stage
-  path peaked at modeb **13.27 GB** RSS (flat per-base `uint32` arm coverage = 9.6 GB of it);
-  the merged single `modeb` peaks at **4.27 GB** (now entirely the Mode A build) in ~34 s
-  vs ~41 s, with no 884 MB `modea.bin` round-trip and byte-identical `modeb.bin`. The
-  remaining ceiling is the Mode A build holding `counts.bin` payload + output blocks together
-  (≈15 GB + 5.82 GB at WG) — `mmap`-ing the payload is the open next step for COLO829 scale.
-
-## Code style — strict
-
-Read `docs/CODE_STYLE.md` before editing. C++17, no OOP, no user templates, no try/catch
-(fail-fast `[FATAL]` + `std::abort()`), avoid if-else trees, ≤30 LOC/function. Comments
-only when the WHY is non-obvious. `.o`/`.d` go to `build/`. Keep `src/` tight.
-
-## Dependencies
-
-- `lib/lcptools` — LCP core extraction. **Must be on the `biolcp` branch** (DNA-optimised),
-  built with `-DLARGE_GENOME`. `src/extract_fast.cpp` adapts biolcp's
-  `init_lps_offset`/`lps_deepen` to svp's SoA `extract_fast`. See `docs/FOUNDATIONS.md`.
-- `lib/Badread` (HiFi read simulator, venv at `lib/Badread/venv`),
-  `lib/insilicoSV` (truth simulator). `zlib` for gz IO.
-- `lib/`, `simulation/`, `outputs/`, `build/`, and `svp` are gitignored.
-
-## Simulation (reads — the only caller input)
-
-`simulation/Makefile` is independent (delegated by the top-level Makefile). Reads are
-generated whole-genome. Long runs survive disconnect in a detached `screen`:
-`screen -dmS <name> -L -Logfile <log> <cmd>`.
-
-- `scripts/sim_reads_badread.sh` / `gen_badread_reads_wg.sh` — Badread PacBio HiFi over an
-  insilicoSV genome (current realistic benchmark). Q30/stdev-3 (`--identity 30,3`) on the
-  recent `pacbio2021` model; reads-only, contig-sharded across threads (Badread is
-  single-threaded).
-- Truth assemblies/VCF (`simulation/truth/<id>/`, insilicoSV) — GT/analysis only (rule 1).
-
-## Branch map
-
-| Branch | What's there |
-|---|---|
-| `graph-inspector` | **this branch** — read → graph → Mode B (Mode A built in RAM) core (VCF tail, inspect/, tools trimmed) |
-| `lcp-cortex-merged` | merge base: fast gzip+LCP + simple BFS bubble decomposition; ~99.6% recall / ~78% precision |
-| `lcp-cortex`, `lcp-cortex-fast` | earlier LCP-anchor pipelines (kept for diff/reference) |
-| `main` | clean slate, scaffolding only |
-| `backup` | previous monolithic LCP-graph impl (source of `zstr.hpp`, `MurmurHash3`) |
-| `experimental/modular-pipeline` | `svp2/` 6-stage modular pipeline; entry `svp2/STATUS.md` |
-
-Don't port files across branches without explicit instruction.
-
-Docs (the repo was trimmed to bare minimum): `docs/PIPELINE.md` (current stages +
-on-disk schemas + algorithms), `docs/FOUNDATIONS.md` (LCP cores, the signature, why the
-flank is load-bearing, structural ceilings), `docs/CODE_STYLE.md`. Older analysis/VCF docs
-were removed; their distilled conclusions live in those two summaries.
+## State note (working tree, not committed)
+On top of `main` @ `eb0194e`: rapidgzip parallel decode + cross-pass `CoreCache` + plain bloom, **and** this cleanup — removed the orphaned `cores.cpp`/`io.cpp`, the legacy `lcp`/`graph <dir>` (`run_lcp`/`run_graph`/`run_pool`/`merge_sorted_nodes`/`pack_payload`, `counts.bin`/`edges.bin`), and the `bubbles` diagnostic (`run_bubbles`/`decompose`/`bubbles.tsv`); renamed `modea.cpp`→`compact.cpp`, `modeb.cpp`→`simplify.cpp`, command `modeb`→`simplify`, `modeb.bin`→`simplify.bin`, "Mode A"→compaction, "Mode B"→bubble-zip; moved rapidgzip out of `/tmp`. Build is output-equivalent to `eb0194e`. **`docs/PIPELINE.md` was rewritten to match; `BENCHMARK.md` `graph`-stage numbers are current.** Stable validation reference: svp `b7e0663` + lcptools `perf-core-extraction` (build the lib manually, no `-DLARGE_GENOME`). Don't port files across branches without instruction.
