@@ -1,16 +1,16 @@
-// modeb: the single graph-simplification stage. It builds the Mode A super-graph in RAM
-// (unitig compaction; see build_super_graph in modea.cpp), then collapses it one step
-// further and emits the WHOLE graph — not extracted parts. Every Mode A super-node passes
+// simplify: the single graph-simplification stage. It builds the compacted super-graph in RAM
+// (unitig compaction; see build_super_graph in compact.cpp), then collapses it one step
+// further and emits the WHOLE graph — not extracted parts. Every compacted super-node passes
 // through; for each std_both (S1,S2) bubble the prefix/suffix shared across ALL of an
 // anchor's bubble arms is absorbed into the anchor (grown), leaving each arm as just its
 // divergent middle at base-pair resolution. Coverage is the per-base (n,t) track,
 // max-merged on shared regions.
 //
-// Output schema = the Mode A node schema (SuperNode{block_len,runs_len,colour} + blocks
+// Output schema = the compacted node schema (SuperNode{block_len,runs_len,colour} + blocks
 // + runs) PLUS edges that carry an explicit overlap: reconstruct a path by dropping
 // `overlap` bytes from the head of each `to` node before concatenating. Bubble-seam edges
 // (grown-anchor -> residual -> anchor) have overlap 0 — the arms diverge at exactly one
-// base, so no overlap can span it; pass-through edges keep the Mode A suffix/prefix
+// base, so no overlap can span it; pass-through edges keep the compaction suffix/prefix
 // overlap. An anchor is grown only when every edge on the grown side is a zipped arm
 // (otherwise growing its tail would corrupt a surviving backbone edge's overlap).
 #include "graph.h"
@@ -103,7 +103,7 @@ void splice_arm(const std::vector<uint32_t>& path, const std::vector<SuperNode>&
         const uint32_t li = snodes[path[i]].block_len; const uint8_t* B = blocks.data() + ot.blk_off[path[i]];
         const uint32_t lp = snodes[path[i - 1]].block_len; const uint8_t* A = arm.data() + (arm.size() - lp);
         const uint32_t k = suffix_prefix(A, lp, B, li);
-        if (k == 0) { std::fprintf(stderr, "[FATAL] modeb: zero-overlap arm splice path[%zu]->path[%zu]\n", i - 1, i); std::abort(); }
+        if (k == 0) { std::fprintf(stderr, "[FATAL] simplify: zero-overlap arm splice path[%zu]->path[%zu]\n", i - 1, i); std::abort(); }
         seg_start[i] = seg_start[i - 1] + lp - k;
         arm.insert(arm.end(), B + k, B + li);
     }
@@ -270,7 +270,7 @@ uint32_t lcs_over(const std::vector<Arm>& arms, const std::vector<int>& idx) {
     return s;
 }
 
-void write_modeb_graph(const std::string& path, const OutGraph& g) {
+void write_simplified_graph(const std::string& path, const OutGraph& g) {
     const std::string tmp = path + ".tmp"; FILE* f = xopen(tmp, "wb");
     uint64_t S = g.snodes.size();  wr(f, &S, 8);  wr(f, g.snodes.data(), S * sizeof(SuperNode));
     uint64_t tb = g.blocks.size(); wr(f, &tb, 8); wr(f, g.blocks.data(), tb);
@@ -281,10 +281,10 @@ void write_modeb_graph(const std::string& path, const OutGraph& g) {
 
 }  // namespace
 
-void run_modeb(const std::string& dir) {
+void run_simplify(const std::string& dir) {
     std::vector<SuperNode> snodes;
     std::vector<uint8_t> blocks; std::vector<CovRun> runs; std::vector<IEdge> super_edges;
-    build_super_graph(dir, snodes, blocks, runs, super_edges);    // Mode A, straight into RAM
+    build_super_graph(dir, snodes, blocks, runs, super_edges);    // unitig compaction, straight into RAM
     const uint32_t S = (uint32_t)snodes.size();
     std::vector<uint8_t> color(S); for (uint32_t i = 0; i < S; i++) color[i] = snodes[i].color;
     CSR out_adj, in_adj; build_csr(super_edges, S, true, out_adj); build_csr(super_edges, S, false, in_adj);
@@ -400,8 +400,8 @@ void run_modeb(const std::string& dir) {
     std::sort(g.edges.begin(), g.edges.end(), [](const GEdge& x, const GEdge& y){ return x.from != y.from ? x.from < y.from : (x.to != y.to ? x.to < y.to : x.overlap < y.overlap); });
     g.edges.erase(std::unique(g.edges.begin(), g.edges.end(), [](const GEdge& x, const GEdge& y){ return x.from == y.from && x.to == y.to && x.overlap == y.overlap; }), g.edges.end());
 
-    write_modeb_graph(dir + "/modeb.bin", g);
-    std::fprintf(stderr, "[modeb] in: S=%u E=%lu | bubbles=%lu (direct=%lu cycle=%lu multi=%lu) zipped=%lu passed=%lu | grew_pre=%lu grew_suf=%lu residual_arms=%lu collapsed=%lu | out: S=%lu E=%lu blocks=%.2fMB -> %s/modeb.bin\n",
+    write_simplified_graph(dir + "/simplify.bin", g);
+    std::fprintf(stderr, "[simplify] in: S=%u E=%lu | bubbles=%lu (direct=%lu cycle=%lu multi=%lu) zipped=%lu passed=%lu | grew_pre=%lu grew_suf=%lu residual_arms=%lu collapsed=%lu | out: S=%lu E=%lu blocks=%.2fMB -> %s/simplify.bin\n",
                  S, (unsigned long)super_edges.size(), (unsigned long)bubbles.size(),
                  (unsigned long)direct_only, (unsigned long)cycle_skipped, (unsigned long)multi_path,
                  (unsigned long)zipped, (unsigned long)passed,
