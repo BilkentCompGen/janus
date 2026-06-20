@@ -60,7 +60,7 @@ void splice_chain(const std::vector<uint32_t>& chain,
         const uint16_t lt = seqlen[chain[i - 1]];
         const uint8_t* A = block.data() + (block.size() - lt);
         const uint32_t k = suffix_prefix(A, lt, B, li);
-        if (k == 0) { std::fprintf(stderr, "[FATAL] modea: zero-overlap chain edge node=%u->%u\n", chain[i-1], chain[i]); std::abort(); }
+        if (k == 0) { std::fprintf(stderr, "[FATAL] compact: zero-overlap chain edge node=%u->%u\n", chain[i-1], chain[i]); std::abort(); }
         overlap.push_back((uint16_t)k);
         block.insert(block.end(), B + k, B + li);
     }
@@ -128,9 +128,9 @@ void emit_super_node(const std::vector<uint32_t>& chain, const std::vector<uint1
 
 }  // namespace
 
-// ---- stage 3: unitig compaction over the directed colored graph, IN MEMORY ----
-// Builds the Mode A super-graph (unitig-compacted, per-base coverage) directly into the
-// caller's vectors — no modea.bin round-trip. run_modeb consumes these straight away.
+// ---- unitig compaction over the directed colored graph, IN MEMORY (phase 1 of `simplify`) ----
+// Builds the compacted super-graph (unitig-compacted, per-base coverage) directly into the
+// caller's vectors — never written to disk. run_simplify consumes these straight away.
 void build_super_graph(const std::string& dir, std::vector<SuperNode>& snodes,
                        std::vector<uint8_t>& blocks, std::vector<CovRun>& runs, std::vector<IEdge>& super_edges) {
     FILE* fg = xopen(dir + "/graph.bin", "rb");
@@ -173,7 +173,7 @@ void build_super_graph(const std::string& dir, std::vector<SuperNode>& snodes,
                         block_buf, overlap_buf, runs_buf);
     }
     build_super_edges(edges, node_to_super, super_edges);
-    std::fprintf(stderr, "[supergraph] K=%lu -> S=%lu (cycle-singletons=%lu) edges=%lu->%lu block=%.2fGB runs=%lu\n",
+    std::fprintf(stderr, "[compact] K=%lu -> S=%lu (cycle-singletons=%lu) edges=%lu->%lu block=%.2fGB runs=%lu\n",
                  (unsigned long)K, (unsigned long)snodes.size(), (unsigned long)cycle_singletons,
                  (unsigned long)E, (unsigned long)super_edges.size(), blocks.size() / 1e9, (unsigned long)runs.size());
 }
