@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 mkdir -p build
 g++ -std=c++17 -O3 -march=native -DLARGE_GENOME -Wall -Wextra \
     -Ilib/lcptools -Isrc \
-    tools/trace.cpp build/extract_fast.o build/MurmurHash3.o \
+    tools/trace.cpp build/extract.o build/MurmurHash3.o \
     -Llib/lcptools -llcptools -lm -lpthread \
     -o tools/trace
 echo "built tools/trace"

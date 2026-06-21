@@ -4,7 +4,7 @@
 // trace: map svp graph nodes <-> simulation truth (FASTA/VCF). Out-of-band analysis tool
 // (NOT built by `make`; compile via tools/build_trace.sh). Reuses the production signature
 // path verbatim: a node's stored window bytes ARE the bytes that were murmur-hashed, so
-//   sig(node_i) = murmur64(payload_i, seqlen_i, 0)
+//   sig(node_i) = emit_sig(payload_i, seqlen_i, 0)
 // and genome/VCF windows hashed the same way match node ids directly.
 //
 // graph.bin v2 layout (graph.cpp run_graph_reads / compact.cpp build_super_graph):
@@ -19,8 +19,7 @@
 //            marking-3 (clean bubbles/cycles via unitig compaction). Resumable: the truth
 //            parse checkpoints to <outdir>/annot.bin; later phases reuse it.
 //   neigh <graph.bin> <outdir> <seeds.tsv> <radius>   -- per-seed subgraph JSON+GFA
-#include "svp.h"            // extract_fast decl, IEdge, SigCount
-#include "MurmurHash3.h"
+#include "svp.h"            // extract decl, IEdge, SigCount
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -40,7 +39,8 @@
 namespace {
 
 int LEVEL = 5;                          // runtime (SVP_TRACE_LEVEL); MUST match the graph's build --level
-constexpr int FLANK = 10, MARGIN = 10;
+constexpr int FLANK = 0, MARGIN = 10;
+static inline uint64_t emit_sig(const void* p, int n, int) { return core_sig((const char*)p, n); }   // XXH3 over the bare core (no flank); matches graph.bin
 constexpr uint64_t CHUNK = 4u << 20, PAD = 8192;
 constexpr uint8_t REF_FWD=1, REF_RC=2, OUT_FWD=4, OUT_RC=8, REF_ANY=REF_FWD|REF_RC, OUT_ANY=OUT_FWD|OUT_RC;
 constexpr uint64_t LOC_NONE = ~0ull;
@@ -95,7 +95,7 @@ void load_graph(const std::string& path, Graph& g) {
 }
 
 inline uint64_t node_sig(const Graph& g, uint64_t i) {
-    return murmur64(g.payload + g.seq_off[i], (int)g.seqlen[i], 0);
+    return emit_sig(g.payload + g.seq_off[i], (int)g.seqlen[i], 0);
 }
 
 void build_index(const Graph& g, std::unordered_map<uint64_t, uint32_t>& idx) {
@@ -163,10 +163,10 @@ int cmd_probe(int argc, char** argv) {
     for (int pass = 0; pass < 2; pass++) {
         const std::string s = pass==0 ? seq : revcomp(seq);
         const int len = (int)s.size();
-        int n; const uint64_t *st,*en; const uint32_t *lb; extract_fast(s.data(), len, 0, LEVEL, &n,&st,&en,&lb); (void)lb;
+        int n; const uint64_t *st,*en; const uint64_t *lb; extract(s.data(), len, 0, LEVEL, &n,&st,&en,&lb); (void)lb;
         uint64_t cores=0,hit=0,adj_ok=0,adj_tot=0; bool have=false; uint32_t prev=0;
         for (int i=0;i<n;i++){ if (st[i]<(uint64_t)MARGIN||en[i]+MARGIN>(uint64_t)len) continue;
-            const uint64_t sig=murmur64(s.data()+st[i]-FLANK,(int)(en[i]-st[i]+2*FLANK),0); cores++;
+            const uint64_t sig=emit_sig(s.data()+st[i]-FLANK,(int)(en[i]-st[i]+2*FLANK),0); cores++;
             auto it=idx.find(sig); const bool f=it!=idx.end(); if(f)hit++;
             if(f&&have){adj_tot++; if(has_edge(g,prev,it->second))adj_ok++;} have=f; if(f)prev=it->second; }
         std::fprintf(stderr,"[probe] %s: cores=%lu found=%lu (%.1f%%) adj=%lu/%lu (%.1f%%)\n",
@@ -226,12 +226,12 @@ void parse_chunk(const ParseJob& j, const Faidx& fa, const std::unordered_map<ui
     for (int pass=0; pass<2; pass++) {
         const std::string d = pass==0 ? s : revcomp(s);
         const int len=(int)d.size(); const uint8_t bit = pass==0?bit_fwd:bit_rc;
-        int n; const uint64_t *st,*en; const uint32_t *lb; extract_fast(d.data(),len,0,LEVEL,&n,&st,&en,&lb); (void)lb;
+        int n; const uint64_t *st,*en; const uint64_t *lb; extract(d.data(),len,0,LEVEL,&n,&st,&en,&lb); (void)lb;
         for (int i=0;i<n;i++){ if (st[i]<(uint64_t)MARGIN||en[i]+MARGIN>(uint64_t)len) continue;
             const uint64_t gstart = pass==0 ? cs_lo+st[i] : cs_lo+(len-en[i]);
             if (gstart<own_lo || gstart>=own_hi) continue;            // owned-once
             ltot++;
-            const uint64_t sig=murmur64(d.data()+st[i]-FLANK,(int)(en[i]-st[i]+2*FLANK),0);
+            const uint64_t sig=emit_sig(d.data()+st[i]-FLANK,(int)(en[i]-st[i]+2*FLANK),0);
             auto it=idx.find(sig); if (it==idx.end()) continue; lfnd++;
             truthsrc[it->second].fetch_or(bit, std::memory_order_relaxed);
             loc[it->second].store(pack_loc(j.cid, gstart), std::memory_order_relaxed);
@@ -322,7 +322,7 @@ std::string info_get(const std::string& info, const char* key) {
 
 struct Variant { uint32_t cid; uint64_t pos0; int64_t dl; uint64_t svlen; uint64_t out_pos;
                  std::string type, svid;
-                 uint32_t n_nodes=0,n_c1=0,n_c2=0,n_c3=0,best_node=UINT32_MAX,best_ncov=0,best_tcov=0; uint8_t best_color=0; };
+                 uint32_t n_nodes=0,n_c1=0,n_c2=0,n_c3=0,best_node=UINT32_MAX,best_ncov=0,best_tcov=0; uint8_t best_color=0; int64_t pos_err=-1; };
 
 void classify_variant(const std::string& info, Variant& v) {
     const std::string svt = info_get(info, "SVTYPE");
@@ -383,13 +383,19 @@ void marking1(const Graph& g, const Annot& a, std::vector<Variant>& vs, const st
             const bool better = (v.best_node==UINT32_MAX) || (col==2 && v.best_color!=2) || (col==v.best_color && g.tcov[nd]>v.best_tcov);
             if (better){ v.best_node=nd; v.best_color=col; v.best_ncov=g.ncov[nd]; v.best_tcov=g.tcov[nd]; } }
     }
+    // localization precision: bp distance from the true position to the NEAREST attributed somatic node
+    for (auto& v : vs){ const uint64_t key=pack_loc(v.cid,v.pos0);
+        auto it=std::lower_bound(som.begin(),som.end(),std::make_pair(key,(uint32_t)0)); int64_t best=-1;
+        if(it!=som.end()&&loc_chrom(it->first)==v.cid){ int64_t d=(int64_t)loc_pos(it->first)-(int64_t)v.pos0; best=d<0?-d:d; }
+        if(it!=som.begin()){ auto p=std::prev(it); if(loc_chrom(p->first)==v.cid){ int64_t d=(int64_t)v.pos0-(int64_t)loc_pos(p->first); if(d<0)d=-d; if(best<0||d<best)best=d; } }
+        v.pos_err=best; }
     FILE* f=std::fopen((outdir+"/variants.tsv").c_str(),"w");
-    std::fprintf(f,"svid\tchrom\tpos1\ttype\tsvlen\tout_pos\tn_nodes\tn_c1\tn_c2\tn_c3\tbest_node\tbest_color\tbest_ncov\tbest_tcov\tfound\n");
+    std::fprintf(f,"svid\tchrom\tpos1\ttype\tsvlen\tout_pos\tn_nodes\tn_c1\tn_c2\tn_c3\tbest_node\tbest_color\tbest_ncov\tbest_tcov\tfound\tpos_err\n");
     uint64_t found=0; for (auto& v: vs){ if(v.n_nodes>0)found++;
-        std::fprintf(f,"%s\t%s\t%lu\t%s\t%lu\t%lu\t%u\t%u\t%u\t%u\t%d\t%u\t%u\t%u\t%d\n",
+        std::fprintf(f,"%s\t%s\t%lu\t%s\t%lu\t%lu\t%u\t%u\t%u\t%u\t%d\t%u\t%u\t%u\t%d\t%ld\n",
             v.svid.c_str(), a.chrom_names[v.cid].c_str(), (unsigned long)v.pos0+1, v.type.c_str(),
             (unsigned long)v.svlen,(unsigned long)v.out_pos, v.n_nodes,v.n_c1,v.n_c2,v.n_c3,
-            v.best_node==UINT32_MAX?-1:(int)v.best_node, v.best_color, v.best_ncov, v.best_tcov, v.n_nodes>0?1:0); }
+            v.best_node==UINT32_MAX?-1:(int)v.best_node, v.best_color, v.best_ncov, v.best_tcov, v.n_nodes>0?1:0, (long)v.pos_err); }
     std::fclose(f);
     std::fprintf(stderr,"[trace] marking-1: %lu/%zu variants have >=1 somatic node in graph (%.1f%%)\n",
         (unsigned long)found, vs.size(), vs.size()?100.0*found/vs.size():0);
@@ -431,10 +437,18 @@ void marking2(const Graph& g, const Annot& a, const std::string& outdir) {
 }
 
 // ---- marking-3: unitig compaction (topology only) + bubble/cycle enumeration ----
-struct SuperMeta { uint8_t color, alltruth; uint32_t members, rep, ncov, tcov; uint64_t refloc; };
+struct SuperMeta { uint8_t color, alltruth; uint32_t members, bp, rep, ncov, tcov; uint64_t refloc, boff; };
+
+// KMP longest k with A[la-k:]==B[:k]; spliced super-node bp = sum seqlen minus these overlaps.
+static uint32_t sfx_pfx(const uint8_t* A, uint32_t la, const uint8_t* B, uint32_t lb){
+    if(!la||!lb)return 0; std::vector<uint32_t> f(lb,0);
+    for(uint32_t i=1,j=0;i<lb;i++){ while(j&&B[i]!=B[j])j=f[j-1]; if(B[i]==B[j])j++; f[i]=j; }
+    uint32_t j=0; for(uint32_t i=0;i<la;i++){ while(j&&A[i]!=B[j])j=f[j-1]; if(A[i]==B[j])j++; if(j==lb){ if(i+1==la)return lb; j=f[j-1]; } }
+    return j;
+}
 
 void compact(const Graph& g, const Annot& a, std::vector<uint32_t>& nts,
-             std::vector<SuperMeta>& sm, std::vector<IEdge>& sedges) {
+             std::vector<SuperMeta>& sm, std::vector<IEdge>& sedges, std::vector<uint8_t>* sblocks=nullptr) {
     const uint64_t K=g.K;
     std::vector<uint32_t> ind(K,0),outd(K,0),succ(K,UINT32_MAX),pred(K,UINT32_MAX);
     for (uint64_t e=0;e<g.E;e++){ outd[g.edges[e].first]++; ind[g.edges[e].second]++; succ[g.edges[e].first]=g.edges[e].second; pred[g.edges[e].second]=g.edges[e].first; }
@@ -445,6 +459,15 @@ void compact(const Graph& g, const Annot& a, std::vector<uint32_t>& nts,
         for (uint32_t nd: chain){ nts[nd]=sid; if(a.truthsrc[nd]==0)m.alltruth=0;
             if(g.ncov[nd]>m.ncov)m.ncov=g.ncov[nd]; if(g.tcov[nd]>m.tcov)m.tcov=g.tcov[nd];
             if(m.refloc==LOC_NONE&&a.ref_loc[nd]!=LOC_NONE)m.refloc=a.ref_loc[nd]; }
+        if(sblocks){ m.boff=sblocks->size();                     // build the spliced super-node sequence
+            sblocks->insert(sblocks->end(), g.payload+g.seq_off[chain[0]], g.payload+g.seq_off[chain[0]]+g.seqlen[chain[0]]);
+            for(size_t i=1;i<chain.size();i++){ const uint32_t cl=chain[i], lt=g.seqlen[chain[i-1]];
+                const uint32_t k=sfx_pfx(sblocks->data()+(sblocks->size()-lt),lt,g.payload+g.seq_off[cl],g.seqlen[cl]);
+                sblocks->insert(sblocks->end(), g.payload+g.seq_off[cl]+k, g.payload+g.seq_off[cl]+g.seqlen[cl]); }
+            m.bp=(uint32_t)(sblocks->size()-m.boff);
+        } else { m.boff=0; m.bp=g.seqlen[chain[0]];               // length only (marking-3 doesn't need the bytes)
+            for(size_t i=1;i<chain.size();i++){ const uint32_t pl=chain[i-1],cl=chain[i];
+                const uint32_t k=sfx_pfx(g.payload+g.seq_off[pl],g.seqlen[pl],g.payload+g.seq_off[cl],g.seqlen[cl]); m.bp+=g.seqlen[cl]-k; } }
         sm.push_back(m); };
     std::vector<uint32_t> chain;
     for (uint32_t u=0;u<(uint32_t)K;u++){ if(vis[u]) continue;
@@ -664,9 +687,9 @@ struct DVar { uint32_t cid; uint64_t pos0, end0, svlen; std::string type, svid, 
 // collect interior-core window sigs of s (same window logic as the build)
 void collect_sigs(const std::string& s, std::vector<uint64_t>& out) {
     const int len=(int)s.size(); if (len<2*MARGIN+4) return;
-    int n; const uint64_t *st,*en; const uint32_t *lb; extract_fast(s.data(),len,0,LEVEL,&n,&st,&en,&lb); (void)lb;
+    int n; const uint64_t *st,*en; const uint64_t *lb; extract(s.data(),len,0,LEVEL,&n,&st,&en,&lb); (void)lb;
     for (int i=0;i<n;i++){ if (st[i]<(uint64_t)MARGIN||en[i]+MARGIN>(uint64_t)len) continue;
-        out.push_back(murmur64(s.data()+st[i]-FLANK,(int)(en[i]-st[i]+2*FLANK),0)); }
+        out.push_back(emit_sig(s.data()+st[i]-FLANK,(int)(en[i]-st[i]+2*FLANK),0)); }
 }
 std::string sub(const Faidx& fa,const std::string& c,long a,long b){ if(a<0)a=0; if(b<=a)return ""; return fa_fetch(fa,c,(uint64_t)a,(uint64_t)(b-a)); }
 
@@ -776,9 +799,9 @@ int trace_probeseq(int argc, char** argv){
         const std::string lab=ln.substr(0,tab); std::string s=ln.substr(tab+1);
         for(char& ch:s) if(ch>='a'&&ch<='z')ch-=32;
         const int len=(int)s.size(); uint32_t nc=0,np=0,c1=0,c2=0,c3=0,oo=0,er=0;
-        if(len>=2*MARGIN+4){ int m; const uint64_t *st,*en; const uint32_t *lb; extract_fast(s.data(),len,0,LEVEL,&m,&st,&en,&lb);(void)lb;
+        if(len>=2*MARGIN+4){ int m; const uint64_t *st,*en; const uint64_t *lb; extract(s.data(),len,0,LEVEL,&m,&st,&en,&lb);(void)lb;
             for(int i=0;i<m;i++){ if(st[i]<(uint64_t)MARGIN||en[i]+MARGIN>(uint64_t)len)continue; nc++;
-                const uint64_t sig=murmur64(s.data()+st[i]-FLANK,(int)(en[i]-st[i]+2*FLANK),0);
+                const uint64_t sig=emit_sig(s.data()+st[i]-FLANK,(int)(en[i]-st[i]+2*FLANK),0);
                 auto it=idx.find(sig); if(it==idx.end())continue; np++; const uint32_t nd=it->second;
                 const uint8_t col=g.color[nd]; if(col==1)c1++;else if(col==2)c2++;else c3++;
                 const uint8_t t=a.truthsrc[nd]; if(t==0)er++; else if((t&OUT_ANY)&&!(t&REF_ANY))oo++; } }
@@ -797,22 +820,37 @@ int trace_probeseq(int argc, char** argv){
 // =====================================================================================
 namespace {
 const char* const SHAPE_NAME[9]={"linear","simple","asym","seam","super","cycle","tip","tangle","orphan"};
-struct STag { uint8_t shape=0, longcol=0; uint32_t len1=0, len2=0; };
-struct Struct { uint32_t s1,s2; uint8_t shape,longcol; uint32_t len1,len2,tcov; uint64_t refloc; };
+struct STag { uint8_t shape=0, longcol=0; uint32_t len1=0, len2=0; uint32_t sid=UINT32_MAX; };
+struct Struct { uint32_t s1,s2; uint8_t shape,longcol; uint32_t len1,len2,tcov; uint64_t refloc; uint32_t atc,anc; };
 
 // Classify every anchored region around colour-3 supers and tag arm-member supers; then a
 // second pass labels leftover coloured supers as tip / tangle / orphan from local degree.
 void tag_shapes(const std::vector<uint8_t>& col, const CSR& og, const CSR& ig,
-                const std::vector<SuperMeta>& sm, std::vector<STag>& tag,
+                const std::vector<SuperMeta>& sm, const std::vector<uint8_t>& sblocks, std::vector<STag>& tag,
                 std::vector<Struct>& structs, uint64_t* sc /*[9]*/){
     const uint64_t S=col.size(); tag.assign(S,STag{});
     std::vector<uint32_t> dvis(S,0),closed; uint32_t dgen=0;
     std::vector<uint32_t> seen(S,0),par(S,0),dist(S,0),arm; uint32_t agen=0;
+    std::vector<uint8_t> a1,a2,a2rc;                              // reused arm-sequence buffers for the divergent middle
     auto measure=[&](uint32_t s1,uint32_t s2,uint8_t color)->uint32_t{ uint32_t m=0; const uint8_t smk=(uint8_t)(1u<<(color-1));
-        if(bfs_arm(s1,s2,og,col,smk,0x3,500,seen,par,dist,++agen,arm)) for(uint32_t s:arm)m+=sm[s].members; return m; };
+        if(bfs_arm(s1,s2,og,col,smk,0x3,500,seen,par,dist,++agen,arm)) for(uint32_t s:arm)m+=sm[s].bp; return m; };
+    // peak tumor/normal coverage over a colour's divergent arm (read-error arms stay thin; a real
+    // GT1|1 allele piles to ~single-copy depth; a paralog copy carries depth on BOTH colours)
+    auto armcov=[&](uint32_t s1,uint32_t s2,uint8_t color,uint32_t& tc,uint32_t& nc){ tc=0;nc=0; const uint8_t smk=(uint8_t)(1u<<(color-1));
+        if(bfs_arm(s1,s2,og,col,smk,0x3,500,seen,par,dist,++agen,arm)) for(uint32_t s:arm){ if(sm[s].tcov>tc)tc=sm[s].tcov; if(sm[s].ncov>nc)nc=sm[s].ncov; } };
+    // splice an arm (s1->s2 order) into `out` from the super-node sequences, KMP-overlapping neighbours.
+    auto splice_arm=[&](uint32_t s1,uint32_t s2,uint8_t color,std::vector<uint8_t>& out)->void{ out.clear();
+        const uint8_t smk=(uint8_t)(1u<<(color-1));
+        if(!bfs_arm(s1,s2,og,col,smk,0x3,500,seen,par,dist,++agen,arm)) return;
+        uint32_t prevlen=0;
+        for(auto it=arm.rbegin();it!=arm.rend();++it){ const uint32_t s=*it; const uint8_t* sb=sblocks.data()+sm[s].boff; const uint32_t sl=sm[s].bp;
+            if(out.empty()) out.insert(out.end(),sb,sb+sl);
+            else { const uint32_t lt=prevlen<(uint32_t)out.size()?prevlen:(uint32_t)out.size();
+                const uint32_t k=sfx_pfx(out.data()+(out.size()-lt),lt,sb,sl); out.insert(out.end(),sb+k,sb+sl); }
+            prevlen=sl; } };
     auto tagarm=[&](uint32_t s1,uint32_t s2,uint8_t color,uint8_t shp,uint8_t lc,uint32_t l1,uint32_t l2){ const uint8_t smk=(uint8_t)(1u<<(color-1));
         if(bfs_arm(s1,s2,og,col,smk,0x3,500,seen,par,dist,++agen,arm)) for(uint32_t s:arm)
-            if(tag[s].shape==0||tag[s].shape>=6){tag[s].shape=shp;tag[s].longcol=lc;tag[s].len1=l1;tag[s].len2=l2;} };
+            if(tag[s].shape==0||tag[s].shape>=6){tag[s].shape=shp;tag[s].longcol=lc;tag[s].len1=l1;tag[s].len2=l2;tag[s].sid=(uint32_t)structs.size();} };
     std::unordered_map<uint32_t,uint64_t> pic; std::unordered_set<uint32_t> cyc2;
     for(uint32_t s1=0;s1<(uint32_t)S;s1++){ if(col[s1]!=3)continue; pic.clear(); cyc2.clear();
         for(uint64_t i=og.off[s1];i<og.off[s1+1];i++){ const uint32_t x=og.nbr[i]; if(col[x]==3)continue;
@@ -822,10 +860,21 @@ void tag_shapes(const std::vector<uint8_t>& col, const CSR& og, const CSR& ig,
             const bool h1=c1>0,h2=c2>0; if(!h1&&!h2)continue; uint8_t shp=0,lc=0; uint32_t l1=0,l2=0;
             if(cyc2.count(s2)){ shp=5; if(h1)tagarm(s1,s2,1,5,0,0,0); if(h2)tagarm(s1,s2,2,5,0,0,0); }
             else if(c1>1||c2>1){ shp=4; if(h1)tagarm(s1,s2,1,4,0,0,0); if(h2)tagarm(s1,s2,2,4,0,0,0); }
-            else if(h1&&h2){ l1=measure(s1,s2,1); l2=measure(s1,s2,2); uint32_t mx=std::max(l1,l2),mn=std::min(l1,l2); if(!mn)mn=1;
+            else if(h1&&h2){ splice_arm(s1,s2,1,a1); splice_arm(s1,s2,2,a2);     // divergent middle = arm minus shared prefix/suffix (the zip)
+                a2rc.resize(a2.size()); for(size_t z=0;z<a2.size();z++)a2rc[z]=COMP[a2[a2.size()-1-z]];   // arms may be stored on opposite strands
+                uint32_t bm=UINT32_MAX;                                          // pick the orientation that shares the most
+                for(int o=0;o<2;o++){ const std::vector<uint8_t>& y=o?a2rc:a2;
+                    uint32_t lcp=0,n=(uint32_t)std::min(a1.size(),y.size()); while(lcp<n&&a1[lcp]==y[lcp])lcp++;
+                    uint32_t lcs=0,cap=n-lcp; while(lcs<cap&&a1[a1.size()-1-lcs]==y[y.size()-1-lcs])lcs++;
+                    const uint32_t q1=(uint32_t)a1.size()-lcp-lcs, q2=(uint32_t)y.size()-lcp-lcs;
+                    if(std::max(q1,q2)<bm){bm=std::max(q1,q2); l1=q1; l2=q2;} }
+                uint32_t mx=std::max(l1,l2),mn=std::min(l1,l2); if(!mn)mn=1;     // indel = one-sided (ratio huge); SNP = two-sided equal (ratio ~1)
                 shp=(mx<=mn*2)?1:2; lc=(l1>=l2)?1:2; tagarm(s1,s2,1,shp,lc,l1,l2); tagarm(s1,s2,2,shp,lc,l1,l2); }
             else { const uint8_t color=h1?1:2; const uint32_t l=measure(s1,s2,color); shp=3; lc=color; l1=h1?l:0; l2=h2?l:0; tagarm(s1,s2,color,3,color,l1,l2); }
-            sc[shp]++; structs.push_back({s1,s2,shp,lc,l1,l2,std::max(sm[s1].tcov,sm[s2].tcov),sm[s1].refloc}); } }
+            uint32_t atc=0,anc=0,tc=0,nc=0;                                  // tumor-allele / normal-allele arm depth
+            if(shp==1||shp==2){ armcov(s1,s2,2,tc,nc); atc=tc; armcov(s1,s2,1,tc,nc); anc=nc; }
+            else if(shp==3){ armcov(s1,s2,lc,tc,nc); if(lc==2)atc=tc; else anc=nc; }
+            sc[shp]++; structs.push_back({s1,s2,shp,lc,l1,l2,std::max(sm[s1].tcov,sm[s2].tcov),sm[s1].refloc,atc,anc}); } }
     for(uint32_t u=0;u<(uint32_t)S;u++){ if(col[u]==3||tag[u].shape!=0)continue;
         const uint32_t outd=(uint32_t)(og.off[u+1]-og.off[u]), ind=(uint32_t)(ig.off[u+1]-ig.off[u]);
         bool ina=false,outa=false;
@@ -837,19 +886,56 @@ void tag_shapes(const std::vector<uint8_t>& col, const CSR& og, const CSR& ig,
 }
 }  // namespace
 
+// Apply the production X-cut (resolve.cpp logic) to trace's super-graph so the shape analysis runs
+// on the RESOLVED graph: split a repeat super into one copy per (in,out) pair when the reads (graph
+// dir/threads.bin) pin its in-flanks to its out-flanks 1:1 AND cover its topology. Auto-applied if
+// threads.bin sits next to graph.bin; otherwise the graph is left un-resolved.
+static void apply_xcut(std::vector<SuperMeta>& sm, std::vector<IEdge>& sedges,
+                       const std::vector<uint32_t>& nts, const std::string& threads_path) {
+    FILE* f=std::fopen(threads_path.c_str(),"rb"); if(!f){ std::fprintf(stderr,"[shapes] no threads.bin -> un-resolved graph\n"); return; }
+    uint64_t n; if(std::fread(&n,8,1,f)!=1){std::fclose(f);return;}
+    std::vector<RepTriple> raw(n); if(n&&std::fread(raw.data(),sizeof(RepTriple),n,f)!=n){std::fclose(f);return;} std::fclose(f);
+    std::unordered_map<uint32_t,std::unordered_map<uint64_t,uint32_t>> bymid;
+    for(const RepTriple& t:raw){ const uint32_t smid=nts[t.mid];
+        const uint32_t sin=t.in==UINT32_MAX?UINT32_MAX:nts[t.in], sout=t.out==UINT32_MAX?UINT32_MAX:nts[t.out];
+        if(sin==smid||sout==smid)continue; bymid[smid][((uint64_t)sin<<32)|sout]++; }
+    std::unordered_map<uint32_t,std::vector<uint32_t>> inset,outset;
+    for(const IEdge& e:sedges){ outset[e.first].push_back(e.second); inset[e.second].push_back(e.first); }
+    std::unordered_set<uint64_t> rm; std::vector<IEdge> add; uint64_t nsplit=0,ncopy=0;
+    for(const auto& kv:bymid){ const uint32_t C=kv.first;
+        auto ii=inset.find(C), oo=outset.find(C); if(ii==inset.end()||oo==outset.end())continue;
+        const std::vector<uint32_t>& is=ii->second; const std::vector<uint32_t>& os=oo->second;
+        if(is.size()<2||os.size()<2)continue;
+        std::unordered_map<uint32_t,uint32_t> ind,outd; std::vector<std::pair<uint32_t,uint32_t>> M;
+        for(const auto& p:kv.second){ const uint32_t a=(uint32_t)(p.first>>32),b=(uint32_t)p.first; if(a==UINT32_MAX||b==UINT32_MAX)continue; ind[a]++; outd[b]++; M.push_back({a,b}); }
+        if(M.size()!=is.size()||is.size()!=os.size())continue;
+        bool ok=true; for(uint32_t a:is)if(ind[a]!=1){ok=false;break;} if(ok)for(uint32_t b:os)if(outd[b]!=1){ok=false;break;}
+        if(!ok)continue;
+        nsplit++;
+        for(const auto& p:M){ const uint32_t ci=(uint32_t)sm.size(); sm.push_back(sm[C]); add.push_back({p.first,ci}); add.push_back({ci,p.second}); ncopy++; }
+        for(uint32_t a:is)rm.insert(((uint64_t)a<<32)|C); for(uint32_t b:os)rm.insert(((uint64_t)C<<32)|b);
+    }
+    std::vector<IEdge> ne; ne.reserve(sedges.size()+add.size());
+    for(const IEdge& e:sedges) if(!rm.count(((uint64_t)e.first<<32)|e.second)) ne.push_back(e);
+    ne.insert(ne.end(),add.begin(),add.end()); std::sort(ne.begin(),ne.end()); ne.erase(std::unique(ne.begin(),ne.end()),ne.end()); sedges.swap(ne);
+    std::fprintf(stderr,"[shapes] X-cut applied (RESOLVED graph): split %lu repeat supers -> %lu copies (S now %zu)\n",(unsigned long)nsplit,(unsigned long)ncopy,sm.size());
+}
+
 int trace_shapes(int argc, char** argv){
     if(argc<5) die("shapes <graph.bin> <ref.fa> <out.vcf> <outdir>");
     const std::string gp=argv[1],ref=argv[2],vcf=argv[3],dir=argv[4];
     Graph g; load_graph(gp,g); std::unordered_map<uint64_t,uint32_t> idx; build_index(g,idx);
     Annot a; if(!load_annot(dir+"/annot.bin",a)) die("need annot.bin (run `trace run` first)");
     Faidx fa; load_faidx(ref,fa);
-    std::vector<uint32_t> nts; std::vector<SuperMeta> sm; std::vector<IEdge> sedges; compact(g,a,nts,sm,sedges);
+    std::vector<uint32_t> nts; std::vector<SuperMeta> sm; std::vector<IEdge> sedges; std::vector<uint8_t> sblocks;
+    compact(g,a,nts,sm,sedges,&sblocks);
+    apply_xcut(sm, sedges, nts, gp.substr(0, gp.find_last_of('/')+1) + "threads.bin");
     const uint64_t S=sm.size(); std::vector<uint8_t> col(S); for(uint64_t i=0;i<S;i++)col[i]=sm[i].color;
     CSR og; build_csr(sedges,S,og);
     std::vector<IEdge> rse; rse.reserve(sedges.size()); for(auto&e:sedges)rse.push_back({e.second,e.first});
     CSR ig; build_csr(rse,S,ig);
     std::vector<STag> tag; std::vector<Struct> structs; uint64_t sc[9]={0};
-    tag_shapes(col,og,ig,sm,tag,structs,sc);
+    tag_shapes(col,og,ig,sm,sblocks,tag,structs,sc);
     std::fprintf(stderr,"[shapes] structures: simple=%lu asym=%lu seam=%lu super=%lu cycle=%lu | supers tip=%lu tangle=%lu orphan=%lu\n",
         (unsigned long)sc[1],(unsigned long)sc[2],(unsigned long)sc[3],(unsigned long)sc[4],(unsigned long)sc[5],
         (unsigned long)sc[6],(unsigned long)sc[7],(unsigned long)sc[8]);
@@ -918,17 +1004,30 @@ int trace_shapes(int argc, char** argv){
     // structure inventory (shape -> variant?): a struct traces to a variant if either anchor or
     // any of its tagged arm members were touched by a variant's somatic supers.
     FILE* fs=std::fopen((dir+"/structures.tsv").c_str(),"w");
-    std::fprintf(fs,"shape\tlongcol\tlen1\tlen2\ttcov\tmatched\tchrom\tpos\n");
-    for(auto& st:structs){ const uint64_t rl=st.refloc;
-        const int m=(var_super[st.s1]||var_super[st.s2])?1:0;
-        std::fprintf(fs,"%s\t%u\t%u\t%u\t%u\t%d\t%s\t%ld\n", SHAPE_NAME[st.shape],st.longcol,st.len1,st.len2,st.tcov,m,
-            rl==LOC_NONE?"NA":a.chrom_names[loc_chrom(rl)].c_str(), rl==LOC_NONE?-1L:(long)loc_pos(rl)); }
+    std::fprintf(fs,"shape\tlongcol\tlen1\tlen2\ttcov\tmatched\tchrom\tpos\ta_tcov\ta_ncov\n");
+    // a structure backs a variant iff one of its somatic ARM supers was attributed to a VCF variant
+    // (var_super). The color-3 anchors s1/s2 are shared backbone and never somatic, so checking the
+    // arm (via tag[s].sid) is the real signal; matched==0 => an "empty" shape that traces to no variant.
+    std::vector<uint8_t> struct_matched(structs.size(),0);
+    for(uint32_t s=0;s<S;s++) if(var_super[s] && tag[s].sid!=UINT32_MAX) struct_matched[tag[s].sid]=1;
+    for(uint32_t si=0; si<structs.size(); si++){ const Struct& st=structs[si]; const uint64_t rl=st.refloc;
+        const int m=(struct_matched[si]||var_super[st.s1]||var_super[st.s2])?1:0;
+        std::fprintf(fs,"%s\t%u\t%u\t%u\t%u\t%d\t%s\t%ld\t%u\t%u\n", SHAPE_NAME[st.shape],st.longcol,st.len1,st.len2,st.tcov,m,
+            rl==LOC_NONE?"NA":a.chrom_names[loc_chrom(rl)].c_str(), rl==LOC_NONE?-1L:(long)loc_pos(rl), st.atc,st.anc); }
     std::fclose(fs);
+    // per-shape matched (backs >=1 variant) vs empty (no variant). structure shapes via struct_matched;
+    // super shapes (tip/tangle/orphan) are tagged on the super itself, so matched = var_super[s].
+    uint64_t sc_m[9]={0};
+    for(uint32_t si=0;si<structs.size();si++) if(struct_matched[si]) sc_m[structs[si].shape]++;
+    for(uint32_t s=0;s<S;s++){ const uint8_t sh=tag[s].shape; if(sh>=6 && var_super[s]) sc_m[sh]++; }
     FILE* fc=std::fopen((dir+"/shape_census.tsv").c_str(),"w");
-    std::fprintf(fc,"shape\tgranularity\tcount\n");
+    std::fprintf(fc,"shape\tgranularity\tcount\tmatched\tempty\n");
     const char* gran[9]={"-","structure","structure","structure","structure","structure","super","super","super"};
-    for(int i=1;i<=8;i++) std::fprintf(fc,"%s\t%s\t%lu\n",SHAPE_NAME[i],gran[i],(unsigned long)sc[i]);
+    uint64_t tot_all=0,tot_m=0;
+    for(int i=1;i<=8;i++){ std::fprintf(fc,"%s\t%s\t%lu\t%lu\t%lu\n",SHAPE_NAME[i],gran[i],(unsigned long)sc[i],(unsigned long)sc_m[i],(unsigned long)(sc[i]-sc_m[i])); tot_all+=sc[i]; tot_m+=sc_m[i]; }
     std::fclose(fc);
+    std::fprintf(stderr,"[shapes] empty (no variant): %lu of %lu shapes (%.1f%%) trace to no VCF variant\n",
+        (unsigned long)(tot_all-tot_m),(unsigned long)tot_all, tot_all? 100.0*(double)(tot_all-tot_m)/(double)tot_all : 0.0);
     std::fprintf(stderr,"[shapes] wrote variant_shapes.tsv inv_breakpoints.tsv structures.tsv shape_census.tsv\n");
     return 0;
 }
