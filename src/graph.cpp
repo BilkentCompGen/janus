@@ -2,9 +2,8 @@
 #define _GNU_SOURCE 1   // expose popen/pclose + sched_getaffinity under strict -std=c++17
 #endif
 #include "graph.h"
-#include "MurmurHash3.h"
 #include "btllib/bloom_filter.hpp"   // vendored: plain (atomic, lock-free) BloomFilter
-// extract_fast is declared in svp.h (provided by src/extract_fast.cpp over biolcp).
+// extract is declared in svp.h (provided by src/extract.cpp over biolcp).
 
 #include <sys/stat.h>
 #include <sys/resource.h>
@@ -13,6 +12,7 @@
 #include <sched.h>
 #include <dirent.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -59,19 +59,9 @@ static void init_comp_lut() {
     COMP_LUT[(uint8_t)'C'] = 'G'; COMP_LUT[(uint8_t)'G'] = 'C';
 }
 
-// Per-pass sig: murmur64(W, 0). seed=0 (label seed redundant for flank≥0, per
-// memory project_label_seed_redundant). The pass's byte buffer (R for pass1,
-// rc_buf for pass2) IS the canonical representation for the pass's perspective;
-// strand pooling happens ACROSS READS (a +strand read's pass1 sig at locus L
-// equals a -strand read's pass2 sig at locus L because the bytes coincide).
-// We deliberately do NOT canonicalize across {W, RC(W)} at the per-emission
-// level because storing canonical bytes breaks the compaction's KMP suffix/prefix
-// splice — adjacent chain nodes can end up stored in opposite orientations
-// and lose their byte overlap. Strand-pair pooling at a higher level (super-
-// node / bubble byte-RC matching) is a follow-up.
-static inline uint64_t emit_sig(const char* W, int Lw) {
-    return murmur64(W, Lw, 0);
-}
+// Node identity = core_sig (XXH3-64 over the core's bytes), computed in extract(); pass 2
+// recomputes it from the cached core boundaries. The stored payload IS the core bytes — same
+// region as the signature, no flank.
 
 // ---- stage timing (wall-clock; one Tic per stage entry) ----
 struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
@@ -91,26 +81,22 @@ struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
 // remap+reverse trick (≡ parse2). rc_buf is worker-local.
 // cap_st/cap_w (per strand): when non-null, append each kept core's (st, width=en-st) as uint16
 // for the pass-2 boundary cache. Caller guarantees len <= 65535 when capturing (so st,en fit).
-void process_read(std::string& s, int level, int flank, int margin,
+void process_read(std::string& s, int level, int margin,
                   std::vector<uint64_t>& lsigs, std::string& rc_buf, uint64_t& cpu_ext,
                   std::vector<uint16_t>* cfs, std::vector<uint16_t>* cfw,
                   std::vector<uint16_t>* crs, std::vector<uint16_t>* crw) {
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
-    const uint64_t mu = (uint64_t)flank, mg = (uint64_t)margin;
+    const uint64_t mg = (uint64_t)margin;
 
     auto run_pass = [&](const char* data, std::vector<uint16_t>* cap_st, std::vector<uint16_t>* cap_w) {
-        int n; const uint64_t *st, *en; const uint32_t *lb;
-        const uint64_t te = thr_ns(); extract_fast(data, (int)len, 0, level, &n, &st, &en, &lb); cpu_ext += thr_ns() - te;
-        (void)lb;
+        int n; const uint64_t *st, *en, *sig;
+        const uint64_t te = thr_ns(); extract(data, (int)len, 0, level, &n, &st, &en, &sig); cpu_ext += thr_ns() - te;
         for (int i = 0; i < n; i++) {
             if (st[i] < mg || en[i] + mg > len) continue;
             if (cap_st) { cap_st->push_back((uint16_t)st[i]); cap_w->push_back((uint16_t)(en[i] - st[i])); }
-            const uint64_t L = st[i] > mu ? st[i] - mu : 0;
-            const uint64_t R = en[i] + mu < len ? en[i] + mu : len;
-            const uint64_t g = emit_sig(data + L, (int)(R - L));
-            lsigs.push_back(g);
+            lsigs.push_back(sig[i]);
         }
     };
     run_pass(s.data(), cfs, cfw);
@@ -128,8 +114,8 @@ void process_read(std::string& s, int level, int flank, int margin,
 // + std::unique on the (much smaller) global vector dedupes across workers.
 // Edge-key hash: `a * golden + b`. Collision rate ~2^-64 — negligible.
 // When use_cache: replay the pass-1 boundaries (cfs/cfw fwd, crs/crw rc; already margin-filtered)
-// instead of calling extract_fast. The per-core fill+edge body is identical either way.
-void process_read_fill(std::string& s, int level, int flank, int margin,
+// instead of calling extract. The per-core fill+edge body is identical either way.
+void process_read_fill(std::string& s, int level, int margin,
                        const ankerl::unordered_dense::map<uint64_t, uint32_t>& idx,
                        std::vector<std::vector<uint8_t>>& slot_buf,
                        std::vector<std::atomic<uint8_t>>& claimed,
@@ -137,38 +123,48 @@ void process_read_fill(std::string& s, int level, int flank, int margin,
                        ankerl::unordered_dense::set<uint64_t>& seen,
                        std::string& rc_buf, uint64_t& cpu_ext,
                        const uint16_t* cfs, const uint16_t* cfw, uint32_t cfn,
-                       const uint16_t* crs, const uint16_t* crw, uint32_t crn, bool use_cache) {
+                       const uint16_t* crs, const uint16_t* crw, uint32_t crn, bool use_cache,
+                       const uint8_t* is_repeat, std::vector<std::array<uint32_t, 3>>* cap) {
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
-    const uint64_t mu = (uint64_t)flank, mg = (uint64_t)margin;
+    const uint64_t mg = (uint64_t)margin;
 
     auto run_pass = [&](const char* data, const uint16_t* cst, const uint16_t* cwd, uint32_t cn) {
         uint64_t prev = 0; bool have = false;
-        auto handle = [&](uint64_t st, uint64_t en) {           // identical per-core body for both paths
-            const uint64_t L = st > mu ? st - mu : 0;
-            const uint64_t R = en + mu < len ? en + mu : len;
-            const int Lw = (int)(R - L);
-            const uint64_t g = emit_sig(data + L, Lw);
+        uint32_t before = UINT32_MAX, entry = UINT32_MAX; bool in_run = false;   // X-cut: span a flagged repeat run
+        auto handle = [&](uint64_t st, uint64_t en) {           // sig + stored payload are the core bytes [st,en)
+            const int Lw = (int)(en - st);
+            const uint64_t g = core_sig(data + st, Lw);
             auto it = idx.find(g);
-            if (it == idx.end()) { have = false; return; }
+            if (it == idx.end()) { have = false;
+                if (cap && in_run) { cap->push_back({{entry, before, UINT32_MAX}}); in_run = false; }
+                if (cap) before = UINT32_MAX;
+                return; }
+            const uint32_t id = it->second;
             uint8_t exp = 0;
-            if (claimed[it->second].compare_exchange_strong(exp, 1))
-                slot_buf[it->second].assign((const uint8_t*)(data + L), (const uint8_t*)(data + L) + Lw);
+            if (claimed[id].compare_exchange_strong(exp, 1))
+                slot_buf[id].assign((const uint8_t*)(data + st), (const uint8_t*)(data + st) + Lw);
             if (have && prev != g) {
                 const uint64_t key = prev * 0x9e3779b97f4a7c15ULL + g;
                 if (seen.insert(key).second) ledges.push_back(SEdge(prev, g));
             }
             prev = g; have = true;
+            if (cap) {
+                if (is_repeat[id]) { if (!in_run) { entry = id; in_run = true; } }
+                else if (in_run) { cap->push_back({{entry, before, id}}); in_run = false; before = id; }
+                else before = id;
+            }
         };
         if (use_cache) {
             for (uint32_t k = 0; k < cn; k++) handle((uint64_t)cst[k], (uint64_t)cst[k] + cwd[k]);
         } else {
-            int n; const uint64_t *st, *en; const uint32_t *lb;
-            const uint64_t te = thr_ns(); extract_fast(data, (int)len, 0, level, &n, &st, &en, &lb); cpu_ext += thr_ns() - te;
-            (void)lb;
+            int n; const uint64_t *st, *en, *sig;
+            const uint64_t te = thr_ns(); extract(data, (int)len, 0, level, &n, &st, &en, &sig); cpu_ext += thr_ns() - te;
+            (void)sig;
             for (int i = 0; i < n; i++) { if (st[i] < mg || en[i] + mg > len) continue; handle(st[i], en[i]); }
         }
+        if (cap && in_run) cap->push_back({{entry, before, UINT32_MAX}});       // run reached read end -> out=NONE
     };
     run_pass(s.data(), cfs, cfw, cfn);
     rc_buf.resize(len);
@@ -211,12 +207,12 @@ static FILE* open_decode(const std::string& path, int dec_p) {
 
 // ---- cross-pass core-boundary cache --------------------------------------------------------
 // Pass 1 records every read's filtered LCP core boundaries (uint16 st + uint16 width, fwd and
-// rc streams) so pass 2 replays them instead of re-running extract_fast (~4.5k core-s, 18.6%
+// rc streams) so pass 2 replays them instead of re-running extract (~4.5k core-s, 18.6%
 // of the build). Key = (shard, rid=read index within its shard): deterministic across passes
 // (same .gz -> same rapidgzip bytes -> same parse order), so the out-of-order worker queue is
 // irrelevant. Per-worker append-only arenas (lock-free); a (shard,rid)->location index is
 // scattered after pass 1. Reads > 65535 bp can't be uint16-encoded -> flagged reext (pass 2
-// falls back to extract_fast for them). ~22.8 GB held pass1->pass2 at ~5.69 G emissions.
+// falls back to extract for them). ~22.8 GB held pass1->pass2 at ~5.69 G emissions.
 struct CoreCache {
     bool enabled = false;
     int nw = 0, nshard = 0;
@@ -304,7 +300,7 @@ struct ShardCascade {
 // (casc[0]=normal, casc[1]=tumor). Survivors are merged into one (n,t) record per sig.
 // Affordable now only because the bloom cascades are RAM-bounded -- two exact hashmaps of
 // all 103M distinct sigs would not coexist; the whole point of the bloom is to buy this.
-void run_pool_both(const std::vector<Shard>& shards, int level, int flank, int margin, int threads,
+void run_pool_both(const std::vector<Shard>& shards, int level, int margin, int threads,
                    int min_mult, std::vector<SigCount>& out_nodes, uint64_t& reads_n, uint64_t& reads_t,
                    CoreCache& cache, bool use_cc) {
     constexpr int NSHARD = 64;
@@ -323,7 +319,7 @@ void run_pool_both(const std::vector<Shard>& shards, int level, int flank, int m
     std::atomic<uint64_t> tot_rd_ns{0}, tot_w_busy_ns{0}, tot_w_idle_ns{0}, tot_q_full_ns{0};
     std::atomic<uint64_t> tot_count_ns{0}, tot_lock_ns{0};   // drain+flush (counting) vs gmtx acquire (contention)
     // CPU-seconds (CLOCK_THREAD_CPUTIME_ID, on-CPU only): reader parse, worker LCP (extract+sig),
-    // the extract_fast subset of LCP, and counting (drain+flush). Sum of worker LCP+count ~= worker on-CPU.
+    // the extract subset of LCP, and counting (drain+flush). Sum of worker LCP+count ~= worker on-CPU.
     std::atomic<uint64_t> cpu_rd_ns{0}, cpu_lcp_ns{0}, cpu_ext_ns{0}, cpu_cnt_ns{0}, cpu_w_ns{0};
     std::mutex qmtx; std::condition_variable cv_full, cv_empty;
     std::queue<Batch> q;
@@ -420,7 +416,7 @@ void run_pool_both(const std::vector<Shard>& shards, int level, int flank, int m
                 const bool docap = use_cc && s.size() <= 65535;     // uint16 positions need len<=65535
                 uint32_t foff = 0, roff = 0;
                 if (docap) { foff = (uint32_t)afs->size(); roff = (uint32_t)ars->size(); }
-                process_read(s, level, flank, margin, lsig[c], rc_buf, local_ext_cpu,
+                process_read(s, level, margin, lsig[c], rc_buf, local_ext_cpu,
                              docap ? afs : nullptr, docap ? afw : nullptr, docap ? ars : nullptr, docap ? arw : nullptr);
                 lreads[c]++;
                 if (myrec) {
@@ -461,11 +457,11 @@ void run_pool_both(const std::vector<Shard>& shards, int level, int flank, int m
     for (auto& t : wks) t.join();
     if (use_cc) {
         cache.finalize();
-        std::fprintf(stderr, "[graph]   core-boundary cache: %.1f GB held for pass 2 (skips fill-pass extract_fast)\n", cache.bytes() / 1e9);
+        std::fprintf(stderr, "[graph]   core-boundary cache: %.1f GB held for pass 2 (skips fill-pass extract)\n", cache.bytes() / 1e9);
     }
     std::fprintf(stderr, "[graph] pool(both): %d reader(s) + %d worker(s) on %d shard(s); reader-wall=%.1fs | per-worker-sum: LCP=%.1fs count(drain+flush)=%.1fs (gmtx lock-wait=%.1fs) idle=%.1fs\n",
                  nrd, nw, nshards, tot_rd_ns.load() / 1e9, tot_w_busy_ns.load() / 1e9, tot_count_ns.load() / 1e9, tot_lock_ns.load() / 1e9, tot_w_idle_ns.load() / 1e9);
-    std::fprintf(stderr, "[graph] pool(both) CPU-sec (on-CPU, contention-immune): reader-parse=%.1f | worker-LCP=%.1f (of which extract_fast=%.1f, sig/murmur=%.1f) | counting=%.1f | worker-total=%.1f\n",
+    std::fprintf(stderr, "[graph] pool(both) CPU-sec (on-CPU, contention-immune): reader-parse=%.1f | worker-LCP=%.1f (of which extract=%.1f, sig/xxh3=%.1f) | counting=%.1f | worker-total=%.1f\n",
                  cpu_rd_ns.load() / 1e9, cpu_lcp_ns.load() / 1e9, cpu_ext_ns.load() / 1e9, (cpu_lcp_ns.load() - cpu_ext_ns.load()) / 1e9, cpu_cnt_ns.load() / 1e9, cpu_w_ns.load() / 1e9);
     reads_n = greads[0].load(); reads_t = greads[1].load();
     // ---- merge the two cascades into one (n,t) record per surviving sig, per shard ----
@@ -489,24 +485,25 @@ void radix_sort_edges(std::vector<SEdge>& edges);   // fwd decl (defined below);
 // AND emits within-pass adjacent-sig edges (only between surviving sigs). All
 // edges land in `all_edges`; the pool stage no longer carries 40+ GB of raw
 // edges through the pool peak.
-void fill_pool(const std::vector<Shard>& shards, int level, int flank, int margin, int threads,
+void fill_pool(const std::vector<Shard>& shards, int level, int margin, int threads,
                const ankerl::unordered_dense::map<uint64_t, uint32_t>& idx,
                std::vector<std::vector<uint8_t>>& slot_buf,
                std::vector<std::atomic<uint8_t>>& claimed,
-               std::vector<SEdge>& all_edges, std::mutex& emtx, const CoreCache& cache) {
+               std::vector<SEdge>& all_edges, std::mutex& emtx, const CoreCache& cache,
+               const uint8_t* is_repeat, std::vector<std::array<uint32_t, 3>>& all_trip, std::mutex& tmtx) {
     const int nshards = (int)shards.size();
     const int nrd = nshards;                                       // one pipe-reader per file (decode is in rapidgzip)
     const char* dpenv = std::getenv("SVP_DECP");
     const int dec_p = dpenv ? std::max(1, std::atoi(dpenv)) : std::max(2, (threads / 4) / std::max(1, nshards));
-    // Fill is feed-bound (workers are cheap once extract_fast is cached), so DON'T oversubscribe:
+    // Fill is feed-bound (workers are cheap once extract is cached), so DON'T oversubscribe:
     // subtract the rapidgzip decode threads from the worker budget -> readers+decode get real cores
     // and drain the pipes at full speed (decode/parse floor ~130s vs the oversubscribed ~410s).
     const char* nwe = std::getenv("SVP_FILL_NW");
     const int nw  = nwe ? std::max(1, std::atoi(nwe)) : std::max(1, threads - nrd - nrd * dec_p);
     std::atomic<size_t> next{0}, done{0};
     std::atomic<int> readers_left{nrd};
-    // CPU-seconds (on-CPU only): reader parse, worker total, the extract_fast (LCP) subset, and the
-    // periodic edge insert+radix-compaction. per-read fill (murmur+idx+slot+seen) = total-ext-compact.
+    // CPU-seconds (on-CPU only): reader parse, worker total, the extract (LCP) subset, and the
+    // periodic edge insert+radix-compaction. per-read fill (hash+idx+slot+seen) = total-ext-compact.
     std::atomic<uint64_t> cpu_rd_ns{0}, cpu_w_ns{0}, cpu_ext_ns{0}, cpu_comp_ns{0};
     std::mutex qmtx; std::condition_variable cv_full, cv_empty;
     std::queue<Batch> q;
@@ -558,6 +555,7 @@ void fill_pool(const std::vector<Shard>& shards, int level, int flank, int margi
         uint64_t local_ext = 0, local_comp = 0;
         std::string rc_buf; rc_buf.reserve(1u << 16);
         std::vector<SEdge> ledges; ledges.reserve(1u << 22);
+        std::vector<std::array<uint32_t, 3>> ltrip;                           // X-cut threading (only if is_repeat)
         ankerl::unordered_dense::set<uint64_t> seen; seen.reserve(1u << 22);   // 4 M-entry edge-key cache (~160 MB / worker; was 16M/640MB)
         constexpr size_t E_FLUSH = 1u << 22;     // 4M edges (~64 MB) flush trigger
         constexpr size_t SEEN_CAP = 1u << 22;    // cap seen at 4M; clear on overflow (more compaction, ~7GB less RAM)
@@ -586,8 +584,8 @@ void fill_pool(const std::vector<Shard>& shards, int level, int flank, int margi
                         }
                     }
                 }
-                process_read_fill(s, level, flank, margin, idx, slot_buf, claimed, ledges, seen, rc_buf, local_ext,
-                                  cfs, cfw, cfn, crs, crw, crn, use_cache);
+                process_read_fill(s, level, margin, idx, slot_buf, claimed, ledges, seen, rc_buf, local_ext,
+                                  cfs, cfw, cfn, crs, crw, crn, use_cache, is_repeat, is_repeat ? &ltrip : nullptr);
             }
             const uint64_t cm0 = thr_ns();
             if (ledges.size() >= E_FLUSH) {
@@ -600,9 +598,11 @@ void fill_pool(const std::vector<Shard>& shards, int level, int flank, int margi
                 }
             }
             if (seen.size() >= SEEN_CAP) seen.clear();   // overflow-safe; loses some cross-batch dedup but bounds memory
+            if (is_repeat && ltrip.size() >= (1u << 22)) { std::lock_guard<std::mutex> lk(tmtx); all_trip.insert(all_trip.end(), ltrip.begin(), ltrip.end()); ltrip.clear(); }
             local_comp += thr_ns() - cm0;
         }
         { std::lock_guard<std::mutex> lk(emtx); all_edges.insert(all_edges.end(), ledges.begin(), ledges.end()); }
+        if (is_repeat && !ltrip.empty()) { std::lock_guard<std::mutex> lk(tmtx); all_trip.insert(all_trip.end(), ltrip.begin(), ltrip.end()); }
         cpu_w_ns += thr_ns() - wcpu0; cpu_ext_ns += local_ext; cpu_comp_ns += local_comp;
     };
     std::vector<std::thread> rds, wks;
@@ -611,7 +611,7 @@ void fill_pool(const std::vector<Shard>& shards, int level, int flank, int margi
     for (auto& t : rds) t.join();
     for (auto& t : wks) t.join();
     const double w = cpu_w_ns.load() / 1e9, e = cpu_ext_ns.load() / 1e9, cp = cpu_comp_ns.load() / 1e9;
-    std::fprintf(stderr, "[fill] pool CPU-sec (on-CPU, contention-immune): reader-parse=%.1f | worker-LCP extract_fast=%.1f | per-read fill(murmur+idx+slot+seen)=%.1f | edge insert+compact=%.1f | worker-total=%.1f\n",
+    std::fprintf(stderr, "[fill] pool CPU-sec (on-CPU, contention-immune): reader-parse=%.1f | worker-LCP extract=%.1f | per-read fill(hash+idx+slot+seen)=%.1f | edge insert+compact=%.1f | worker-total=%.1f\n",
                  cpu_rd_ns.load() / 1e9, e, w - e - cp, cp, w);
 }
 
@@ -643,11 +643,11 @@ void radix_sort_edges(std::vector<SEdge>& edges) {
 // ---- merged stage: reads -> bloom-count -> stream-fill -> self-contained graph.bin ----
 // graph.bin v2 schema: u64 K, u8 color[K], u32 ncov[K], u32 tcov[K], u64 E, IEdge[E],
 //                      u64 total_payload, u16 seqlen[K], u8 payload[total_payload].
-// The per-node +-flank window lives inline in graph.bin (compact.cpp reads it directly).
+// The per-node core-byte payload lives inline in graph.bin (compact.cpp reads it directly).
 // The payload is written by streaming each slot straight to disk and freeing it -- there is
 // no second contiguous copy, which keeps the write-phase RAM peak low.
 void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir,
-                     int level, int flank, int margin, int min_mult, int threads) {
+                     int level, int margin, int min_mult, int threads) {
     init_comp_lut();
     mkdir(dir.c_str(), 0755);
     const std::vector<std::string> ns = collect_shards(normal_fq), ts = collect_shards(tumor_fq);
@@ -668,10 +668,10 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     const Snap P0 = snap();
 
     // ---- pass 1: bloom-cascade count BOTH samples in one parallel pool -> survivors with (n,t) ----
-    // The cache records every read's core boundaries so pass 2 skips extract_fast (SVP_NOCACHE disables).
+    // The cache records every read's core boundaries so pass 2 skips extract (SVP_NOCACHE disables).
     CoreCache cache; const bool use_cc = !std::getenv("SVP_NOCACHE");
     std::vector<SigCount> nodes; uint64_t nr_n = 0, nr_t = 0;
-    run_pool_both(shards_all, level, flank, margin, threads, min_mult, nodes, nr_n, nr_t, cache, use_cc);
+    run_pool_both(shards_all, level, margin, threads, min_mult, nodes, nr_n, nr_t, cache, use_cc);
     const uint64_t K = nodes.size();
     const Snap P1 = snap();
     tic.mark("pool_both");
@@ -691,10 +691,40 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     std::vector<std::vector<uint8_t>> slot_buf(K);
     std::vector<std::atomic<uint8_t>> claimed(K); for (auto& c : claimed) c.store(0);
     std::vector<SEdge> edges; std::mutex emtx;
+    // ---- repeat-resolution capture (opt-in SVP_SPLIT_REPEATS): flag high-coverage (collapsed-
+    // repeat) nodes by coverage proxy; the fill pass then records each flagged run's in->run->out
+    // span to threads.bin, consumed by the X-cut in the simplify stage. ----
+    const bool split_rep = std::getenv("SVP_SPLIT_REPEATS");
+    std::vector<uint8_t> is_repeat;
+    std::vector<std::array<uint32_t, 3>> triples; std::mutex tmtx;
+    if (split_rep) {
+        std::vector<uint32_t> zn, zt;
+        for (uint64_t i = 0; i < K; i++) { if (ncov[i]) zn.push_back(ncov[i]); if (tcov[i]) zt.push_back(tcov[i]); }
+        auto med = [](std::vector<uint32_t>& v) -> uint32_t { if (v.empty()) return 0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
+        const uint32_t dn = med(zn), dt = med(zt);
+        const char* rme = std::getenv("SVP_REPEAT_MULT");
+        const double rmult = rme ? std::atof(rme) : 1.5;        // repeat flag = coverage >= rmult x median single-copy depth
+        const uint32_t tn = (uint32_t)(rmult * dn), tt = (uint32_t)(rmult * dt);
+        is_repeat.assign(K, 0); uint64_t nf = 0;
+        for (uint64_t i = 0; i < K; i++) if ((dn && ncov[i] >= tn) || (dt && tcov[i] >= tt)) { is_repeat[i] = 1; nf++; }
+        std::fprintf(stderr, "[split] candidate-repeat nodes: %lu/%lu (single-copy depth n=%u t=%u; flag >= %.2fx -> ncov>=%u or tcov>=%u; set SVP_REPEAT_MULT)\n",
+                     (unsigned long)nf, (unsigned long)K, dn, dt, rmult, tn, tt);
+    }
     const Snap P2 = snap();
-    fill_pool(shards_all, level, flank, margin, threads, idx, slot_buf, claimed, edges, emtx, cache);
+    fill_pool(shards_all, level, margin, threads, idx, slot_buf, claimed, edges, emtx, cache,
+              split_rep ? is_repeat.data() : nullptr, triples, tmtx);
     const Snap P3 = snap();
     tic.mark("fill_pool");
+    if (split_rep) {
+        ankerl::unordered_dense::map<uint64_t, ankerl::unordered_dense::map<uint64_t, uint32_t>> agg;
+        for (const auto& t : triples) agg[t[0]][((uint64_t)t[1] << 32) | t[2]]++;
+        std::vector<RepTriple> recs;
+        for (const auto& m : agg) for (const auto& p : m.second) recs.push_back({(uint32_t)m.first, (uint32_t)(p.first >> 32), (uint32_t)p.first, p.second});
+        FILE* ft = xopen(dir + "/threads.bin.tmp", "wb");
+        uint64_t nr = recs.size(); wr(ft, &nr, 8); wr(ft, recs.data(), nr * sizeof(RepTriple));
+        atomic_close(ft, dir + "/threads.bin.tmp", dir + "/threads.bin");
+        std::fprintf(stderr, "[split] wrote %lu distinct in->run->out triples -> threads.bin\n", (unsigned long)nr);
+    }
 
     // ---- resolve sig-edges -> node-id edges, sort/dedup ----
     std::vector<IEdge> ie; ie.reserve(edges.size());
