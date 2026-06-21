@@ -17,6 +17,8 @@ tools/*
 !tools/bubble_recall.cpp
 !tools/trace.cpp
 !tools/build_trace.sh
+!tools/build_blacklist.cpp
+!tools/build_blacklist.sh
 docs/analysis
 experiments
 scripts/fakebin

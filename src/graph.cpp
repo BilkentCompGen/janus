@@ -59,6 +59,28 @@ static void init_comp_lut() {
     COMP_LUT[(uint8_t)'C'] = 'G'; COMP_LUT[(uint8_t)'G'] = 'C';
 }
 
+// ---- repeat-core blacklist (opt-in SVP_BLACKLIST) ----
+// Cores whose sig occurs >10x in the reference assembly (built by tools/build_blacklist). These are
+// SKIPPED during the build: never a node, and the read path BYPASSES them so A->X->B becomes A->B
+// (prev/have are kept). This is DISTINCT from the min_mult cascade, which DISCONNECTS (have=false)
+// at any sig that fails to survive -- that behaviour is unchanged.
+static ankerl::unordered_dense::set<uint64_t> g_blacklist;
+static bool g_blacklist_on = false;
+static inline bool blacklisted(uint64_t sig) { return g_blacklist_on && g_blacklist.count(sig); }
+static void load_blacklist(const char* path) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::fprintf(stderr, "[FATAL] SVP_BLACKLIST open %s\n", path); std::abort(); }
+    uint64_t n = 0;
+    if (std::fread(&n, 8, 1, f) != 1) { std::fprintf(stderr, "[FATAL] SVP_BLACKLIST header\n"); std::abort(); }
+    std::vector<uint64_t> buf(n);
+    if (n && std::fread(buf.data(), 8, n, f) != n) { std::fprintf(stderr, "[FATAL] SVP_BLACKLIST body\n"); std::abort(); }
+    std::fclose(f);
+    g_blacklist.reserve(n * 2);
+    for (uint64_t s : buf) g_blacklist.insert(s);
+    g_blacklist_on = true;
+    std::fprintf(stderr, "[graph] blacklist: %lu repeat-core sigs from %s (skipped + bypassed; min_mult disconnect unchanged)\n", (unsigned long)n, path);
+}
+
 // Node identity = core_sig (XXH3-64 over the core's bytes), computed in extract(); pass 2
 // recomputes it from the cached core boundaries. The stored payload IS the core bytes — same
 // region as the signature, no flank.
@@ -95,6 +117,7 @@ void process_read(std::string& s, int level, int margin,
         const uint64_t te = thr_ns(); extract(data, (int)len, 0, level, &n, &st, &en, &sig); cpu_ext += thr_ns() - te;
         for (int i = 0; i < n; i++) {
             if (st[i] < mg || en[i] + mg > len) continue;
+            if (blacklisted(sig[i])) continue;          // repeat core: never counted -> never a node (also dropped from the boundary cache)
             if (cap_st) { cap_st->push_back((uint16_t)st[i]); cap_w->push_back((uint16_t)(en[i] - st[i])); }
             lsigs.push_back(sig[i]);
         }
@@ -161,8 +184,9 @@ void process_read_fill(std::string& s, int level, int margin,
         } else {
             int n; const uint64_t *st, *en, *sig;
             const uint64_t te = thr_ns(); extract(data, (int)len, 0, level, &n, &st, &en, &sig); cpu_ext += thr_ns() - te;
-            (void)sig;
-            for (int i = 0; i < n; i++) { if (st[i] < mg || en[i] + mg > len) continue; handle(st[i], en[i]); }
+            for (int i = 0; i < n; i++) { if (st[i] < mg || en[i] + mg > len) continue;
+                if (blacklisted(sig[i])) continue;      // bypass: skip the core WITHOUT touching prev/have, so A->X->B becomes A->B
+                handle(st[i], en[i]); }
         }
         if (cap && in_run) cap->push_back({{entry, before, UINT32_MAX}});       // run reached read end -> out=NONE
     };
@@ -649,6 +673,7 @@ void radix_sort_edges(std::vector<SEdge>& edges) {
 void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir,
                      int level, int margin, int min_mult, int threads) {
     init_comp_lut();
+    if (const char* blp = std::getenv("SVP_BLACKLIST")) load_blacklist(blp);
     mkdir(dir.c_str(), 0755);
     const std::vector<std::string> ns = collect_shards(normal_fq), ts = collect_shards(tumor_fq);
     std::vector<Shard> shards_n, shards_t, shards_all;
