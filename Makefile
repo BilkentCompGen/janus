@@ -32,7 +32,6 @@ ifeq ($(PGO),use)
 endif
 
 LEVEL   ?= 5
-FLANK   ?= 10
 OUT     := outputs/svp
 # box rule: never rm — move to a timestamped trash dir (resolved once per make run)
 TRASH   := /home/yuio/trash/svp-clean-$(shell date +%Y%m%d-%H%M%S)
@@ -59,13 +58,13 @@ MINMULT  ?= 10
 THREADS  ?= 16
 run: svp
 	@mkdir -p $(OUT)/wgs
-	/usr/bin/time -v ./svp run $(READS_N) $(READS_T) $(OUT)/wgs --level $(LEVEL) --flank $(FLANK) --min-mult $(MINMULT) --threads $(THREADS)
+	/usr/bin/time -v ./svp run $(READS_N) $(READS_T) $(OUT)/wgs --level $(LEVEL) --min-mult $(MINMULT) --threads $(THREADS)
 
 run-list:
 	@echo "read-based pipeline (reads only — no assembly in the caller):"
 	@echo "  make run    normal=$(READS_N)"
 	@echo "              tumor =$(READS_T)"
-	@echo "  overrides: LEVEL=$(LEVEL) FLANK=$(FLANK) MINMULT=$(MINMULT) READS_N=... READS_T=..."
+	@echo "  overrides: LEVEL=$(LEVEL) MINMULT=$(MINMULT) READS_N=... READS_T=..."
 
 install-deps: install-deps-lcptools install-deps-badread install-deps-rapidgzip
 
