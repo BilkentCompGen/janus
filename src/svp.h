@@ -5,18 +5,21 @@
 #include <utility>
 #include <vector>
 
-// SoA LCP extraction over biolcp (src/extract_fast.cpp). The reads-only caller (graph.cpp)
-// calls this directly and hashes each core's ±flank window with its own emit_sig. end is
-// exclusive; label is biolcp's native content fingerprint (unused by the caller — the
-// signature is the murmur of the window, not the label).
-extern "C" void extract_fast(const char* str, int len, uint64_t offset, int target_level,
+// SoA LCP extraction over biolcp (src/extract.cpp). Each core's signature is XXH3-64 over the
+// core's own bytes (no flank), computed once here and returned in sigs_out. end is exclusive.
+extern "C" void extract(const char* str, int len, uint64_t offset, int target_level,
                              int* n_out, const uint64_t** starts_out,
-                             const uint64_t** ends_out, const uint32_t** labels_out);
+                             const uint64_t** ends_out, const uint64_t** sigs_out);
+uint64_t core_sig(const char* key, int len);
 
 // Shared graph-stage structs (survivor record + directed node-id edge), hoisted from
 // graph.cpp's anon namespace so compact.cpp can read graph.bin without duplication.
 struct SigCount { uint64_t sig; uint32_t n, t; };
 using IEdge = std::pair<uint32_t, uint32_t>;
+
+// dir/threads.bin record: a coverage-flagged repeat run was entered from raw node `in`, spans
+// the run anchored at `mid`, and left to `out` (UINT32_MAX = read boundary), seen `count` times.
+struct RepTriple { uint32_t mid, in, out, count; };
 
 // Super-graph node schema: compact.cpp's build_super_graph fills these in RAM, simplify.cpp's
 // run_simplify consumes them and writes the same node layout to simplify.bin — shared here so
