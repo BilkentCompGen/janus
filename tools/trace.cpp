@@ -821,7 +821,7 @@ int trace_probeseq(int argc, char** argv){
 namespace {
 const char* const SHAPE_NAME[9]={"linear","simple","asym","seam","super","cycle","tip","tangle","orphan"};
 struct STag { uint8_t shape=0, longcol=0; uint32_t len1=0, len2=0; uint32_t sid=UINT32_MAX; };
-struct Struct { uint32_t s1,s2; uint8_t shape,longcol; uint32_t len1,len2,tcov; uint64_t refloc; uint32_t atc,anc; };
+struct Struct { uint32_t s1,s2; uint8_t shape,longcol; uint32_t len1,len2,tcov; uint64_t refloc; uint32_t atc,anc; uint8_t cc; };  // cc: bit0=has normal-only(c1) arm, bit1=has tumor-only(c2) arm
 
 // Classify every anchored region around colour-3 supers and tag arm-member supers; then a
 // second pass labels leftover coloured supers as tip / tangle / orphan from local degree.
@@ -874,7 +874,7 @@ void tag_shapes(const std::vector<uint8_t>& col, const CSR& og, const CSR& ig,
             uint32_t atc=0,anc=0,tc=0,nc=0;                                  // tumor-allele / normal-allele arm depth
             if(shp==1||shp==2){ armcov(s1,s2,2,tc,nc); atc=tc; armcov(s1,s2,1,tc,nc); anc=nc; }
             else if(shp==3){ armcov(s1,s2,lc,tc,nc); if(lc==2)atc=tc; else anc=nc; }
-            sc[shp]++; structs.push_back({s1,s2,shp,lc,l1,l2,std::max(sm[s1].tcov,sm[s2].tcov),sm[s1].refloc,atc,anc}); } }
+            sc[shp]++; structs.push_back({s1,s2,shp,lc,l1,l2,std::max(sm[s1].tcov,sm[s2].tcov),sm[s1].refloc,atc,anc,(uint8_t)((h1?1:0)|(h2?2:0))}); } }
     for(uint32_t u=0;u<(uint32_t)S;u++){ if(col[u]==3||tag[u].shape!=0)continue;
         const uint32_t outd=(uint32_t)(og.off[u+1]-og.off[u]), ind=(uint32_t)(ig.off[u+1]-ig.off[u]);
         bool ina=false,outa=false;
@@ -895,30 +895,35 @@ static void apply_xcut(std::vector<SuperMeta>& sm, std::vector<IEdge>& sedges,
     FILE* f=std::fopen(threads_path.c_str(),"rb"); if(!f){ std::fprintf(stderr,"[shapes] no threads.bin -> un-resolved graph\n"); return; }
     uint64_t n; if(std::fread(&n,8,1,f)!=1){std::fclose(f);return;}
     std::vector<RepTriple> raw(n); if(n&&std::fread(raw.data(),sizeof(RepTriple),n,f)!=n){std::fclose(f);return;} std::fclose(f);
+    const bool force=std::getenv("SVP_TRACE_RESOLVE_ALL");   // resolve EVERY branching repeat per observed (in,out) pair, even cross-product (measures the blow-up)
     std::unordered_map<uint32_t,std::unordered_map<uint64_t,uint32_t>> bymid;
     for(const RepTriple& t:raw){ const uint32_t smid=nts[t.mid];
         const uint32_t sin=t.in==UINT32_MAX?UINT32_MAX:nts[t.in], sout=t.out==UINT32_MAX?UINT32_MAX:nts[t.out];
         if(sin==smid||sout==smid)continue; bymid[smid][((uint64_t)sin<<32)|sout]++; }
     std::unordered_map<uint32_t,std::vector<uint32_t>> inset,outset;
     for(const IEdge& e:sedges){ outset[e.first].push_back(e.second); inset[e.second].push_back(e.first); }
-    std::unordered_set<uint64_t> rm; std::vector<IEdge> add; uint64_t nsplit=0,ncopy=0;
+    std::unordered_set<uint64_t> rm; std::vector<IEdge> add; uint64_t nsplit=0,ncopy=0,nforce=0,maxcopy=0;
     for(const auto& kv:bymid){ const uint32_t C=kv.first;
         auto ii=inset.find(C), oo=outset.find(C); if(ii==inset.end()||oo==outset.end())continue;
         const std::vector<uint32_t>& is=ii->second; const std::vector<uint32_t>& os=oo->second;
         if(is.size()<2||os.size()<2)continue;
         std::unordered_map<uint32_t,uint32_t> ind,outd; std::vector<std::pair<uint32_t,uint32_t>> M;
         for(const auto& p:kv.second){ const uint32_t a=(uint32_t)(p.first>>32),b=(uint32_t)p.first; if(a==UINT32_MAX||b==UINT32_MAX)continue; ind[a]++; outd[b]++; M.push_back({a,b}); }
-        if(M.size()!=is.size()||is.size()!=os.size())continue;
-        bool ok=true; for(uint32_t a:is)if(ind[a]!=1){ok=false;break;} if(ok)for(uint32_t b:os)if(outd[b]!=1){ok=false;break;}
-        if(!ok)continue;
-        nsplit++;
+        bool clean = (M.size()==is.size() && is.size()==os.size());        // perfect 1:1 matching covering the topology
+        if(clean) for(uint32_t a:is) if(ind[a]!=1){ clean=false; break; }
+        if(clean) for(uint32_t b:os) if(outd[b]!=1){ clean=false; break; }
+        if(!clean && !force) continue;                                     // cross-product: refuse unless RESOLVE-ALL
+        if(!clean) nforce++;                                               // an otherwise-refused (cross-product) repeat, forced
+        nsplit++; if(M.size()>maxcopy) maxcopy=M.size();
         for(const auto& p:M){ const uint32_t ci=(uint32_t)sm.size(); sm.push_back(sm[C]); add.push_back({p.first,ci}); add.push_back({ci,p.second}); ncopy++; }
         for(uint32_t a:is)rm.insert(((uint64_t)a<<32)|C); for(uint32_t b:os)rm.insert(((uint64_t)C<<32)|b);
     }
     std::vector<IEdge> ne; ne.reserve(sedges.size()+add.size());
     for(const IEdge& e:sedges) if(!rm.count(((uint64_t)e.first<<32)|e.second)) ne.push_back(e);
     ne.insert(ne.end(),add.begin(),add.end()); std::sort(ne.begin(),ne.end()); ne.erase(std::unique(ne.begin(),ne.end()),ne.end()); sedges.swap(ne);
-    std::fprintf(stderr,"[shapes] X-cut applied (RESOLVED graph): split %lu repeat supers -> %lu copies (S now %zu)\n",(unsigned long)nsplit,(unsigned long)ncopy,sm.size());
+    std::string extra = force ? (" | "+std::to_string(nforce)+" cross-product forced, worst single repeat -> "+std::to_string(maxcopy)+" copies") : std::string();
+    std::fprintf(stderr,"[shapes] X-cut applied (%s): split %lu repeat supers -> %lu copies (S now %zu)%s\n",
+        force?"RESOLVE-ALL":"RESOLVED",(unsigned long)nsplit,(unsigned long)ncopy,sm.size(),extra.c_str());
 }
 
 int trace_shapes(int argc, char** argv){
@@ -1015,17 +1020,29 @@ int trace_shapes(int argc, char** argv){
         std::fprintf(fs,"%s\t%u\t%u\t%u\t%u\t%d\t%s\t%ld\t%u\t%u\n", SHAPE_NAME[st.shape],st.longcol,st.len1,st.len2,st.tcov,m,
             rl==LOC_NONE?"NA":a.chrom_names[loc_chrom(rl)].c_str(), rl==LOC_NONE?-1L:(long)loc_pos(rl), st.atc,st.anc); }
     std::fclose(fs);
-    // per-shape matched (backs >=1 variant) vs empty (no variant). structure shapes via struct_matched;
-    // super shapes (tip/tangle/orphan) are tagged on the super itself, so matched = var_super[s].
-    uint64_t sc_m[9]={0};
-    for(uint32_t si=0;si<structs.size();si++) if(struct_matched[si]) sc_m[structs[si].shape]++;
-    for(uint32_t s=0;s<S;s++){ const uint8_t sh=tag[s].shape; if(sh>=6 && var_super[s]) sc_m[sh]++; }
+    // per-shape matched vs empty, AND colour content. A shape is shared (all color-3), normal-only(c1),
+    // or tumor-divergent(c2 = somatic candidate). Repeat copies are all-shared and produce NO shape, so
+    // 'shared' should be ~0 -- every counted shape is colour-divergent. Empties are bucketed by colour so
+    // the somatic-relevant FP surface (c2) is separated from normal/germline (c1).
+    uint64_t sc_m[9]={0}, n_c2[9]={0}, n_c1[9]={0}, n_sh[9]={0}, e_c2[9]={0}, e_c1[9]={0}, e_sh[9]={0};
+    for(uint32_t si=0;si<structs.size();si++){ const Struct& st=structs[si]; const uint8_t sh=st.shape;
+        const bool m=struct_matched[si]||var_super[st.s1]||var_super[st.s2]; if(m)sc_m[sh]++;
+        if(st.cc&2){ n_c2[sh]++; if(!m)e_c2[sh]++; } else if(st.cc==1){ n_c1[sh]++; if(!m)e_c1[sh]++; } else { n_sh[sh]++; if(!m)e_sh[sh]++; } }
+    for(uint32_t s=0;s<S;s++){ const uint8_t sh=tag[s].shape; if(sh<6)continue; const bool m=var_super[s]; if(m)sc_m[sh]++;
+        if(sm[s].color==2){ n_c2[sh]++; if(!m)e_c2[sh]++; } else { n_c1[sh]++; if(!m)e_c1[sh]++; } }
     FILE* fc=std::fopen((dir+"/shape_census.tsv").c_str(),"w");
-    std::fprintf(fc,"shape\tgranularity\tcount\tmatched\tempty\n");
+    std::fprintf(fc,"shape\tgranularity\tcount\tmatched\tempty\tc2_somatic\tc1_normal\tshared\tempty_c2\tempty_c1\n");
     const char* gran[9]={"-","structure","structure","structure","structure","structure","super","super","super"};
-    uint64_t tot_all=0,tot_m=0;
-    for(int i=1;i<=8;i++){ std::fprintf(fc,"%s\t%s\t%lu\t%lu\t%lu\n",SHAPE_NAME[i],gran[i],(unsigned long)sc[i],(unsigned long)sc_m[i],(unsigned long)(sc[i]-sc_m[i])); tot_all+=sc[i]; tot_m+=sc_m[i]; }
+    uint64_t tot_all=0,tot_m=0,T_c2=0,T_c1=0,T_sh=0,Te_c2=0,Te_c1=0,Te_sh=0;
+    for(int i=1;i<=8;i++){ std::fprintf(fc,"%s\t%s\t%lu\t%lu\t%lu\t%lu\t%lu\t%lu\t%lu\t%lu\n",SHAPE_NAME[i],gran[i],
+            (unsigned long)sc[i],(unsigned long)sc_m[i],(unsigned long)(sc[i]-sc_m[i]),
+            (unsigned long)n_c2[i],(unsigned long)n_c1[i],(unsigned long)n_sh[i],(unsigned long)e_c2[i],(unsigned long)e_c1[i]);
+        tot_all+=sc[i]; tot_m+=sc_m[i]; T_c2+=n_c2[i]; T_c1+=n_c1[i]; T_sh+=n_sh[i]; Te_c2+=e_c2[i]; Te_c1+=e_c1[i]; Te_sh+=e_sh[i]; }
     std::fclose(fc);
+    std::fprintf(stderr,"[shapes] colour filter (your ask -> drop all-shared): all-shared=%lu (dropped), colour-specific=%lu | tumor-divergent c2=%lu, normal-only c1=%lu\n",
+        (unsigned long)T_sh,(unsigned long)(tot_all-T_sh),(unsigned long)T_c2,(unsigned long)T_c1);
+    std::fprintf(stderr,"[shapes] EMPTIES by colour: tumor-divergent c2=%lu (the real somatic FP surface), normal-only c1=%lu, all-shared=%lu\n",
+        (unsigned long)Te_c2,(unsigned long)Te_c1,(unsigned long)Te_sh);
     std::fprintf(stderr,"[shapes] empty (no variant): %lu of %lu shapes (%.1f%%) trace to no VCF variant\n",
         (unsigned long)(tot_all-tot_m),(unsigned long)tot_all, tot_all? 100.0*(double)(tot_all-tot_m)/(double)tot_all : 0.0);
     std::fprintf(stderr,"[shapes] wrote variant_shapes.tsv inv_breakpoints.tsv structures.tsv shape_census.tsv\n");
