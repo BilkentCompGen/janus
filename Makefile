@@ -54,7 +54,7 @@ $(BUILD):
 # ---------- run target (whole-genome, reads only — assemblies are never a caller input) ----------
 READS_N  ?= simulation/reads/normal/hifi.fastq.gz
 READS_T  ?= simulation/reads/wgs/hifi.fastq.gz
-MINMULT  ?= 10
+MINMULT  ?= 1
 THREADS  ?= 16
 run: svp
 	@mkdir -p $(OUT)/wgs

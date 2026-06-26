@@ -753,6 +753,16 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     tic.mark("pool_both");
     std::fprintf(stderr, "[graph]   survivors=%lu\n", (unsigned long)K);
 
+    // ---- SVP_COUNT_ONLY: dump (sig,n,t) for every observed core and STOP (analysis mode; skips the
+    // memory-heavy fill). counts.bin = u64 K + SigCount[K]. Lets us study what any mm-floor would drop. ----
+    if (std::getenv("SVP_COUNT_ONLY")) {
+        FILE* fc = xopen(dir + "/counts.bin.tmp", "wb");
+        uint64_t Kw = K; wr(fc, &Kw, 8); wr(fc, nodes.data(), K * sizeof(SigCount));
+        atomic_close(fc, dir + "/counts.bin.tmp", dir + "/counts.bin");
+        std::fprintf(stderr, "[graph] COUNT_ONLY: wrote %lu (sig,n,t) -> %s/counts.bin (skipped fill)\n", (unsigned long)K, dir.c_str());
+        return;
+    }
+
     // ---- colour + id map (node id = sig-sorted index; sigs themselves are NOT persisted) ----
     std::vector<uint8_t> color(K); std::vector<uint32_t> ncov(K), tcov(K);
     ankerl::unordered_dense::map<uint64_t, uint32_t> idx; idx.reserve(K);
