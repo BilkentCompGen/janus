@@ -12,7 +12,7 @@ These rules are non-negotiable on this branch. The user reads every line and rev
 6. **No defensive coding.** Trust internal callers — only validate at the CLI boundary. Callee functions assume their preconditions hold.
 7. **Avoid if-else trees.** Prefer early return; arithmetic / table lookup; `std::min`/`std::max`; the `cond ? a : b` ternary for trivial selections. If you find yourself writing more than two `else if` chained, stop and rethink.
 8. **Function size ≤ 30 LOC.** Single-purpose. Split if it grows.
-9. **Total binary target ≤ 700 LOC** across all `.cpp` we write (excluding `zstr.hpp` and `MurmurHash3` which are carried over).
+9. **Total binary target ≤ 700 LOC** across all `.cpp` we write (excluding vendored/system carries: `unordered_dense.h`, `xxhash.h`, and the btllib bloom headers).
 10. **Comments only when the WHY is non-obvious.** Never restate WHAT — well-named identifiers do that. No comments referencing "added for issue X", "used by Y", "removed Z" — that belongs in PR descriptions / git log.
 
 ## What's allowed
