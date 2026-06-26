@@ -17,22 +17,20 @@ measured 100%). svp runs at **level 5** (median core ~150 bp; L4 ~63 bp, L6 ~352
    `parse1`'s LMAX neighbour guards have no LMIN mirror. svp therefore extracts **both** strands
    explicitly (fw + RC) -- each locus appears as two nodes `W` and `RC(W)`.
 3. **Adjacent cores overlap.** Consecutive L5 cores overlap ~85-105 bp on average (35 bp at L4,
-   199 bp at L6). This overlap lets Mode A/B splice node bytes by exact suffix/prefix (KMP)
+   199 bp at L6). This overlap lets `refine`/`call` splice node bytes by exact suffix/prefix (KMP)
    match -- never a fixed-width shortcut.
 
-## The signature (the central design choice)
-A node's identity is `sig = murmur64(core +/- 10 bp flank, seed 0)`, **not** the core alone and
-**not** lcptools' 32-bit boundary `label`.
-- **Murmur is collision-free in practice.** Zero observable 64-bit collisions across 33
-  whole-genome configs (distinct sigs == distinct sequences exactly).
-- **The flank is load-bearing -- it makes the sig position-discriminating.** Two loci with the
-  same core but different neighbours get different sigs, so each node ~= one locus and its stored
-  +/-flank window bytes are *consistent* across reads. This is what lets the byte-splice in
-  Mode A/B hold across a `min_mult`-pruned coordinate gap (the +/-10 flank bridges the gap).
-  Measured: dropping the flank produces 58k zero-overlap splice seams and craters recall
-  (>=50bp recall 0.495 -> 0.385); the 32-bit `label` is worse (0.045, 193k seams).
-- **The `label` seed adds nothing** for flank >= 0 (proven L4/L5/L6 WG); it only carries info for
-  negative flank (window subset of core).
+## The signature
+A node's identity is `core_sig` = **XXH3-64 over the core's own bytes** (no flank; **not** lcptools'
+32-bit boundary `label`). 64-bit collisions are unobserved across whole-genome configs (distinct
+sigs == distinct sequences). The byte-splice that `refine`/`call` use (exact KMP suffix/prefix) holds
+because adjacent L5 cores already overlap ~85-105 bp (property 3 above) — no flank is needed to
+bridge the splice.
+
+> *Historical:* an earlier design hashed `core +/- 10 bp flank` with murmur to make the identity
+> position-discriminating. Measured then that dropping the flank produced ~58k zero-overlap splice
+> seams and cut >=50bp recall 0.495 -> 0.385, and the 32-bit `label` was worse (0.045, 193k seams).
+> The current core-only XXH3 identity leans on the native adjacent-core overlap instead.
 
 ## Ceilings (structural, not fixable by hashing)
 - **Genome repetition caps uniqueness:** 8.07 / 5.15 / 3.83% of cores at L4/L5/L6 have a
