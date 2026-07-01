@@ -60,64 +60,10 @@ static void init_comp_lut() {
 }
 
 // ---- repeat-core blacklist (opt-in SVP_BLACKLIST) ----
-// Cores whose sig occurs >10x in the reference assembly (built by tools/build_blacklist). These are
-// SKIPPED during the build: never a node, and the read path BYPASSES them so A->X->B becomes A->B
-// (prev/have are kept). This is DISTINCT from the min_mult cascade, which DISCONNECTS (have=false)
-// at any sig that fails to survive -- that behaviour is unchanged.
-static ankerl::unordered_dense::set<uint64_t> g_blacklist;
-static bool g_blacklist_on = false;
-static inline bool blacklisted(uint64_t sig) { return g_blacklist_on && g_blacklist.count(sig); }
-static void load_blacklist(const char* path) {
-    FILE* f = std::fopen(path, "rb");
-    if (!f) { std::fprintf(stderr, "[FATAL] SVP_BLACKLIST open %s\n", path); std::abort(); }
-    uint64_t n = 0;
-    if (std::fread(&n, 8, 1, f) != 1) { std::fprintf(stderr, "[FATAL] SVP_BLACKLIST header\n"); std::abort(); }
-    std::vector<uint64_t> buf(n);
-    if (n && std::fread(buf.data(), 8, n, f) != n) { std::fprintf(stderr, "[FATAL] SVP_BLACKLIST body\n"); std::abort(); }
-    std::fclose(f);
-    g_blacklist.reserve(n * 2);
-    for (uint64_t s : buf) g_blacklist.insert(s);
-    g_blacklist_on = true;
-    std::fprintf(stderr, "[graph] blacklist: %lu repeat-core sigs from %s ((A+X)->(X+B) merge; min_mult disconnect unchanged)\n", (unsigned long)n, path);
-}
-
-// Apply the (A+X)->(X+B) merge for blacklisted repeat cores. Each maximal run of consecutive
-// blacklisted cores is absorbed into its non-blacklisted flanks as two OVERLAPPING merged cores --
-// the left half [leftflank .. run-end) and the right half [run-start .. rightflank) -- which share
-// the run's bytes, so the edge between them is a real overlap edge (NOT the zero-overlap bridge).
-// The bare repeat core never becomes a node; the flank-contexts do, so one shared hub with n ins and
-// m outs is replaced by n+m half-nodes (not n*m copies). (st,en,sig) are extract's cores; keep[] are
-// the margin-surviving indices in read order; out gets the effective spans. A merged span longer
-// than len_cap is dropped (uint16 seqlen) -- the chain just breaks there, like a non-survivor.
-static std::atomic<uint64_t> g_bl_dropped{0};
-static void blacklist_merge(const uint64_t* st, const uint64_t* en, const uint64_t* sig,
-                            const std::vector<int>& keep, uint64_t len_cap,
-                            std::vector<std::pair<uint32_t, uint32_t>>& out) {
-    out.clear();
-    const int nk = (int)keep.size();
-    int i = 0;
-    while (i < nk) {
-        const int ci = keep[i];
-        if (!blacklisted(sig[ci])) {
-            if (i + 1 < nk && blacklisted(sig[keep[i + 1]])) {        // ci = left flank of a blacklisted run
-                int j = i + 1; while (j + 1 < nk && blacklisted(sig[keep[j + 1]])) j++;
-                const uint64_t Lst = st[keep[i]], runst = st[keep[i + 1]], runen = en[keep[j]];
-                const bool hasR = (j + 1 < nk);
-                const uint64_t Ren = hasR ? en[keep[j + 1]] : runen;
-                if (runen - Lst <= len_cap) out.push_back({(uint32_t)Lst, (uint32_t)runen}); else g_bl_dropped++;   // left half (A+X)
-                if (Ren - runst <= len_cap) out.push_back({(uint32_t)runst, (uint32_t)Ren}); else g_bl_dropped++;   // right half (X+B)
-                i = hasR ? j + 2 : j + 1;                            // consume run (+ right flank)
-            } else { out.push_back({(uint32_t)st[ci], (uint32_t)en[ci]}); i++; }   // plain non-repeat core
-        } else {                                                     // run with no left flank (read opens inside the repeat)
-            int j = i; while (j + 1 < nk && blacklisted(sig[keep[j + 1]])) j++;
-            const uint64_t runst = st[keep[i]], runen = en[keep[j]];
-            const bool hasR = (j + 1 < nk);
-            const uint64_t Ren = hasR ? en[keep[j + 1]] : runen;
-            if (Ren - runst <= len_cap) out.push_back({(uint32_t)runst, (uint32_t)Ren}); else g_bl_dropped++;
-            i = hasR ? j + 2 : j + 1;
-        }
-    }
-}
+// Cores whose sig occurs >minfreq times in the reference assembly (built by tools/build_blacklist) are
+// merged out of the build: a run of blacklisted cores is absorbed into its non-blacklisted flanks as
+// two overlapping (A+X)->(X+B) cores, so A->X->B becomes A->B. The merge lives in blacklist.cpp and is
+// SHARED with the anchor stage (svp.h decls), which MUST apply the identical merge to the reference.
 
 // Node identity = core_sig (XXH3-64 over the core's bytes), computed in extract(); pass 2
 // recomputes it from the cached core boundaries. The stored payload IS the core bytes — same
@@ -154,7 +100,7 @@ void process_read(std::string& s, int level, int margin,
     auto run_pass = [&](const char* data, std::vector<uint16_t>* cap_st, std::vector<uint16_t>* cap_w) {
         int n; const uint64_t *st, *en, *sig;
         const uint64_t te = thr_ns(); extract(data, (int)len, 0, level, &n, &st, &en, &sig); cpu_ext += thr_ns() - te;
-        if (g_blacklist_on) {                           // merge blacklisted runs into their flanks; count the merged sigs
+        if (blacklist_on()) {                           // merge blacklisted runs into their flanks; count the merged sigs
             keep.clear();
             for (int i = 0; i < n; i++) if (st[i] >= mg && en[i] + mg <= len) keep.push_back(i);
             blacklist_merge(st, en, sig, keep, 65535, eff);
@@ -230,7 +176,7 @@ void process_read_fill(std::string& s, int level, int margin,
         } else {
             int n; const uint64_t *st, *en, *sig;
             const uint64_t te = thr_ns(); extract(data, (int)len, 0, level, &n, &st, &en, &sig); cpu_ext += thr_ns() - te;
-            if (g_blacklist_on) {                       // (A+X)->(X+B): emit the merged effective cores (overlapping, no zero-overlap edge)
+            if (blacklist_on()) {                       // (A+X)->(X+B): emit the merged effective cores (overlapping, no zero-overlap edge)
                 keep.clear();
                 for (int i = 0; i < n; i++) if (st[i] >= mg && en[i] + mg <= len) keep.push_back(i);
                 blacklist_merge(st, en, sig, keep, 65535, eff);
@@ -745,7 +691,7 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
 
     // ---- pass 1: bloom-cascade count BOTH samples in one parallel pool -> survivors with (n,t) ----
     // The cache records every read's core boundaries so pass 2 skips extract (SVP_NOCACHE disables).
-    CoreCache cache; const bool use_cc = !std::getenv("SVP_NOCACHE") && !g_blacklist_on;   // blacklist merge rewrites core boundaries -> both passes must re-extract+re-merge (no cache)
+    CoreCache cache; const bool use_cc = !std::getenv("SVP_NOCACHE") && !blacklist_on();   // blacklist merge rewrites core boundaries -> both passes must re-extract+re-merge (no cache)
     std::vector<SigCount> nodes; uint64_t nr_n = 0, nr_t = 0;
     run_pool_both(shards_all, level, margin, threads, min_mult, nodes, nr_n, nr_t, cache, use_cc);
     const uint64_t K = nodes.size();
@@ -843,7 +789,7 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     tic.mark("write");
     std::fprintf(stderr, "[graph] normal_reads=%lu tumor_reads=%lu nodes=%lu edges=%lu payload=%.1f GB -> %s/graph.bin (self-contained v2)\n",
                  (unsigned long)nr_n, (unsigned long)nr_t, (unsigned long)K, (unsigned long)E, total / 1e9, dir.c_str());
-    if (g_blacklist_on) std::fprintf(stderr, "[graph] blacklist (A+X)->(X+B) merge: %lu over-long merged spans dropped (>65535 bp)\n", (unsigned long)g_bl_dropped.load());
+    if (blacklist_on()) std::fprintf(stderr, "[graph] blacklist (A+X)->(X+B) merge: %lu over-long merged spans dropped (>65535 bp)\n", (unsigned long)blacklist_dropped());
 
     // ---- per-component CPU-second + execution-efficiency table -------------------------------
     // CPU = in-process (Δself, all threads) + decode (Δchild, rapidgzip). wall = phase wall.

@@ -5,6 +5,7 @@
 //   svp refine <dir>                               -> dir/refined.bin  (topology + counts error-correction)
 //   svp call   <dir>                               -> dir/calls.*      (somatic variant calls)
 //   svp run    <normal.fq.gz> <tumor.fq.gz> <dir>  -> all three, skipping completed stages
+//   svp anchor <dir> <ref.fasta>                   -> dir/calls.vcf    (coordinate-report onto a reference; opt-in)
 #include "graph.h"
 
 #include <cstdio>
@@ -25,7 +26,8 @@ static void usage() {
         "  svp graph  <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
         "  svp refine <dir>                               (graph.bin -> refined.bin: topology+counts EC)\n"
         "  svp call   <dir>                               (refined.bin -> calls.tsv + calls.altsigs.bin)\n"
-        "  svp run    <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   (graph -> refine -> call; skips completed)\n");
+        "  svp run    <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   (graph -> refine -> call; skips completed)\n"
+        "  svp anchor <dir> <ref.fasta>                   (calls -> calls.vcf: coordinate-report onto a reference)\n");
 }
 
 int main(int argc, char** argv) {
@@ -49,6 +51,7 @@ int main(int argc, char** argv) {
     if (cmd == "graph" && pos.size() == 3) run_graph_reads(pos[0], pos[1], pos[2], level, margin, min_mult, threads);
     else if (cmd == "refine" && pos.size() == 1) run_refine(pos[0]);
     else if (cmd == "call" && pos.size() == 1) run_call(pos[0]);
+    else if (cmd == "anchor" && pos.size() == 2) run_anchor(pos[0], pos[1]);
     else if (cmd == "run" && pos.size() == 3) {
         const std::string& dir = pos[2];
         if (exists(dir + "/graph.bin")) std::fprintf(stderr, "[skip] graph: %s/graph.bin exists\n", dir.c_str());
