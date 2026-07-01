@@ -1,0 +1,339 @@
+\documentclass[11pt]{article}
+
+% --- standard, widely-available packages (compiles with plain pdflatex) ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+
+\newcommand{\sig}{\operatorname{sig}}
+\newcommand{\colour}{\chi}
+\newcommand{\XXH}{\textsc{XXH3-64}}
+
+\title{\bfseries Anchoring a Coordinate-Free Somatic Variant Graph:\\
+Reference-Based Localization and Geometry-Driven\\ Reclassification of Reference-Free Structural-Variant Calls}
+
+\author{svp project \\ \small (methodology note)}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+\textbf{svp} calls somatic structural variants (SVs) directly from a two-colour
+locally-consistent-parse (LCP) core graph built from normal and tumour long reads, without
+assembly, alignment, or a reference genome. Its calls are therefore \emph{coordinate-free}:
+each is a set of graph cores identified by hash, carrying no genomic position. We describe a
+final, explicitly separated pipeline stage that \emph{anchors} these calls onto a reference
+coordinate system so they can be emitted as a VCF, and that uses the recovered geometry to
+correct systematic mis-typing produced by the coordinate-free caller. Anchoring maps each
+call's reference-present flanking cores to unique genomic positions, brackets the breakpoint,
+and then applies three signal-based operations: suppression of single-nucleotide ``mis-fires''
+in the breakend caller, deduplication of the several redundant calls a real SV induces, and
+geometry-driven reclassification of large deletions and insertions that the graph caller routes
+through its breakend path. On a $\sim\!30\times$ whole-genome simulation these operations raise
+precision from $4.3\%$ to $90.7\%$ and deletion recall from $82\%$ to $90\%$ at the
+$\geq 50$\,bp scale (\textsc{Truvari} matching), with no parameter fitted to the truth set. We
+further show, by extracting truth cores directly from the mutated genome, that the residual
+recall gap is dominated by \emph{placement} (repeat-ambiguous flanks), not by detection: the
+missed variants are present in the graph and largely called, but cannot be uniquely localized.
+\end{abstract}
+
+\section{Introduction}
+
+Reference-free variant calling avoids the biases of mapping reads to a single linear reference,
+at the cost of producing calls that live in a graph rather than on a coordinate axis. The
+\textbf{svp} caller builds a two-colour LCP-core graph from normal and tumour high-fidelity (HiFi)
+reads and emits somatic SV candidates as sets of graph cores. Downstream consumers, however, and
+every standard SV benchmark, expect a VCF: chromosome, position, type, and length. The gap between
+a coordinate-free call and a VCF record is the subject of this note.
+
+We make three points. First, that gap is bridgeable using only the graph's own
+reference-present cores as anchors, with no realignment of reads (Section~\ref{sec:anchor}).
+Second, the recovered coordinates are not merely a reporting convenience: the \emph{geometry} of
+a call's anchors---their spacing, and the colour of the reference cores between them---is a strong
+signal that the coordinate-free caller lacks, and it repairs systematic type errors that the
+graph alone cannot (Section~\ref{sec:refine}). Third, when a reference-free caller is evaluated,
+the recall ceiling must be attributed carefully: we separate \emph{detection} (is the somatic
+sequence in the graph?) from \emph{calling} (was a call emitted?) from \emph{placement} (could the
+call be localized?), and find the residual loss is placement-bound (Section~\ref{sec:results}).
+
+A methodological caveat pervades the evaluation and is reported honestly: truth ``somatic cores''
+must be extracted from the mutated genome, not reconstructed by splicing an inserted sequence
+between reference flanks, or insertion recall is silently undercounted (Section~\ref{sec:truth}).
+
+\section{Background: the coordinate-free caller}
+\label{sec:bg}
+
+We summarize only what the anchoring stage consumes; the graph construction is prior work in the
+pipeline.
+
+\paragraph{Two-colour LCP-core graph.}
+A locally-consistent parse partitions a sequence into variable-length \emph{cores} whose
+boundaries depend only on a local window, so the same locus yields the same core in any context.
+svp runs at level $\ell = 5$ (median core $\approx 150$\,bp; adjacent level-5 cores overlap
+$\approx 85$\,bp). A node's identity is $\sig(c) = \XXH(c)$, a 64-bit hash of the core's bytes.
+Reads from both samples are parsed on both strands, counted through a per-colour Bloom cascade
+with a multiplicity floor, and survivors become nodes. Each node $v$ carries a colour
+\begin{equation}
+\colour(v) \;=\;
+\begin{cases}
+3 & \text{present in normal and tumour (shared),}\\
+1 & \text{normal-only,}\\
+2 & \text{tumour-only (candidate somatic).}
+\end{cases}
+\end{equation}
+and per-base normal/tumour coverage. Edges join adjacent cores. The graph is coordinate-free:
+node payload is core \emph{sequence}, never genome position.
+
+\paragraph{Somatic calls.}
+A somatic allele must involve a colour-2 core. The caller emits three kinds of call, each a
+node set:
+\begin{itemize}[nosep]
+\item \textbf{BUBBLE} --- a two-arm bubble with a tumour arm; typed SNP/INS/DEL from the signed
+spliced arm-length difference.
+\item \textbf{BND} --- a tumour-only run bridging two shared anchors at near-full depth (a novel
+adjacency); intended for DUP/INV/large-indel/translocation.
+\item \textbf{TIP} --- a tumour-only dead-end chain (insertion-end candidate).
+\end{itemize}
+By design the caller is high-recall: it emits \emph{every} structure carrying a tumour-only allele
+and defers false-positive control downstream. On our benchmark it emits $294{,}740$ calls
+($262{,}951$ bubbles, $19{,}676$ breakends, $12{,}113$ tips) from a graph of $K = 86{,}519{,}562$
+nodes. Each call also records the \XXH{} signatures of its alt-allele cores.
+
+\section{Reference anchoring}
+\label{sec:anchor}
+
+Anchoring is an explicit, opt-in stage, \texttt{svp anchor <dir> <ref.fasta>}. It is deliberately
+\emph{not} part of the reference-free \texttt{run} pipeline: detection stays reference-free, and a
+reference is consulted only to name coordinates for reporting. The reference FASTA is the sole
+external input; the mutated/tumour assembly is never used as a caller input.
+
+\subsection{Anchor cores}
+A somatic call is built from colour-2 (tumour-only) cores, which are by definition absent from the
+reference and therefore unlocalizable on their own. Their graph neighbours, however, of colour
+$1$ or $3$ are present in the normal genome and hence in the reference. For a call with alt-node
+set $A$ we take as its \emph{anchor set}
+\begin{equation}
+\mathcal{N}(A) \;=\; \{\, w \in \mathcal{G} : \colour(w) \in \{1,3\},\ w \notin A,\
+\exists\, a\in A\ \text{with}\ (a,w)\ \text{or}\ (w,a)\in E \,\}.
+\end{equation}
+
+\subsection{Reference core-position index}
+We stream the reference once, parsing each contig on both strands at level $\ell$, and record, for
+every needed anchor signature, its forward-genome position. Reverse-strand cores are mapped back
+to forward coordinates. A signature seen at more than one distinct position is
+\emph{repeat-ambiguous} and dropped, yielding a partial map
+\begin{equation}
+\pi:\ \sig \;\rightharpoonup\; (\text{contig}, \text{position}),
+\end{equation}
+that is defined only on cores with a unique genomic location. On the benchmark, $582{,}109$
+distinct anchor signatures are required; $527{,}048$ receive a unique position and $36{,}107$ are
+dropped as repeat-ambiguous.
+
+\subsection{Breakpoint bracketing}
+For each call we look up $\pi$ on its anchor set, keep the consensus contig (the one carrying the
+most located anchors), and bracket the variant between the leftmost and rightmost anchor. A subtle
+but important correction: an anchor's \emph{start} coordinate lies $\approx$ one core width
+($\sim\!150$\,bp) upstream of the true breakpoint, because the breakpoint sits just past the left
+flank core. We therefore place the left coordinate at the left anchor's \emph{end}
+($\text{start} + \text{core length}$), removing a systematic $-170$\,bp offset (measured median)
+that would otherwise defeat overlap-based matching for small SVs. A call all of whose anchors are
+repeat-ambiguous cannot be placed; $20{,}186$ calls ($7.4\%$) are left unanchored.
+
+\section{Signal-based refinement of anchored calls}
+\label{sec:refine}
+
+Coordinates unlock three operations the coordinate-free caller cannot perform. Let a breakend
+call have anchor span $s$ (reference distance between its flanking anchors) and tumour junction
+length $j$ (the spliced length of its tumour-only run).
+
+\subsection{Suppression of single-nucleotide mis-fires (\textsc{LocalSub})}
+\label{sec:localsub}
+A single-nucleotide variant perturbs the graph locally; its tumour-only cores can bridge two
+\emph{consecutive} reference anchors, which the breakend path then reports as a novel adjacency.
+Such a ``breakend'' does not skip or rearrange the reference---its junction \emph{reproduces} the
+spanned reference:
+\begin{equation}
+\text{mis-fire} \;\iff\; j \;\geq\; s/2 .
+\end{equation}
+The two regimes separate cleanly (Table~\ref{tab:ratio}): true DUP/INV breakends have a short
+junction relative to their span (median $j/s = 0.02$), whereas mis-fires reproduce the span
+(median $j/s = 1.04$). Flagged calls are marked \texttt{FILTER=LocalSub}; on the benchmark this
+removes $7{,}666$ spurious breakends.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+& median $j/s$ & $j/s \ge 0.7$ (local) & $j/s < 0.3$ (real skip) \\
+\midrule
+true DUP/INV breakends & $0.02$ & $6\%$ & $84\%$ \\
+false breakends        & $1.04$ & $95\%$ & $4\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Junction-to-span ratio separates single-nucleotide mis-fires from true novel
+adjacencies.}
+\label{tab:ratio}
+\end{table}
+
+\subsection{Locus deduplication}
+A single real SV induces several calls: a bubble \emph{and} a breakend, each doubled by the
+forward/reverse-complement parse. Under one-to-one benchmark matching, one becomes a true positive
+and the rest false positives. We collapse calls of the same type whose anchored positions fall
+within a locus window, keeping the highest-support representative. This removes $43{,}767$
+redundant records ($15.9\%$) and, as shown below, is the single largest precision gain.
+
+\subsection{Geometry-driven reclassification}
+Large deletions and insertions do not form clean bubbles (their reference arm branches through
+repeats), so the caller routes them through the breakend path and mis-types them. The anchor
+geometry recovers the correct type.
+
+\paragraph{Deletion.}
+A somatic deletion removes reference sequence present in the normal genome. Hence the reference
+cores spanning $[\,\text{lo},\text{hi}\,]$ between the two anchors are predominantly
+\emph{normal-only} (colour $1$) in the graph, whereas a duplication's span is shared (colour $3$)
+and an artefact's is mixed. This test is strand-agnostic. For a two-anchor breakend with
+$50 \le s \le 50{,}000$ and $j < s/2$ we fetch the spanned reference, parse it, and retype to
+\textbf{DEL} of size $s$ when
+\begin{equation}
+\frac{\#\{\text{spanned cores with } \colour = 1\}}{\#\{\text{spanned cores in graph}\}} \;\ge\; 0.6 .
+\end{equation}
+
+\paragraph{Insertion.}
+A somatic insertion places novel sequence between two \emph{adjacent} reference positions: its two
+flanking anchors are essentially coincident ($s < 50$) while its junction is long
+($j \ge 50$). We retype such calls to \textbf{INS} of size $\approx j - s$ \emph{before} the
+\textsc{LocalSub} test, which would otherwise absorb them (a long junction trivially satisfies
+$j \ge s/2$).
+
+\section{Evaluation protocol}
+\label{sec:eval}
+
+\paragraph{Data.}
+A human reference is mutated by insilicoSV to a truth genome and truth VCF ($125{,}830$ variants);
+HiFi reads are simulated by Badread (normal from the reference, tumour from the truth genome) at
+$\sim\!30\times$ whole-genome depth; svp is run at multiplicity floor $3$. The
+$\geq 50$\,bp benchmark set contains $485$ SVs ($240$ DEL, $78$ INS, $167$ DUP$/$INV).
+
+\paragraph{Matching.}
+We benchmark with \textsc{Truvari} (sequence comparison disabled, as our symbolic alleles carry no
+inserted sequence; breakend distance $1000$\,bp; \texttt{PASS}-only). Because the caller does not
+sub-type DUP versus INV, we relabel the truth DUP/INV records to the breakend type so that
+matching is type-consistent; deletion and insertion types are unchanged and \emph{not} matched
+across type. No leniency (no type-ignoring) is used.
+
+\paragraph{Detection accounting.}
+\label{sec:truth}
+To attribute the recall ceiling we build, per truth variant, the set of its \emph{out-only} cores
+(present in the tumour genome, absent from the reference) and test membership in (i) the read
+graph and (ii) the emitted call set. We stress a construction pitfall: reconstructing an
+insertion's cores as [reference flank]$+$[inserted sequence]$+$[reference flank] yields junction
+cores that do not match the tumour haplotype when other variants perturb the flanks, so the
+insertion appears to produce \emph{zero} somatic cores. Extracting the cores from the mutated
+genome directly removes the artefact: all sampled ``zero-core'' insertions in fact produce
+$6$--$10$ novel cores, all present in the read graph.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Ablation}
+Table~\ref{tab:ablation} adds each operation in turn. Anchoring alone gives high recall but
+catastrophic precision, because every real SV is over-called and the breakend path mis-fires on
+the dense SNPs. \textsc{LocalSub} and deduplication together lift precision from $4.3\%$ to
+$84.3\%$; geometry-driven retyping recovers deletions (and their precision) and slightly raises
+insertion handling, reaching $90.7\%$ precision at $78.4\%$ recall.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+configuration & recall & precision & $F_1$ \\
+\midrule
+anchored calls (no refinement)            & $77.1\%$ & $4.3\%$  & $0.08$ \\
+\; $+$ \textsc{LocalSub} mis-fire filter  & $75.5\%$ & $37.9\%$ & $0.51$ \\
+\; $+$ locus deduplication                & $74.2\%$ & $84.3\%$ & $0.79$ \\
+\; $+$ BND$\to$DEL retyping                & $78.4\%$ & $90.9\%$ & $0.84$ \\
+\; $+$ BND$\to$INS retyping (final)        & $78.4\%$ & $90.7\%$ & $0.84$ \\
+\bottomrule
+\end{tabular}
+\caption{Contribution of each anchoring operation at the $\geq 50$\,bp scale (\textsc{Truvari};
+$485$ truth SVs). No parameter is fitted to the truth set.}
+\label{tab:ablation}
+\end{table}
+
+\subsection{Per-class performance}
+Table~\ref{tab:perclass} gives the final per-class recall. Deletion recall reaches $90\%$;
+DUP$/$INV and insertion remain lower for reasons attributed below.
+
+\begin{table}[t]
+\centering
+\begin{tabular}{lrr}
+\toprule
+class & recalled / truth & recall \\
+\midrule
+DEL          & $216/240$ & $90.0\%$ \\
+INS          & $56/78$   & $71.8\%$ \\
+DUP$/$INV    & $108/167$ & $64.7\%$ \\
+\midrule
+all $\geq 50$\,bp & $380/485$ & $78.4\%$ \\
+\bottomrule
+\end{tabular}
+\caption{Final per-class recall (precision $90.7\%$ overall, $380$ TP / $39$ FP).}
+\label{tab:perclass}
+\end{table}
+
+\subsection{Detection versus placement}
+The residual recall gap is not a detection failure. Of the $24$ missed deletions, $18$ are
+\emph{called} (an out-only core appears in an emitted call) but cannot be placed because their
+flanking anchors are repeat-ambiguous; only $6$ are true calling misses. Of the $22$ missed
+insertions, $21$ likewise have no anchored call near their locus despite being detected in the
+graph. Deletion cores are detected at $97.2\%$ ($280/288$) and insertion cores, measured against
+tumour-genome-derived truth, at essentially $100\%$. The ceiling is therefore \emph{placement}:
+variants whose flanks fall in repeats have no unique coordinate for any reference-based anchoring
+to assign.
+
+\section{Discussion and limitations}
+
+\paragraph{Coordinates repair type, not just report it.}
+The most transferable observation is that reference geometry is an independent signal channel. The
+same anchor spacing that yields a VCF position also distinguishes a deletion (normal-only span)
+from a duplication (shared span) and a point insertion (coincident anchors, long junction) from a
+substitution (reproduced span). A coordinate-free caller cannot access these, so a modest,
+principled anchoring stage recovers accuracy that no amount of graph-only reasoning would.
+
+\paragraph{The placement wall.}
+Because anchoring relies on uniquely-locatable flanking cores, variants embedded in repeats are
+lost even when fully detected and called. Raising deletion and insertion recall past $\sim\!90\%$
+would require multi-position anchoring---retaining a repeat-ambiguous anchor's several candidate
+positions and placing a call where its anchors mutually agree---at some risk to precision. This is
+the natural next step and is left as future work.
+
+\paragraph{Sub-typing.}
+DUP versus INV is not resolved; both are reported as breakends. Distinguishing them requires the
+oriented order of the two anchors (forward for deletion, reversed for tandem duplication, opposite
+strand for inversion), which in turn requires tracking anchor strand through the dual
+forward/reverse-complement parse.
+
+\paragraph{Honest accounting.}
+Aggregate recall on this data is dominated by SNPs ($94\%$ of truth variants) and is not
+informative about SVs; per-class, size-stratified figures are the only meaningful ones. Truth
+cores for insertions must be taken from the mutated genome, or insertion detection is
+underreported---an artefact we encountered and corrected.
+
+\section{Conclusion}
+
+We localize the coordinate-free somatic calls of a reference-free SV caller onto a reference using
+only their graph-present flanking cores, and show that the recovered geometry both produces a VCF
+and repairs the caller's systematic mis-typing. On a whole-genome simulation the anchoring stage
+lifts $\geq 50$\,bp precision from $4.3\%$ to $90.7\%$ and deletion recall to $90\%$ without any
+truth-fitted parameter, and it localizes the remaining ceiling to variants in repeats that no
+reference-based method can uniquely place. Detection is not the bottleneck; placement is.
+
+\end{document}

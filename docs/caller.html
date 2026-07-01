@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>svp · the call stage</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#0f141a;--ink:#e6edf3;--mut:#8b949e;--line:#30363d;
+        --accent:#2dd4bf;--accent2:#58a6ff;--norm:#8b949e;--tum:#ffa657;--shar:#58a6ff;--warn:#f778ba}
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font:14px/1.55 ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  header{padding:14px 22px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap;position:sticky;top:0;background:#0d1117ee;backdrop-filter:blur(6px);z-index:20}
+  header h1{font-size:17px;margin:0} header .sub{color:var(--mut);font-size:12.5px}
+  nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+  nav a{color:var(--mut);text-decoration:none;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid transparent}
+  nav a:hover{color:var(--ink);border-color:var(--line);background:var(--panel)}
+  main{padding:22px;max-width:1180px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:20px}
+  .card h2{font-size:15px;margin:0 0 4px;display:flex;align-items:center;gap:9px}
+  .card h2 .tag{font:600 11px ui-monospace,monospace;padding:2px 7px;border-radius:20px;border:1px solid var(--line)}
+  .card .lead{color:var(--mut);margin:2px 0 14px;font-size:13px}
+  h3{font-size:13px;margin:16px 0 6px;color:var(--accent)}
+  p{margin:8px 0} .mut{color:var(--mut)}
+  code{font-family:ui-monospace,monospace;background:#0b0f14;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:12.5px}
+  pre{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:11px 13px;overflow:auto;font:12px/1.5 ui-monospace,monospace;margin:8px 0}
+  pre .kw{color:#ff7b72} pre .fn{color:#d2a8ff} pre .cm{color:#6e7681;font-style:italic} pre .st{color:#a5d6ff} pre .nm{color:#79c0ff}
+  details{border:1px solid var(--line);border-radius:8px;padding:0 12px;margin:8px 0;background:var(--panel2)}
+  details[open]{padding-bottom:8px} summary{cursor:pointer;padding:9px 0;font-size:12.5px;color:var(--accent2);user-select:none}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin:8px 0}
+  th,td{border-bottom:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{color:var(--mut)}
+  .pill{display:inline-block;font:600 11px ui-monospace,monospace;padding:1px 7px;border-radius:20px;border:1px solid}
+  .p-norm{color:var(--norm);border-color:var(--norm)} .p-tum{color:var(--tum);border-color:var(--tum)}
+  .p-shar{color:var(--shar);border-color:var(--shar)} .p-warn{color:var(--warn);border-color:var(--warn)}
+  .flow{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap;margin:10px 0}
+  .step{flex:1;min-width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px 12px}
+  .step .n{font:700 11px ui-monospace,monospace;color:var(--accent);letter-spacing:.5px}
+  .step h4{margin:3px 0 5px;font-size:13px} .step p{margin:0;font-size:12px;color:var(--mut)}
+  .arrow{align-self:center;color:var(--mut);font-size:18px}
+  .kgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:6px 0 2px}
+  .kpi{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .kpi .v{font-size:23px;font-weight:700} .kpi .l{font-size:11.5px;color:var(--mut)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin:4px 0 2px}
+  .legend b{font-weight:600} .dot{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+  .barrow{display:flex;align-items:center;gap:10px;margin:5px 0;font-size:12.5px}
+  .barrow .lab{width:130px;color:var(--mut)} .barrow .track{flex:1;background:#0b0f14;border-radius:5px;height:20px;overflow:hidden;border:1px solid var(--line)}
+  .barrow .fill{height:100%;display:flex;align-items:center;padding-left:7px;font:600 11px ui-monospace,monospace;color:#0d1117}
+  .note{border-left:3px solid var(--accent);padding:2px 0 2px 12px;margin:10px 0;color:var(--mut);font-size:12.5px}
+  .warnbox{border-left:3px solid var(--warn)}
+  svg text{font:11px ui-sans-serif} svg .mono{font-family:ui-monospace,monospace;font-size:10.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>svp · the <code>call</code> stage</h1>
+  <span class="sub">src/caller.cpp — reference-free somatic variant calling off the 2-colour LCP-core graph</span>
+  <nav>
+    <a href="#o">overview</a><a href="#g">graph</a><a href="#m">machinery</a>
+    <a href="#a">A · bubble</a><a href="#b">B · bnd</a><a href="#c">C · tip</a>
+    <a href="#d">dedup</a><a href="#out">output</a>
+  </nav>
+</header>
+<main>
+
+<!-- ============ OVERVIEW ============ -->
+<section id="o" class="card">
+  <h2>What <code>call</code> does <span class="tag">run_call(dir)</span></h2>
+  <div class="lead">Reads <code>refined.bin</code>, walks its topology, and writes coordinate-free somatic calls. Uses <b>only graph-intrinsic signals</b> — colour, per-node normal/tumour coverage, connectivity, and (for the first time in the pipeline) the core <b>bytes</b>. No reference, no alignment.</div>
+
+  <p><b>The one rule:</b> a somatic allele must involve at least one <span class="pill p-tum">colour&nbsp;2</span> (tumour-only) core — sequence present in the tumour reads and absent from the normal. Everything the caller emits is one of three structural shapes that a tumour-only allele can take in the graph:</p>
+
+  <div class="flow">
+    <div class="step"><div class="n">PASS A</div><h4>BUBBLE</h4><p>Two arms diverge from a node and reconverge; ≥1 arm is tumour-only → a substitution or short indel. Typed by the <b>spliced length Δ</b>.</p></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">PASS B</div><h4>BND</h4><p>A tumour-only run <b>bridges two shared anchors</b> at ~full depth — a novel adjacency with no reference counterpart → DUP / INV / large-indel / translocation breakend.</p></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">PASS C</div><h4>TIP</h4><p>A tumour-only <b>dead-end chain</b> → an insertion-end / breakend candidate.</p></div>
+  </div>
+
+  <p class="mut" style="font-size:12.5px">Passes run <b>in this order</b>, and each marks the nodes it uses in a <code>consumed[]</code> array so a later pass can't re-call them (bubbles win over breakends over tips). A <code>seen</code> set of canonical haplotype hashes collapses the forward / reverse-complement copy of every event. The caller is <b>high-recall by design</b> — it emits every qualifying structure and defers false-positive control to the downstream anchor stage.</p>
+
+  <div class="kgrid" id="kpis"></div>
+  <p class="mut" style="font-size:11.5px;margin-top:8px">Counts: <code>hard</code> whole-genome sim, mm=3, no blacklist (<code>outputs/svp/wgs_mm3</code>). <code>CALL_MINSUP=3</code>, <code>SNP_EPS=2</code>, <code>CALL_JMAX=12</code>, <code>CALL_DEPTH_FRAC=0.30</code>.</p>
+</section>
+
+<!-- ============ GRAPH ============ -->
+<section id="g" class="card">
+  <h2>The graph it reads</h2>
+  <div class="lead">Loaded from <code>refined.bin</code> into a CSR adjacency (<code>out_off/out_nbr</code>, <code>in_off/in_nbr</code>) plus per-node arrays. <code>live_out[v]</code>/<code>live_in[v]</code> = out/in degree.</div>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--norm)"></span><b>colour 1</b> — normal-only</span>
+    <span><span class="dot" style="background:var(--tum)"></span><b>colour 2</b> — tumour-only (candidate somatic)</span>
+    <span><span class="dot" style="background:var(--shar)"></span><b>colour 3</b> — shared (reference-present anchor)</span>
+  </div>
+  <table>
+    <tr><th>field</th><th>meaning · how the caller uses it</th></tr>
+    <tr><td><code>color[v]</code></td><td>1 / 2 / 3 — the whole call logic keys off this</td></tr>
+    <tr><td><code>ncov[v] tcov[v]</code></td><td>normal / tumour read depth — support (<code>MINSUP</code>), VAF, and the BND full-depth gate</td></tr>
+    <tr><td><code>seqlen[v] payload</code></td><td>core length + inline core <b>bytes</b> — spliced by KMP overlap to measure indel size &amp; emit alleles</td></tr>
+    <tr><td>adjacency</td><td>bubble / bridge / tip topology</td></tr>
+  </table>
+  <p class="note">This is the first stage to actually read the core <b>bytes</b> (via <code>sp()</code>/<code>splice()</code>). <code>graph</code> and <code>refine</code> only ever hashed them to a sig or carried them as opaque payload.</p>
+</section>
+
+<!-- ============ MACHINERY ============ -->
+<section id="m" class="card">
+  <h2>Shared machinery</h2>
+  <div class="lead">Five helpers do the heavy lifting; the three passes are thin wrappers that call them.</div>
+
+  <h3><code>trace_arm(g, start, arm)</code> — walk one bubble arm to its sink</h3>
+  <p class="mut">From <code>start</code>, follow the unique linear chain (out-degree 1, next node in-degree 1) collecting nodes into <code>arm</code>, until a node with <b>in-degree ≥ 2</b> is reached — that's the reconvergence sink <code>T</code>. Returns <code>T</code>, or <code>UINT32_MAX</code> if the chain branches or dead-ends (not a clean arm).</p>
+  <details><summary>code</summary><pre><span class="kw">uint32_t</span> <span class="fn">trace_arm</span>(<span class="kw">const</span> G&g,<span class="kw">uint32_t</span> start,std::vector&lt;<span class="kw">uint32_t</span>&gt;&amp;arm){
+  arm.clear(); <span class="kw">uint32_t</span> cur=start;
+  <span class="kw">for</span>(<span class="kw">int</span> s=<span class="nm">0</span>;s&lt;<span class="nm">1000000</span>;s++){ arm.push_back(cur);
+    <span class="kw">if</span>(g.live_out[cur]!=<span class="nm">1</span>) <span class="kw">return</span> UINT32_MAX; <span class="kw">uint32_t</span> nxt=<span class="fn">one_out</span>(g,cur);
+    <span class="kw">if</span>(g.live_in[nxt]&gt;=<span class="nm">2</span>) <span class="kw">return</span> nxt; <span class="kw">if</span>(g.live_in[nxt]!=<span class="nm">1</span>) <span class="kw">return</span> UINT32_MAX; cur=nxt; }
+  <span class="kw">return</span> UINT32_MAX; }</pre></details>
+
+  <h3><code>reach_shared(g, consumed, seed, dir, jmax, run, mintc)</code> — trace to a real anchor</h3>
+  <p class="mut">From a colour-2 <code>seed</code>, step <code>dir</code> (−1 via in-edges, +1 via out-edges) always taking the <b>highest-<code>tcov</code></b> neighbour. If that neighbour is <span class="pill p-shar">shared</span> → return it (the anchor). If it's another unconsumed <span class="pill p-tum">tumour-only</span> core → append to <code>run</code>, track the min tumour depth, continue. Give up after <code>jmax</code> steps. This is what threads a breakend through the repeat tangle to the nearest real locus on each side.</p>
+  <details><summary>code</summary><pre><span class="kw">uint32_t</span> <span class="fn">reach_shared</span>(...,<span class="kw">uint32_t</span> seed,<span class="kw">int</span> dir,<span class="kw">int</span> jmax,...){
+  <span class="kw">uint32_t</span> cur=seed;
+  <span class="kw">for</span>(<span class="kw">int</span> s=<span class="nm">0</span>;s&lt;jmax;s++){
+    <span class="cm">// scan neighbours in `dir`; pick best shared (bs) and best tumour-only (bt) by tcov</span>
+    <span class="kw">if</span>(bs!=UINT32_MAX) <span class="kw">return</span> bs;          <span class="cm">// reached a shared (real) anchor</span>
+    <span class="kw">if</span>(bt==UINT32_MAX) <span class="kw">return</span> UINT32_MAX;  <span class="cm">// no tumour continuation -> not a clean bridge</span>
+    run.push_back(bt); mintc=std::min(mintc,g.tcov[bt]); cur=bt; }
+  <span class="kw">return</span> UINT32_MAX; }</pre></details>
+
+  <h3><code>sp()</code> + <code>splice()</code> + <code>arm_pathlen()</code> — turn a node path into a length / sequence</h3>
+  <p class="mut"><code>sp(A,B)</code> is a KMP match returning the longest suffix of A that is a prefix of B — i.e. the <b>exact overlap</b> of two adjacent cores (~85 bp at L5, but computed per-pair from the bytes). <code>splice()</code> concatenates a node path minus those overlaps → the allele sequence. <code>arm_pathlen()</code> sums <code>seqlen − overlap</code> along a path → its true spliced length. The signed difference of the two arms' path-lengths is the variant's size.</p>
+  <details><summary>code</summary><pre><span class="kw">uint32_t</span> <span class="fn">sp</span>(<span class="kw">const uint8_t</span>*A,<span class="kw">uint32_t</span> la,<span class="kw">const uint8_t</span>*B,<span class="kw">uint32_t</span> lb){ <span class="cm">/* KMP: longest suffix(A)==prefix(B) */</span> }
+
+<span class="kw">long</span> <span class="fn">arm_pathlen</span>(<span class="kw">const</span> G&g,<span class="kw">uint32_t</span> S,<span class="kw">const</span> std::vector&lt;<span class="kw">uint32_t</span>&gt;&amp;arm,<span class="kw">uint32_t</span> T){
+  <span class="kw">long</span> L=<span class="nm">0</span>; <span class="kw">uint32_t</span> prev=S;
+  <span class="kw">for</span>(<span class="kw">uint32_t</span> c:arm){ <span class="kw">uint32_t</span> ov=<span class="fn">sp</span>(<span class="fn">P</span>(g,prev),g.seqlen[prev],<span class="fn">P</span>(g,c),g.seqlen[c]); L+=(<span class="kw">long</span>)g.seqlen[c]-ov; prev=c; }
+  <span class="kw">uint32_t</span> ov=<span class="fn">sp</span>(<span class="fn">P</span>(g,prev),g.seqlen[prev],<span class="fn">P</span>(g,T),g.seqlen[T]); L+=(<span class="kw">long</span>)g.seqlen[T]-ov; <span class="kw">return</span> L; }</pre></details>
+
+  <h3><code>canon_key(s)</code> — forward / reverse-complement dedup</h3>
+  <p class="mut">Because every locus is parsed on both strands, each real event surfaces twice. <code>canon_key</code> hashes <code>min(s, revcomp(s))</code> so the two copies collapse to one <code>seen</code> entry.</p>
+</section>
+
+<!-- ============ PASS A ============ -->
+<section id="a" class="card">
+  <h2><span class="pill p-tum" style="border-color:var(--accent)">PASS A</span> BUBBLE → SNP / INS / DEL</h2>
+  <div class="lead">A node with ≥2 successors whose arms reconverge at one sink. If a tumour arm exists, it's the alt allele; the other arm is the reference allele.</div>
+
+  <svg viewBox="0 0 720 190" width="100%" style="max-width:720px">
+    <defs><marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8b949e"/></marker></defs>
+    <!-- source -->
+    <circle cx="70" cy="95" r="16" fill="#58a6ff"/><text x="70" y="99" text-anchor="middle" fill="#0d1117" font-weight="700">S</text>
+    <text x="70" y="135" text-anchor="middle" class="mut" fill="#8b949e">source</text>
+    <!-- alt arm (tumour) top -->
+    <line x1="86" y1="88" x2="120" y2="52" stroke="#8b949e" marker-end="url(#ah)"/>
+    <circle cx="150" cy="45" r="12" fill="#ffa657"/><circle cx="200" cy="45" r="12" fill="#ffa657"/><circle cx="250" cy="45" r="12" fill="#ffa657"/>
+    <line x1="162" y1="45" x2="188" y2="45" stroke="#8b949e" marker-end="url(#ah)"/><line x1="212" y1="45" x2="238" y2="45" stroke="#8b949e" marker-end="url(#ah)"/>
+    <text x="200" y="24" text-anchor="middle" fill="#ffa657">alt arm — tumour-only (colour 2)</text>
+    <!-- ref arm (normal/shared) bottom -->
+    <line x1="86" y1="102" x2="120" y2="138" stroke="#8b949e" marker-end="url(#ah)"/>
+    <circle cx="150" cy="145" r="12" fill="#8b949e"/><circle cx="205" cy="145" r="12" fill="#8b949e"/>
+    <line x1="162" y1="145" x2="193" y2="145" stroke="#8b949e" marker-end="url(#ah)"/>
+    <text x="185" y="176" text-anchor="middle" fill="#8b949e">ref arm — other colour (N / S / T)</text>
+    <!-- sink -->
+    <line x1="262" y1="45" x2="470" y2="88" stroke="#8b949e" marker-end="url(#ah)"/>
+    <line x1="217" y1="145" x2="470" y2="102" stroke="#8b949e" marker-end="url(#ah)"/>
+    <circle cx="490" cy="95" r="16" fill="#58a6ff"/><text x="490" y="99" text-anchor="middle" fill="#0d1117" font-weight="700">T</text>
+    <text x="490" y="135" text-anchor="middle" class="mut" fill="#8b949e">sink</text>
+    <!-- delta -->
+    <text x="605" y="80" text-anchor="middle" class="mono" fill="#e6edf3">Δ = len(alt) − len(ref)</text>
+    <text x="605" y="100" text-anchor="middle" class="mono" fill="#8b949e">|Δ|≤2 → SNP</text>
+    <text x="605" y="116" text-anchor="middle" class="mono" fill="#8b949e">Δ&gt;0 → INS · Δ&lt;0 → DEL</text>
+  </svg>
+
+  <h3>Decision flow (for every ordered pair of a node's successor arms)</h3>
+  <div class="flow">
+    <div class="step"><div class="n">1</div><h4>two clean arms, same sink</h4><p><code>trace_arm</code> both successors; require <code>T1 == T2</code>.</p></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">2</div><h4>≥1 tumour arm</h4><p><code>arm_color</code> = majority colour. Need <code>nt = (c1==2)+(c2==2) ≥ 1</code>, else 0 variants → skip.</p></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">3</div><h4>enough support</h4><p><code>arm_min_tcov(alt) ≥ MINSUP</code> (3).</p></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">4</div><h4>type by Δ</h4><p>spliced <code>len(alt) − len(ref)</code> → SNP / INS / DEL + size.</p></div>
+  </div>
+
+  <h3>Sub-type = the colour of the reference arm</h3>
+  <table>
+    <tr><th>sub-type</th><th>ref-arm colour</th><th>reading</th><th>count</th></tr>
+    <tr><td><span class="pill p-tum">T/N</span></td><td><span class="pill p-norm">normal-only</span></td><td>the clean somatic channel — tumour allele vs the germline allele</td><td class="mono">224,331</td></tr>
+    <tr><td><span class="pill p-tum">T/S</span></td><td><span class="pill p-shar">shared</span></td><td>tumour allele vs a shared arm — enriched for junction spurs &amp; error</td><td class="mono">38,352</td></tr>
+    <tr><td><span class="pill p-tum">T/T</span></td><td><span class="pill p-tum">tumour-only</span></td><td>both arms tumour-only (two somatic alleles)</td><td class="mono">268</td></tr>
+  </table>
+
+  <h3>Typing &amp; emission</h3>
+  <pre><span class="kw">long</span> d = <span class="fn">arm_pathlen</span>(g,s,*alt,T1) - <span class="fn">arm_pathlen</span>(g,s,*ref,T1);         <span class="cm">// signed spliced Δ</span>
+<span class="kw">if</span>(std::labs(d)&lt;=SNP_EPS){ ty=<span class="st">"SNP"</span>; size=<span class="nm">1</span>; }
+<span class="kw">else if</span>(d&gt;<span class="nm">0</span>){ ty=<span class="st">"INS"</span>; size=d; }
+<span class="kw">else</span>{ ty=<span class="st">"DEL"</span>; size=-d; }
+vaf = arm_mean_tcov(alt) / min(tcov[s], tcov[T1]);                <span class="cm">// tumour VAF estimate</span>
+<span class="fn">emit_sigs</span>(id, g, *alt);  <span class="cm">// write the alt-arm core sigs -> calls.altsigs.bin</span></pre>
+  <p class="mut" style="font-size:12px">Both arms are marked <code>consumed</code>; the canonical haplotype <code>splice(S · alt · T1)</code> is checked against <code>seen</code> so the RC copy is dropped. <b>262,951</b> bubble calls (of 263,646 raw, pre-dedup).</p>
+</section>
+
+<!-- ============ PASS B ============ -->
+<section id="b" class="card">
+  <h2><span class="pill p-shar" style="border-color:var(--accent)">PASS B</span> BND → DUP / INV / large-indel / translocation</h2>
+  <div class="lead">A large rearrangement doesn't form a clean bubble — it's a <b>novel adjacency</b>: a stretch of tumour-only sequence that joins two places in the reference that were never adjacent. The caller finds it by bridging two shared anchors through a tumour-only run.</div>
+
+  <svg viewBox="0 0 720 150" width="100%" style="max-width:720px">
+    <defs><marker id="ah2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8b949e"/></marker></defs>
+    <circle cx="60" cy="75" r="17" fill="#58a6ff"/><text x="60" y="79" text-anchor="middle" fill="#0d1117" font-weight="700">L</text>
+    <text x="60" y="112" text-anchor="middle" fill="#58a6ff">shared anchor</text>
+    <text x="60" y="128" text-anchor="middle" class="mut" fill="#8b949e" font-size="10">reach_shared(dir=−1)</text>
+    <!-- tumour run -->
+    <line x1="78" y1="75" x2="150" y2="75" stroke="#8b949e" marker-end="url(#ah2)"/>
+    <circle cx="180" cy="75" r="13" fill="#ffa657"/><circle cx="245" cy="75" r="13" fill="#ffa657" stroke="#e6edf3" stroke-width="2"/><circle cx="310" cy="75" r="13" fill="#ffa657"/>
+    <line x1="193" y1="75" x2="232" y2="75" stroke="#8b949e" marker-end="url(#ah2)"/><line x1="258" y1="75" x2="297" y2="75" stroke="#8b949e" marker-end="url(#ah2)"/>
+    <text x="245" y="45" text-anchor="middle" fill="#ffa657">tumour-only run (the seed = white ring)</text>
+    <text x="245" y="60" text-anchor="middle" class="mut" fill="#8b949e" font-size="10">min tumour depth must be ≥ 30% of the anchor depth</text>
+    <line x1="323" y1="75" x2="400" y2="75" stroke="#8b949e" marker-end="url(#ah2)"/>
+    <circle cx="430" cy="75" r="17" fill="#58a6ff"/><text x="430" y="79" text-anchor="middle" fill="#0d1117" font-weight="700">R</text>
+    <text x="430" y="112" text-anchor="middle" fill="#58a6ff">shared anchor</text>
+    <text x="430" y="128" text-anchor="middle" class="mut" fill="#8b949e" font-size="10">reach_shared(dir=+1)</text>
+    <text x="600" y="66" text-anchor="middle" class="mono" fill="#e6edf3">jrun = rev(up) · v · dn</text>
+    <text x="600" y="86" text-anchor="middle" class="mono" fill="#8b949e">|jrun| ≤ JMAX (12)</text>
+  </svg>
+
+  <h3>Decision flow (for each unconsumed colour-2 seed <code>v</code> with <code>tcov ≥ MINSUP</code>)</h3>
+  <div class="flow">
+    <div class="step"><div class="n">1</div><h4>reach both anchors</h4><p><code>reach_shared(−1)</code> → L, <code>reach_shared(+1)</code> → R. Both must land on shared cores, else skip.</p></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">2</div><h4>full-depth junction</h4><p>min tumour depth of the run <code>≥ DEPTH_FRAC · min(tcov[L],tcov[R])</code> — rejects low-cov error spurs.</p></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">3</div><h4>not too long, unconsumed</h4><p><code>|jrun| ≤ JMAX</code>; none of its nodes already used.</p></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">4</div><h4>emit breakend</h4><p><code>BND</code>, or <code>BND_CNgain</code> if anchor <code>tcov/ncov ≥ 1.5</code> (copy-number gain).</p></div>
+  </div>
+  <pre><span class="kw">uint32_t</span> L=<span class="fn">reach_shared</span>(g,consumed,v,<span class="nm">-1</span>,JMAX,up,mintc);
+<span class="kw">uint32_t</span> R=<span class="fn">reach_shared</span>(g,consumed,v,<span class="nm">+1</span>,JMAX,dn,mintc);
+<span class="kw">if</span>(L==UINT32_MAX||R==UINT32_MAX) <span class="kw">continue</span>;                 <span class="cm">// not a clean two-anchor bridge</span>
+<span class="kw">uint32_t</span> anc=std::min(g.tcov[L],g.tcov[R]);
+<span class="kw">if</span>((<span class="kw">double</span>)mintc &lt; DEPTH_FRAC*anc) <span class="kw">continue</span>;             <span class="cm">// junction must run at ~full tumour depth</span>
+<span class="fn">emit_sigs</span>(id,g,jrun);  <span class="cm">// the whole tumour run's sigs</span></pre>
+  <p class="mut" style="font-size:12px">Works <b>inside the repeat tangle</b> — no degree-1 requirement — which is why it recovers rearrangements that never linearise into a bubble. <b>19,676</b> BND calls. (The caller does <b>not</b> sub-type DUP vs INV — that's left to the anchor geometry.)</p>
+</section>
+
+<!-- ============ PASS C ============ -->
+<section id="c" class="card">
+  <h2><span class="pill p-warn" style="border-color:var(--accent)">PASS C</span> TIP → insertion-end / breakend candidate</h2>
+  <div class="lead">A tumour-only chain that hangs off the graph with a free end — one side dead, the other reaching a junction.</div>
+  <svg viewBox="0 0 560 110" width="100%" style="max-width:560px">
+    <defs><marker id="ah3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8b949e"/></marker></defs>
+    <circle cx="55" cy="55" r="16" fill="#58a6ff"/><text x="55" y="59" text-anchor="middle" fill="#0d1117" font-weight="700">J</text>
+    <text x="55" y="90" text-anchor="middle" fill="#58a6ff" font-size="11">junction</text>
+    <line x1="71" y1="55" x2="120" y2="55" stroke="#8b949e" marker-end="url(#ah3)"/>
+    <circle cx="150" cy="55" r="12" fill="#ffa657"/><circle cx="210" cy="55" r="12" fill="#ffa657"/><circle cx="270" cy="55" r="12" fill="#ffa657"/>
+    <line x1="162" y1="55" x2="198" y2="55" stroke="#8b949e" marker-end="url(#ah3)"/><line x1="222" y1="55" x2="258" y2="55" stroke="#8b949e" marker-end="url(#ah3)"/>
+    <text x="300" y="59" fill="#8b949e" font-size="20">✕</text>
+    <text x="210" y="30" text-anchor="middle" fill="#ffa657">tumour-only tip (dead-ends, ≤16 cores)</text>
+  </svg>
+  <p class="mut"><code>trace_tip</code> walks the chain until a junction; require <b>all cores colour-2</b>, <code>tcov ≥ MINSUP</code>, length ≤ 16, none consumed. Emits the tip sequence as an insertion-end candidate. <b>12,113</b> TIP calls — the noisiest source (many are unresolved error ends), which is why the downstream anchor stage filters them hardest.</p>
+</section>
+
+<!-- ============ DEDUP ============ -->
+<section id="d" class="card">
+  <h2>Ordering, <code>consumed[]</code> &amp; dedup</h2>
+  <div class="lead">Three global structures keep the passes from stepping on each other.</div>
+  <table>
+    <tr><th>mechanism</th><th>effect</th></tr>
+    <tr><td><code>consumed[K]</code></td><td>every node a call uses is marked; later passes skip consumed nodes. Order = <b>BUBBLE → BND → TIP</b>, so the most specific shape wins a contested node.</td></tr>
+    <tr><td><code>seen</code> (hash set)</td><td>keyed by <code>canon_key(spliced haplotype)</code> — collapses the forward and reverse-complement copy of the same event.</td></tr>
+    <tr><td>colour gate</td><td>every emitted structure must contain a colour-2 core (no purely N/S/shared calls — those carry no somatic allele).</td></tr>
+  </table>
+  <p class="note warnbox">The caller optimises for <b>recall, not precision</b>: it deliberately emits marginal T/S bubbles, low-anchor breakends, and every qualifying tip. Distinguishing real from false — and giving each call a genome coordinate — is the job of <code>anchor.cpp</code>, the next stage.</p>
+</section>
+
+<!-- ============ OUTPUT ============ -->
+<section id="out" class="card">
+  <h2>Output</h2>
+  <div class="lead">Two files under the work dir, both keyed by a running <code>call_id</code>.</div>
+  <table>
+    <tr><th>file</th><th>contents</th></tr>
+    <tr><td><code>calls.tsv</code></td><td>one row per call: <code>source, subtype, type, size, alt_tcov, anchor_tcov/ncov, vaf, alt_len, ref_len, delta, lflank, alt_seq, ref_seq, rflank</code></td></tr>
+    <tr><td><code>calls.altsigs.bin</code></td><td>per call: <code>u64 id, u32 nsig, u64 sig[]</code> — the <b>alt-allele core sigs</b>, the handle the anchor and the scorer use</td></tr>
+  </table>
+  <h3>Call breakdown (<code>hard</code> WG, mm=3)</h3>
+  <div id="bars"></div>
+  <p class="mut" style="font-size:12px;margin-top:12px">These are <b>coordinate-free</b> — sets of cores, no genome position. <code>anchor.cpp</code> then maps each call's reference-present flanking cores onto <code>ref.fasta</code>, brackets the breakpoint, filters SNP-misfires, dedups, and re-types via geometry to produce the VCF.</p>
+</section>
+
+</main>
+<script>
+const DATA = {
+  kpis:[
+    {v:"294,740", l:"total calls"},
+    {v:"262,951", l:"BUBBLE (SNP/INS/DEL)"},
+    {v:"19,676",  l:"BND (DUP/INV/large)"},
+    {v:"12,113",  l:"TIP"}
+  ],
+  bars:[
+    {lab:"BUBBLE · T/N", v:224331, c:"#ffa657"},
+    {lab:"BUBBLE · T/S", v:38352,  c:"#d29a5e"},
+    {lab:"BND",          v:19676,  c:"#58a6ff"},
+    {lab:"TIP",          v:12113,  c:"#f778ba"},
+    {lab:"BUBBLE · T/T", v:268,    c:"#8b949e"}
+  ]
+};
+const kg=document.getElementById('kpis');
+DATA.kpis.forEach(k=>{const d=document.createElement('div');d.className='kpi';d.innerHTML=`<div class="v">${k.v}</div><div class="l">${k.l}</div>`;kg.appendChild(d);});
+const mx=Math.max(...DATA.bars.map(b=>b.v)), bh=document.getElementById('bars');
+DATA.bars.forEach(b=>{const w=Math.max(4,100*b.v/mx);
+  const r=document.createElement('div');r.className='barrow';
+  r.innerHTML=`<div class="lab">${b.lab}</div><div class="track"><div class="fill" style="width:${w}%;background:${b.c}">${b.v.toLocaleString()}</div></div>`;
+  bh.appendChild(r);});
+</script>
+</body>
+</html>

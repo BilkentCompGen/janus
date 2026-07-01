@@ -12,6 +12,16 @@ extern "C" void extract(const char* str, int len, uint64_t offset, int target_le
                              const uint64_t** ends_out, const uint64_t** sigs_out);
 uint64_t core_sig(const char* key, int len);
 
+// Repeat-core blacklist (opt-in SVP_BLACKLIST), shared by graph.cpp (build) and anchor.cpp (reference
+// parse) so BOTH apply the identical (A+X)->(X+B) merge -- mandatory, or merged reference cores will
+// not match the graph's merged nodes. Defined in blacklist.cpp.
+void load_blacklist(const char* path);
+bool blacklist_on();
+uint64_t blacklist_dropped();
+void blacklist_merge(const uint64_t* st, const uint64_t* en, const uint64_t* sig,
+                     const std::vector<int>& keep, uint64_t len_cap,
+                     std::vector<std::pair<uint32_t, uint32_t>>& out);
+
 // Shared graph-stage structs (survivor record + directed node-id edge), hoisted from
 // graph.cpp's anon namespace so other stages can read graph.bin without duplication.
 struct SigCount { uint64_t sig; uint32_t n, t; };

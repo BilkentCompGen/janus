@@ -18,3 +18,6 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
 void run_refine(const std::string& dir);
 // Somatic variant calling over the refined core graph -> dir/calls.* (caller.cpp).
 void run_call(const std::string& dir);
+// Coordinate-reporting: map the reference-free calls onto ref.fasta (a coordinate ORACLE, never
+// the tumor/normal assemblies) -> dir/calls.vcf (anchor.cpp). Explicit/opt-in; not part of `run`.
+void run_anchor(const std::string& dir, const std::string& ref);
