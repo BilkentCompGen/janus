@@ -33,6 +33,7 @@ MODEL=pacbio2021
 LENGTH="15000,4000"
 INPUT=""
 OUTDIR=""
+FORMAT=fastq          # fastq -> one hifi.fastq.gz (default, unchanged); svb -> 2-bit shard.<i>.svb dir
 while [ $# -gt 0 ]; do
   case "$1" in
     -i) INPUT="$2"; shift 2;;
@@ -40,9 +41,13 @@ while [ $# -gt 0 ]; do
     -d) DEPTH="$2"; shift 2;;
     -t) THREADS="$2"; shift 2;;
     -s) SEED="$2"; shift 2;;
+    -f) FORMAT="$2"; shift 2;;
     *) echo "[badread] unknown arg: $1" >&2; exit 2;;
   esac
 done
+[ "$FORMAT" = fastq ] || [ "$FORMAT" = svb ] || { echo "[badread] -f must be fastq|svb" >&2; exit 2; }
+SVB_PACK="$ROOT/tools/svb_pack"
+[ "$FORMAT" != svb ] || [ -x "$SVB_PACK" ] || { echo "[badread] svb_pack missing: $SVB_PACK (run 'bash tools/build_svb.sh')" >&2; exit 2; }
 [ -n "$INPUT" ] && [ -n "$OUTDIR" ] || { echo "[badread] need -i <genome.fa> and -o <out_dir>" >&2; exit 2; }
 [ -f "$INPUT" ] || { echo "[badread] input not found: $INPUT" >&2; exit 2; }
 [ -x "$BADREAD" ] || { echo "[badread] badread missing: $BADREAD (run 'make install-deps')" >&2; exit 2; }
@@ -89,12 +94,16 @@ for i in $(seq 0 $((THREADS-1))); do
   [ -s "$REGIONS" ] || continue
   (
     "$SAMTOOLS" faidx "$INPUT" $(cat "$REGIONS") > "$WORK/shard.$i.fa"
+    # svb: pack Badread's FASTQ straight to a 2-bit shard (no gzip, no FASTQ on disk).
+    # fastq: the original gzip sink. sink chosen by FORMAT.
+    if [ "$FORMAT" = svb ]; then SINK=("$SVB_PACK" "$OUTDIR/shard.$i.svb"); else SINK=(gzip); fi
     "$BADREAD" simulate --reference "$WORK/shard.$i.fa" --quantity "${DEPTH}x" \
       --error_model "$MODEL" --qscore_model "$MODEL" \
       --identity "$IDENTITY" --length "$LENGTH" \
       --junk_reads 0 --random_reads 0 --chimeras 0 --glitches 0,0,0 \
       --start_adapter 0,0 --end_adapter 0,0 --seed $((SEED+i)) \
-      2> "$WORK/shard.$i.log" | gzip > "$WORK/shard.$i.fastq.gz"
+      2> "$WORK/shard.$i.log" | "${SINK[@]}" > "$WORK/shard.$i.out" 2>> "$WORK/shard.$i.log"
+    if [ "$FORMAT" != svb ]; then mv -f "$WORK/shard.$i.out" "$WORK/shard.$i.fastq.gz"; else rm -f "$WORK/shard.$i.out"; fi
     rm -f "$WORK/shard.$i.fa"
   ) &
   pids+=("$!")
@@ -104,12 +113,28 @@ for p in "${pids[@]}"; do wait "$p" || fail=1; done
 [ "$fail" -eq 0 ] || { echo "[badread] a shard failed — see $WORK/shard.*.log" >&2; exit 4; }
 echo "[badread] simulation done in $((SECONDS-t0))s"
 
-# concatenate shard fastqs (gzip members concat -> valid gz stream)
-cat "$WORK"/shard.*.fastq.gz > "$OUTDIR/hifi.fastq.gz.tmp"
-mv -f "$OUTDIR/hifi.fastq.gz.tmp" "$OUTDIR/hifi.fastq.gz"
-rm -f "$WORK"/shard.*.fastq.gz "$WORK"/shard.*.regions
-
 GLEN=$(awk '{b+=$2} END{print b}' "$INPUT.fai")
-read -r RN RBP < <(zcat "$OUTDIR/hifi.fastq.gz" | awk 'NR%4==2{n++; t+=length($0)} END{print n, t}')
-echo "[badread] reads=$RN read_bases=$RBP genome=$GLEN coverage=$(awk "BEGIN{printf \"%.2f\",$RBP/$GLEN}")x"
-echo "[badread] wrote $OUTDIR/hifi.fastq.gz ($(du -h "$OUTDIR/hifi.fastq.gz" | cut -f1))"
+if [ "$FORMAT" = svb ]; then
+  # shards ARE the output ($OUTDIR/shard.<i>.svb); no concat. svp reads the dir in parallel.
+  rm -f "$WORK"/shard.*.regions
+  read -r RN RBP < <(python3 - "$OUTDIR" <<'PY'
+import sys, glob, struct
+n=t=0
+for f in sorted(glob.glob(sys.argv[1]+"/shard.*.svb")):
+    h=open(f,'rb').read(32); assert h[:4]==b'SVB1', f
+    nr,tb=struct.unpack_from('<QQ',h,8); n+=nr; t+=tb
+print(n, t)
+PY
+)
+  echo "[badread] reads=$RN read_bases=$RBP genome=$GLEN coverage=$(awk "BEGIN{printf \"%.2f\",$RBP/$GLEN}")x"
+  echo "[badread] wrote $(ls "$OUTDIR"/shard.*.svb | wc -l) svb shards to $OUTDIR ($(du -sh "$OUTDIR" | cut -f1))"
+  printf 'reads=%s read_bases=%s coverage=%.2fx shards=%s\n' "$RN" "$RBP" "$(awk "BEGIN{printf \"%.2f\",$RBP/$GLEN}")" "$(ls "$OUTDIR"/shard.*.svb | wc -l)" > "$OUTDIR/svb.done"
+else
+  # concatenate shard fastqs (gzip members concat -> valid gz stream)
+  cat "$WORK"/shard.*.fastq.gz > "$OUTDIR/hifi.fastq.gz.tmp"
+  mv -f "$OUTDIR/hifi.fastq.gz.tmp" "$OUTDIR/hifi.fastq.gz"
+  rm -f "$WORK"/shard.*.fastq.gz "$WORK"/shard.*.regions
+  read -r RN RBP < <(zcat "$OUTDIR/hifi.fastq.gz" | awk 'NR%4==2{n++; t+=length($0)} END{print n, t}')
+  echo "[badread] reads=$RN read_bases=$RBP genome=$GLEN coverage=$(awk "BEGIN{printf \"%.2f\",$RBP/$GLEN}")x"
+  echo "[badread] wrote $OUTDIR/hifi.fastq.gz ($(du -h "$OUTDIR/hifi.fastq.gz" | cut -f1))"
+fi

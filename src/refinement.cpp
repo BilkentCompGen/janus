@@ -28,12 +28,9 @@ namespace {
 
 struct Graph {
     uint64_t K = 0;
-    std::vector<uint8_t>  color;
+    std::vector<uint64_t> sig;                        // murmur node identity: carried through unchanged, never read by a pass
     std::vector<uint32_t> ncov, tcov, cnt;            // cnt = ncov + tcov
-    std::vector<uint16_t> seqlen;
-    std::vector<uint8_t>  payload;
-    std::vector<uint64_t> seq_off;
-    std::vector<IEdge>    edges;
+    std::vector<CEdge>    edges;                       // directed src->dst with per-colour traversal counts
     // CSR adjacency (static, built once) + live degrees (decremented as nodes die)
     std::vector<uint32_t> out_off, out_nbr, in_off, in_nbr;
     std::vector<uint32_t> live_out, live_in;
@@ -46,31 +43,27 @@ int    envi(const char* k, int d)    { const char* v = std::getenv(k); return v 
 void load(const std::string& path, Graph& g) {
     FILE* f = xopen(path, "rb");
     rd(f, &g.K, 8); const uint64_t K = g.K;
-    g.color.resize(K);  rd(f, g.color.data(), K);
+    g.sig.resize(K);    rd(f, g.sig.data(), K * 8);
     g.ncov.resize(K);   rd(f, g.ncov.data(), K * 4);
     g.tcov.resize(K);   rd(f, g.tcov.data(), K * 4);
     uint64_t E; rd(f, &E, 8);
-    g.edges.resize(E);  rd(f, g.edges.data(), E * sizeof(IEdge));
-    uint64_t total; rd(f, &total, 8);
-    g.seqlen.resize(K); rd(f, g.seqlen.data(), K * 2);
-    g.payload.resize(total); rd(f, g.payload.data(), total);
+    g.edges.resize(E);  rd(f, g.edges.data(), E * sizeof(CEdge));
     std::fclose(f);
-    g.seq_off.assign(K + 1, 0);
-    for (uint64_t i = 0; i < K; i++) g.seq_off[i + 1] = g.seq_off[i] + g.seqlen[i];
     g.cnt.resize(K);
     for (uint64_t i = 0; i < K; i++) g.cnt[i] = g.ncov[i] + g.tcov[i];
-    std::fprintf(stderr, "[refine] loaded K=%lu E=%lu payload=%.1fGB\n", (unsigned long)K, (unsigned long)E, total / 1e9);
+    std::fprintf(stderr, "[refine] loaded K=%lu E=%lu (v3: sig + edge counts, no payload)\n", (unsigned long)K, (unsigned long)E);
 }
 
-// CSR for out- and in-adjacency from the directed edge list.
+// CSR for out- and in-adjacency from the directed edge list (endpoints only; per-edge counts stay
+// in g.edges and are carried straight through to the output -- the passes judge nodes, not edges).
 void build_adj(Graph& g) {
     const uint64_t K = g.K, E = g.edges.size();
     g.out_off.assign(K + 1, 0); g.in_off.assign(K + 1, 0);
-    for (const IEdge& e : g.edges) { g.out_off[e.first + 1]++; g.in_off[e.second + 1]++; }
+    for (const CEdge& e : g.edges) { g.out_off[e.src + 1]++; g.in_off[e.dst + 1]++; }
     for (uint64_t i = 0; i < K; i++) { g.out_off[i + 1] += g.out_off[i]; g.in_off[i + 1] += g.in_off[i]; }
     g.out_nbr.resize(E); g.in_nbr.resize(E);
     std::vector<uint32_t> oc(g.out_off.begin(), g.out_off.end() - 1), ic(g.in_off.begin(), g.in_off.end() - 1);
-    for (const IEdge& e : g.edges) { g.out_nbr[oc[e.first]++] = e.second; g.in_nbr[ic[e.second]++] = e.first; }
+    for (const CEdge& e : g.edges) { g.out_nbr[oc[e.src]++] = e.dst; g.in_nbr[ic[e.dst]++] = e.src; }
     g.live_out.resize(K); g.live_in.resize(K);
     for (uint64_t i = 0; i < K; i++) { g.live_out[i] = g.out_off[i + 1] - g.out_off[i]; g.live_in[i] = g.in_off[i + 1] - g.in_off[i]; }
     g.dead.assign(K, 0);
@@ -90,6 +83,24 @@ inline uint32_t max_out_cnt_except(const Graph& g, uint32_t j, uint32_t except) 
 }
 inline uint32_t max_in_cnt_except(const Graph& g, uint32_t j, uint32_t except) {
     uint32_t m = 0; for (uint32_t k = g.in_off[j]; k < g.in_off[j+1]; k++) { uint32_t w = g.in_nbr[k]; if (!g.dead[w] && w != except) m = std::max(m, g.cnt[w]); } return m;
+}
+
+// Rebuild CSR + live degrees from the CURRENT edge list, honoring dead[] (does NOT reset it, unlike
+// build_adj). Edges with a dead endpoint are dropped from g.edges first. Used between iterative-peel
+// rounds so the re-run node passes see the post-deflation topology. cnt is refreshed by the caller.
+void rebuild_live_adj(Graph& g) {
+    std::vector<CEdge> live; live.reserve(g.edges.size());
+    for (const CEdge& e : g.edges) if (!g.dead[e.src] && !g.dead[e.dst]) live.push_back(e);
+    g.edges.swap(live);
+    const uint64_t K = g.K, E = g.edges.size();
+    g.out_off.assign(K + 1, 0); g.in_off.assign(K + 1, 0);
+    for (const CEdge& e : g.edges) { g.out_off[e.src + 1]++; g.in_off[e.dst + 1]++; }
+    for (uint64_t i = 0; i < K; i++) { g.out_off[i + 1] += g.out_off[i]; g.in_off[i + 1] += g.in_off[i]; }
+    g.out_nbr.resize(E); g.in_nbr.resize(E);
+    std::vector<uint32_t> oc(g.out_off.begin(), g.out_off.end() - 1), ic(g.in_off.begin(), g.in_off.end() - 1);
+    for (const CEdge& e : g.edges) { g.out_nbr[oc[e.src]++] = e.dst; g.in_nbr[ic[e.dst]++] = e.src; }
+    g.live_out.resize(K); g.live_in.resize(K);
+    for (uint64_t i = 0; i < K; i++) { g.live_out[i] = g.out_off[i+1]-g.out_off[i]; g.live_in[i] = g.in_off[i+1]-g.in_off[i]; }
 }
 
 // ---- Pass 1: tips (dead-end short chains, low relative to the junction) -------------------------
@@ -219,34 +230,130 @@ uint64_t pass_bubbles(Graph& g, int maxlen, double het_frac, double som_frac, ui
     return removed;
 }
 
+// ---- Pass 4: edge filtering (the node passes judge nodes; edges are gated here) ------------------
+// Node counts are floored to 0-or->=mm by the build-time gate, but edge traversal counts are raw
+// (min 1), so a "tumor-only" edge can rest on a single tumor read -- the dominant somatic-junction
+// false positive. Two gates, both per-colour and local (never a global cut):
+//   (1) HARD  : drop an edge unless it is crossed >= mm times in at least one colour (the edge
+//               analogue of the node mm floor). max(ncov,tcov) >= mm.
+//   (2) RELATIVE: even above the floor, drop an edge that carries only a small fraction (< frac) of
+//               its endpoints' coverage in EVERY colour it has -- a weak spur between two cores that
+//               are themselves much better covered (reads mostly take a different path). frac=0 off.
+// Only edges between two live nodes are gated; edges with a killed endpoint are dropped regardless.
+uint64_t pass_edges(Graph& g, uint32_t mm, double frac) {
+    std::vector<CEdge> keep; keep.reserve(g.edges.size());
+    uint64_t d_hard = 0, d_rel = 0, d_dead = 0;
+    for (const CEdge& e : g.edges) {
+        if (g.dead[e.src] || g.dead[e.dst]) { d_dead++; continue; }        // endpoint killed by a node pass
+        if (e.ncov < mm && e.tcov < mm) { d_hard++; continue; }            // below the mm floor in both colours
+        if (frac > 0.0) {
+            bool strong = false;                                           // strong in >= 1 colour it carries -> keep
+            if (e.tcov) { uint32_t m = std::min(g.tcov[e.src], g.tcov[e.dst]); if (!m || (double)e.tcov >= frac * m) strong = true; }
+            if (e.ncov) { uint32_t m = std::min(g.ncov[e.src], g.ncov[e.dst]); if (!m || (double)e.ncov >= frac * m) strong = true; }
+            if (!strong) { d_rel++; continue; }
+        }
+        keep.push_back(e);
+    }
+    g.edges.swap(keep);
+    std::fprintf(stderr, "[refine] pass 4 (edges): dropped hard(mm=%u)=%lu relative(frac=%.2f)=%lu (dead-endpoint=%lu) -> %lu edges\n",
+                 mm, (unsigned long)d_hard, frac, (unsigned long)d_rel, (unsigned long)d_dead, (unsigned long)g.edges.size());
+    return d_hard + d_rel;
+}
+
+// ---- iterative-peel edge pass: gate edges AND deflate node counts by every removed edge ---------
+// The idea: an error edge's traversal reads also inflated its endpoint nodes' coverage, so when we
+// drop the edge we subtract its per-colour counts from the endpoint node(s). Gate-dropped edges (hard
+// mm + relative) deflate BOTH endpoints; edges whose endpoint already died in a node pass deflate the
+// lone survivor. Deflation is accumulated and applied AFTER the pass, so the relative gate reads
+// consistent start-of-round counts (order-independent). Returns gate-dropped edges (drives convergence).
+// CAVEAT: a read crosses a node once but up to two edges, so a node with one kept + one dropped edge
+// is over-deflated -- an intentional approximation of the requested rule; the measurement shows its cost.
+uint64_t pass_edges_deflate(Graph& g, uint32_t mm, double frac, bool clamp) {
+    const uint64_t K = g.K;
+    std::vector<uint32_t> dn(K, 0), dt(K, 0);
+    std::vector<CEdge> keep; keep.reserve(g.edges.size());
+    uint64_t d_gate = 0, d_dead = 0;
+    for (const CEdge& e : g.edges) {
+        const bool sd = g.dead[e.src], dd = g.dead[e.dst];
+        if (sd && dd) { d_dead++; continue; }                              // both gone: nothing left to deflate
+        if (sd || dd) { const uint32_t s = sd ? e.dst : e.src; dn[s] += e.ncov; dt[s] += e.tcov; d_dead++; continue; }
+        bool drop = (e.ncov < mm && e.tcov < mm);                          // hard floor
+        if (!drop && frac > 0.0) {
+            bool strong = false;
+            if (e.tcov) { uint32_t m = std::min(g.tcov[e.src], g.tcov[e.dst]); if (!m || (double)e.tcov >= frac * m) strong = true; }
+            if (e.ncov) { uint32_t m = std::min(g.ncov[e.src], g.ncov[e.dst]); if (!m || (double)e.ncov >= frac * m) strong = true; }
+            drop = !strong;
+        }
+        if (drop) { dn[e.src] += e.ncov; dt[e.src] += e.tcov; dn[e.dst] += e.ncov; dt[e.dst] += e.tcov; d_gate++; }
+        else keep.push_back(e);
+    }
+    g.edges.swap(keep);
+    for (uint64_t i = 0; i < K; i++) { g.ncov[i] = dn[i] < g.ncov[i] ? g.ncov[i] - dn[i] : 0; g.tcov[i] = dt[i] < g.tcov[i] ? g.tcov[i] - dt[i] : 0; }
+    // Reverse coupling (opt-in, REF_EDGE_CLAMP): an edge can't carry more reads than either endpoint,
+    // so clamp each surviving edge to min(endpoint counts). MEASURED TO HURT edges: when deflation zeros
+    // a node's ncov, the clamp zeros its edges' ncov too -> shared edges recolour to tumor-only -> ~55k
+    // false-somatic edges. Off by default; the flow-conservation filter is the safe alternative (it drops
+    // over-flow edges instead of recolouring them).
+    uint64_t clamped = 0;
+    if (clamp) for (CEdge& e : g.edges) {
+        const uint32_t cn = std::min(g.ncov[e.src], g.ncov[e.dst]);
+        const uint32_t ct = std::min(g.tcov[e.src], g.tcov[e.dst]);
+        if (e.ncov > cn) { e.ncov = cn; clamped++; }
+        if (e.tcov > ct) { e.tcov = ct; clamped++; }
+    }
+    std::fprintf(stderr, "[refine]   peel edges: gate-dropped=%lu node-death-dropped=%lu edge-clamped=%lu -> %lu edges kept\n",
+                 (unsigned long)d_gate, (unsigned long)d_dead, (unsigned long)clamped, (unsigned long)g.edges.size());
+    return d_gate + clamped;   // total edge activity (gate drops + clamp reductions) -> drives convergence
+}
+
+// ---- flow-conservation node filter -------------------------------------------------------------
+// Every read through a node is partitioned among its in-edges (and among its out-edges), so in EACH
+// colour Sum(in-edge counts) <= node.count and Sum(out-edge counts) <= node.count. A node that
+// violates this claims more edge-traversals than it has reads -- an inconsistency that is empirically
+// ~95% a read-error core (real cores violate ~0.01%). Remove violators. MUST run on CONSISTENT counts
+// (before the peel deflates node counts below their still-original edge counts), so it is applied once
+// after the initial node refine, ahead of the peel loop.
+uint64_t flow_filter(Graph& g) {
+    const uint64_t K = g.K;
+    std::vector<uint32_t> in_n(K, 0), in_t(K, 0), out_n(K, 0), out_t(K, 0);
+    for (const CEdge& e : g.edges) {
+        if (g.dead[e.src] || g.dead[e.dst]) continue;
+        out_n[e.src] += e.ncov; out_t[e.src] += e.tcov;
+        in_n[e.dst]  += e.ncov; in_t[e.dst]  += e.tcov;
+    }
+    uint64_t removed = 0;
+    for (uint64_t i = 0; i < K; i++)
+        if (!g.dead[i] && (in_n[i] > g.ncov[i] || out_n[i] > g.ncov[i] || in_t[i] > g.tcov[i] || out_t[i] > g.tcov[i])) { g.dead[i] = 1; removed++; }
+    std::fprintf(stderr, "[refine] flow-conservation filter: removed %lu nodes (Sum incident edges > node count)\n", (unsigned long)removed);
+    return removed;
+}
+
 void write_refined(const std::string& path, const Graph& g) {
     const uint64_t K = g.K;
     std::vector<uint32_t> newid(K, UINT32_MAX); uint64_t nk = 0;
     for (uint64_t i = 0; i < K; i++) if (!g.dead[i]) newid[i] = (uint32_t)nk++;
-    std::vector<uint8_t> color; std::vector<uint32_t> ncov, tcov; std::vector<uint16_t> seqlen;
-    color.reserve(nk); ncov.reserve(nk); tcov.reserve(nk); seqlen.reserve(nk);
-    uint64_t total = 0;
-    for (uint64_t i = 0; i < K; i++) if (!g.dead[i]) { color.push_back(g.color[i]); ncov.push_back(g.ncov[i]); tcov.push_back(g.tcov[i]); seqlen.push_back(g.seqlen[i]); total += g.seqlen[i]; }
-    std::vector<IEdge> ie; ie.reserve(g.edges.size());
-    for (const IEdge& e : g.edges) if (!g.dead[e.first] && !g.dead[e.second]) ie.push_back(IEdge(newid[e.first], newid[e.second]));
-    std::sort(ie.begin(), ie.end()); ie.erase(std::unique(ie.begin(), ie.end()), ie.end());
+    std::vector<uint64_t> sig; std::vector<uint32_t> ncov, tcov;
+    sig.reserve(nk); ncov.reserve(nk); tcov.reserve(nk);
+    for (uint64_t i = 0; i < K; i++) if (!g.dead[i]) { sig.push_back(g.sig[i]); ncov.push_back(g.ncov[i]); tcov.push_back(g.tcov[i]); }
+    std::vector<CEdge> ce; ce.reserve(g.edges.size());
+    for (const CEdge& e : g.edges) if (!g.dead[e.src] && !g.dead[e.dst]) ce.push_back({newid[e.src], newid[e.dst], e.ncov, e.tcov});
+    std::sort(ce.begin(), ce.end(), [](const CEdge& x, const CEdge& y){ return x.src != y.src ? x.src < y.src : x.dst < y.dst; });
 
     FILE* f = xopen(path + ".tmp", "wb");
     static char wbuf[1u << 24]; std::setvbuf(f, wbuf, _IOFBF, sizeof(wbuf));
     uint64_t Kw = nk; wr(f, &Kw, 8);
-    wr(f, color.data(), nk); wr(f, ncov.data(), nk * 4); wr(f, tcov.data(), nk * 4);
-    uint64_t E = ie.size(); wr(f, &E, 8); wr(f, ie.data(), E * sizeof(IEdge));
-    wr(f, &total, 8); wr(f, seqlen.data(), nk * 2);
-    for (uint64_t i = 0; i < K; i++) if (!g.dead[i]) wr(f, g.payload.data() + g.seq_off[i], g.seqlen[i]);
+    wr(f, sig.data(), nk * 8); wr(f, ncov.data(), nk * 4); wr(f, tcov.data(), nk * 4);
+    uint64_t E = ce.size(); wr(f, &E, 8); wr(f, ce.data(), E * sizeof(CEdge));
     atomic_close(f, path + ".tmp", path);
-    std::fprintf(stderr, "[refine] wrote %s: nodes %lu -> %lu  edges %lu -> %lu  payload %.1fGB\n",
-                 path.c_str(), (unsigned long)K, (unsigned long)nk, (unsigned long)g.edges.size(), (unsigned long)E, total / 1e9);
+    std::fprintf(stderr, "[refine] wrote %s: nodes %lu -> %lu  edges %lu -> %lu (v3)\n",
+                 path.c_str(), (unsigned long)K, (unsigned long)nk, (unsigned long)g.edges.size(), (unsigned long)E);
 }
 
 }  // namespace
 
-// graph.bin -> refined.bin (same v2 format). Tunable via env: REF_TIP_MAX, REF_TIP_FRAC,
-// REF_ISLAND_CNT, REF_LOWCOV_FRAC, REF_BUB_MAX, REF_HET_FRAC, REF_SOM_FRAC, REF_ABS_KEEP, REF_ROUNDS.
+// graph.bin -> refined.bin (same v3 format). Tunable via env: REF_TIP_MAX, REF_TIP_FRAC,
+// REF_ISLAND_CNT, REF_LOWCOV_FRAC, REF_BUB_MAX, REF_HET_FRAC, REF_SOM_FRAC, REF_ABS_KEEP, REF_ROUNDS,
+// REF_EDGE_MM (edge hard mm floor; 0 disables), REF_EDGE_FRAC (edge relative gate; 0 disables).
 // REF_TIP_NUKE=1 -> aggressive tip removal (see pass_tips); writes a DISTINCT dir/refined_nuketip.bin
 // so the conservative dir/refined.bin is never clobbered.
 void run_refine(const std::string& dir) {
@@ -262,8 +369,13 @@ void run_refine(const std::string& dir) {
     const double som_frac    = envd("REF_SOM_FRAC", 0.05);          // arm >= this x tumor-flank AND normal-absent -> somatic -> keep
     const uint32_t abs_keep  = (uint32_t)envi("REF_ABS_KEEP", 10);   // tips/low-cov only: count>=this never removed (bubbles use flank-relative)
     const int    rounds      = envi("REF_ROUNDS", 4);
-    std::fprintf(stderr, "[refine] params: tip_max=%d tip_frac=%.2f island_cnt=%d lowcov_frac=%.2f bub_max=%d het_frac=%.2f som_frac=%.2f abs_keep=%u rounds=%d nuke=%d -> %s\n",
-                 tip_max, tip_frac, island_cnt, lowcov_frac, bub_max, het_frac, som_frac, abs_keep, rounds, (int)nuke, out.c_str());
+    const uint32_t edge_mm   = (uint32_t)envi("REF_EDGE_MM", 3);     // edge hard floor: keep only if max(ncov,tcov) >= this
+    const double edge_frac   = envd("REF_EDGE_FRAC", 0.10);          // edge relative gate: drop if < this x min-endpoint coverage in every colour
+    const int    iter_n      = envi("REF_ITER", 0);                  // >0: iterative peel (edge-drop -> deflate node counts -> re-refine); value = MAX rounds, stops early at convergence; writes refined_iter.bin
+    const bool   edge_clamp  = envi("REF_EDGE_CLAMP", 0);            // clamp edges to min(endpoint counts) each peel round -- OFF: measured to recolour shared edges -> +FP
+    const bool   flow_filt   = envi("REF_FLOW", 1);                  // flow-conservation filter before the peel: drop nodes whose summed incident edges exceed the node count (~95% error)
+    std::fprintf(stderr, "[refine] params: tip_max=%d tip_frac=%.2f island_cnt=%d lowcov_frac=%.2f bub_max=%d het_frac=%.2f som_frac=%.2f abs_keep=%u rounds=%d edge_mm=%u edge_frac=%.2f nuke=%d -> %s\n",
+                 tip_max, tip_frac, island_cnt, lowcov_frac, bub_max, het_frac, som_frac, abs_keep, rounds, edge_mm, edge_frac, (int)nuke, out.c_str());
     Graph g; load(in, g); build_adj(g);
     uint64_t r1 = pass_tips(g, tip_max, tip_frac, (uint32_t)island_cnt, abs_keep, rounds, nuke);
     uint64_t r2 = pass_lowcov(g, lowcov_frac, abs_keep);
@@ -271,5 +383,38 @@ void run_refine(const std::string& dir) {
     pass_tips(g, tip_max, tip_frac, (uint32_t)island_cnt, abs_keep, rounds, nuke);   // re-run tips: bubble/branch removal exposes new tips
     std::fprintf(stderr, "[refine] total removed: tips=%lu lowcov=%lu bubbles=%lu (+ tip re-pass)\n",
                  (unsigned long)r1, (unsigned long)r2, (unsigned long)r3);
+
+    if (iter_n > 0) {
+        // ---- iterative peel: drop error edges, subtract their reads from the endpoint nodes, then
+        // re-refine the (now deflated) nodes; removing nodes exposes more dead edges next round. The
+        // peel is monotonic (dead[] only grows, edges only shrink) so it always converges; REF_ITER is
+        // just the safety bound on rounds -- the ed==0 && nd==0 check below stops at true convergence. ----
+        const int N = iter_n;
+        const std::string iout = dir + "/refined_iter.bin";
+        std::fprintf(stderr, "[refine] ITERATIVE PEEL: edge-drop -> deflate node counts -> re-refine, up to %d rounds (edge_mm=%u edge_frac=%.2f clamp=%d flow=%d) -> %s\n",
+                     N, edge_mm, edge_frac, (int)edge_clamp, (int)flow_filt, iout.c_str());
+        if (flow_filt) flow_filter(g);   // one-shot error removal on consistent counts, before deflation distorts them
+        for (int it = 1; it <= N; it++) {
+            std::fprintf(stderr, "[refine] === peel round %d/%d ===\n", it, N);
+            const uint64_t ea = pass_edges_deflate(g, edge_mm, edge_frac, edge_clamp);   // gate + deflate nodes (+ clamp edges if enabled)
+            // A node with ZERO coverage in BOTH samples has no read support left -> remove it outright
+            // (deflation only zeroed the depleted colour; single-colour-zero nodes stay, just recoloured).
+            uint64_t z = 0;
+            for (uint64_t i = 0; i < g.K; i++) if (!g.dead[i] && g.ncov[i] == 0 && g.tcov[i] == 0) { g.dead[i] = 1; z++; }
+            for (uint64_t i = 0; i < g.K; i++) g.cnt[i] = g.ncov[i] + g.tcov[i];    // refresh cnt after deflation
+            rebuild_live_adj(g);
+            uint64_t nd = pass_tips(g, tip_max, tip_frac, (uint32_t)island_cnt, abs_keep, rounds, nuke);
+            nd += pass_lowcov(g, lowcov_frac, abs_keep);
+            nd += pass_bubbles(g, bub_max, het_frac, som_frac, abs_keep);
+            nd += pass_tips(g, tip_max, tip_frac, (uint32_t)island_cnt, abs_keep, rounds, nuke);
+            std::fprintf(stderr, "[refine] round %d done: edge-activity(gate+clamp)=%lu zero-cov-removed=%lu node-pass-removed=%lu\n",
+                         it, (unsigned long)ea, (unsigned long)z, (unsigned long)nd);
+            if (ea == 0 && z == 0 && nd == 0) { std::fprintf(stderr, "[refine] converged at round %d\n", it); break; }
+        }
+        write_refined(iout, g);
+        return;
+    }
+
+    if (edge_mm > 1 || edge_frac > 0.0) pass_edges(g, edge_mm, edge_frac);
     write_refined(out, g);
 }

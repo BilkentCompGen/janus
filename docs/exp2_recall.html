@@ -1,0 +1,152 @@
+<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deney 2 — her topolojiyi çıkar, recall ölç</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#0f141a;--ink:#e6edf3;--mut:#8b949e;--line:#30363d;--accent:#2dd4bf;--accent2:#58a6ff;--warn:#f0883e;--bad:#f85149;--good:#3fb950}
+*{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--ink);font:14px/1.6 ui-sans-serif,-apple-system,Segoe UI,Roboto,Arial}
+header{padding:14px 20px;border-bottom:1px solid var(--line)}header h1{font-size:17px;margin:0}header .sub{color:var(--mut);font-size:12.5px}
+main{padding:20px;max-width:1300px;margin:0 auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:18px}
+.card h2{font-size:15px;margin:0 0 4px;color:var(--accent)}.card h3{font-size:13.5px;margin:16px 0 6px;color:var(--accent2)}
+.lede{color:var(--mut);font-size:12.5px;margin:0 0 12px}
+.kpirow{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:12px;margin:12px 0}
+.kpi{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi .v{font-size:23px;font-weight:700;letter-spacing:-.5px}.kpi .l{font-size:11.5px;color:var(--mut);margin-top:2px;line-height:1.35}
+.kpi.good .v{color:var(--good)}.kpi.bad .v{color:var(--bad)}.kpi.warn .v{color:var(--warn)}.kpi.acc .v{color:var(--accent)}
+table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{border-bottom:1px solid var(--line);padding:5px 9px;text-align:left}
+th{color:var(--mut)}td.n{text-align:right;font-family:ui-monospace,monospace}tr:hover td{background:#11161d}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}@media(max-width:900px){.two{grid-template-columns:1fr}}
+.okbox{border-left:3px solid var(--good);padding:8px 14px;background:#0f1a12;border-radius:0 8px 8px 0;margin:10px 0;font-size:13px}
+.warnbox{border-left:3px solid var(--bad);padding:8px 14px;background:#1a1012;border-radius:0 8px 8px 0;margin:10px 0;font-size:13px}
+.quote{border-left:3px solid var(--accent);padding:8px 14px;background:var(--panel2);border-radius:0 8px 8px 0;margin:10px 0;font-size:13px}
+code{font-family:ui-monospace,monospace;background:#0b0f14;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:12px}
+pre{font-family:ui-monospace,monospace;font-size:11.5px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;line-height:1.45;color:#c9d1d9}
+</style></head><body>
+<header><h1>Deney 2 — yakaladığın <em>her</em> topolojiyi çıkar, ters-indeks tut, recall ölç</h1>
+<span class="sub">686k somatik şekil → mini-graf + ters-indeks · precision değil recall hedefi · truth = 600 SV · hard sim</span></header>
+<main>
+
+<div class="card">
+<h2>Baş sonuç — ve Deney 1'in düzeltmesi</h2>
+<div class="kpirow">
+<div class="kpi good"><div class="v">%91</div><div class="l">aday-üretme recall'i (loose, W=100 bp) — <b>%5.4 şans temeline karşı, 17×</b>. Deney 1'in "%50" tavanı yanlış çerçeveydi.</div></div>
+<div class="kpi acc"><div class="v">266 727</div><div class="l">localizable şekil (~400k çıpa pozisyonu). 600 SV + 125k küçük varyant için. Precision kasten düşük.</div></div>
+<div class="kpi acc"><div class="v">tüm bantlar düzgün</div><div class="l">50-199 bp %97 · 200-999 %93 · 1-10k %94 · 10k+ %97. Deney 1'de %0 olan bantlar artık dolu.</div></div>
+<div class="kpi warn"><div class="v">L5 ≈ L4</div><div class="l">recall'da L5 hafif önde; L4'ün faydası ayrı: breakpoint'i daha <b>hassas</b> lokalize ediyor (aşağı).</div></div>
+</div>
+<div class="quote">
+<b>Neden Deney 1 %50, Deney 2 %91?</b> Deney 1 sadece temiz 2-çıpalı köprüleri alıp bir <code>d_bp</code> eşiği koyuyordu —
+tip'leri (113k), hub'ları, ve küçük SV'lerin junction'larını atıyordu. Deney 2 <b>somatik olan her topolojiyi</b> alıyor
+(tip dâhil), etrafından 1-2 çekirdek flank ile mini-graf yapıyor, ve sadece soruyor: <em>"bu SV'nin breakpoint'ine
+yakın bir şekil çıkardım mı?"</em>. Aday üretmenin doğru sorusu bu — karar downstream'de.
+</div>
+</div>
+
+<div class="card">
+<h2>1 · Ne çıkardık — 686k topoloji</h2>
+<div id="shapes" style="height:320px"></div>
+<p class="lede" style="margin-top:8px">Her çubuk bir şekil tipi. <b>island</b> = çıpasız (çoğu read-hatası artığı, lokalize edilemez) · <b>tip</b> = 1 çıpa (junction ucu) · <b>bridge</b> = 2 çıpa (kabarcık/junction) · <b>hub</b> = ≥3 çıpa (tekrar tangle'ı). Recall'ı sürükleyen <b>localizable</b> (≥1 konumlanmış çıpa) olanlar.</p>
+</div>
+
+<div class="card">
+<h2>2 · Recall vs W vs şans — gerçek mi, yoğunluk mu?</h2>
+<p class="lede">267k şekil 3.12 Gb'a yayılınca, W penceresi büyüdükçe rastgele bir nokta da "kapsanır". Dürüst sayı: gerçek recall ile <b>shift-null</b> (aynı SV'yi rastgele konuma taşı) arasındaki mesafe.</p>
+<div id="wsweep" style="height:400px"></div>
+<div class="two">
+<div class="okbox"><b>Gerçek, yoğunluk değil.</b> W=100'de gerçek %91, null %5.4 → <b>17×</b>. Şekiller varyantların <em>üstünde</em> oturuyor, tesadüfen yakın değil. Dürüst operasyon noktası W=100-200.</div>
+<div class="warnbox"><b>W=1000'i şişirme.</b> Orada gerçek %95 ama null da %24.7 (sadece 3.9×). Geniş pencere sayıyı güzelleştirir ama iddiayı zayıflatır. Raporlarken W=100-200 kullan.</div>
+</div>
+</div>
+
+<div class="card">
+<h2>3 · L4 vs L5 — recall değil, hassasiyet farkı</h2>
+<div id="tightW" style="height:300px"></div>
+<div class="okbox"><b>L4'ün gerçek kazancı burada.</b> Sıkı pencerede (W=25) L4 <b>%72</b>, L5 <b>%36</b>; W=50'de L4 <b>%88</b>, L5 <b>%71</b>. Kısa çekirdek → çıpa gerçek breakpoint'e daha yakın oturuyor. Geniş W'de ikisi birleşiyor (%91-95). <b>Yani: recall tavanı için L5, breakpoint hassasiyeti için L4</b> — ve hassasiyet downstream zip'in çekeceği pencereyi küçültür.</div>
+</div>
+
+<div class="card">
+<h2>4 · Boy bandına göre recall (loose, W=1000)</h2>
+<table id="band"></table>
+<p class="lede" style="margin-top:8px">Deney 1'in <code>d_bp</code> filtresinde 50-199 ve 200-999 bantları <b>%0</b>'dı. Her topolojiyi çıkarınca <b>%93-97</b>. Fark tamamen tip'leri ve küçük junction'ları atmamaktan geliyordu.</p>
+</div>
+
+<div class="card">
+<h2>5 · Ters-indeks + mini-graf — çıktı gerçek</h2>
+<div class="two">
+<div>
+<p style="font-size:13px;margin-top:0"><code>revindex_L5.tsv</code> (9.8 MB, 266 727 satır) — her şeklin ana graftaki yeri:</p>
+<pre>mini_id  type    arm  som  n_anch  anchors (contig:pos)
+0        bridge  3    3    2       8:63742605;8:63742860
+5        tip     1    0    1       9:59009753
+9        bridge  5    5    2       18:20989666;18:20990930</pre>
+<p style="font-size:12.5px;color:var(--mut)">Her satır bir aday lokus. <code>arm</code>=novel çekirdek sayısı, <code>anchors</code>=konumlanmış çıpalar = downstream zip'in sekans çekeceği yer. Node id'ler ana grafın sig-dizisine indeks (asıl ters-indeks).</p>
+</div>
+<div>
+<p style="font-size:13px;margin-top:0">Örnek mini-graf (küçük bir bridge, temiz SV junction'ı):</p>
+<pre>U 0 T novel  ncov=0  tcov=17     &lt;- somatik kol
+U 1 S ref    ncov=27 tcov=24     &lt;- çıpa (referans)
+U 2 S ref    ncov=31 tcov=28     &lt;- çıpa (referans)
+E 0 1
+E 0 2</pre>
+<p style="font-size:12.5px;color:var(--mut)">Kol tümör-only (somatik), iki çıpa referans çekirdek — bu tam bir SV kabarcığı. Büyük hub'lar (57 çıpa, 2857 çekirdek) ise gerçek tekrar tangle'ları; onlar downstream'de ayrıca ele alınır.</p>
+</div>
+</div>
+</div>
+
+<div class="card">
+<h2>6 · Boru hattındaki yeri</h2>
+<div class="quote"><b>Graf = aday üretici.</b> Ölçülen tavan: <b>~%91 recall (W=100), 17× şans üstü</b>, 267k aday. Bu, tüm-genom grafını tek geçişte (~21 dk) bu 267k mini-grafa böler ve her birinin yerini bilir. Kayıp SV'ler (~%9) çoğu çıpası tekrara düşen veya read-hatası bandındaki küçük olaylar.</div>
+<div class="quote"><b>Sonra = sekans-zip karar verici.</b> 267k aday çok; ama her biri lokalize (ters-indeks). Downstream aşama o çıpa pozisyonlarından referans+tümör read çekip çift-uçlu hizalar, SNV/indel/SV kararını orada verir. Precision o aşamanın işi. <b>Deney 1'in bittiği, senin Fikir 2'nin başladığı yer.</b></div>
+<div class="warnbox"><b>Dürüstlük:</b> %91 recall bir <em>tavan</em> — "graf bu SV'ye yakın bir şekil üretti" demek, "doğru tipledi" demek değil. Ayrıca 267k aday içinde 125k küçük varyant + read-hatası da var; bunları eleme yükü tamamen downstream'e biniyor. Bu bilinçli bir takas: recall'ı maksimize et, precision'ı sekansa bırak.</div>
+</div>
+
+</main>
+<script>
+const PL={template:'plotly_dark',paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#e6edf3',size:12},margin:{t:14,r:14,b:46,l:60}};
+// shapes stacked
+(function(){
+ const cats=['island','tip','bridge','hub'];
+ const L5tot=[420016,113804,151486,1437], L5som=[158836,27051,127349,1374];
+ const L4tot=[390292,49855,159542,1035], L4som=[126547,13791,126022,940];
+ Plotly.newPlot('shapes',[
+  {x:cats,y:L5tot,type:'bar',name:'L5 toplam',marker:{color:'#30475e'}},
+  {x:cats,y:L5som,type:'bar',name:'L5 somatik',marker:{color:'#2dd4bf'}},
+  {x:cats,y:L4tot,type:'bar',name:'L4 toplam',marker:{color:'#3a3a52'}},
+  {x:cats,y:L4som,type:'bar',name:'L4 somatik',marker:{color:'#58a6ff'}}
+ ],{...PL,barmode:'group',yaxis:{type:'log',title:'şekil sayısı (log)'},legend:{orientation:'h',y:1.13}},{responsive:true});
+})();
+// W sweep real vs null
+(function(){
+ const W=[25,50,100,200,500,1000];
+ const L5real=[36,71,91,92,94,95], L5null=[1.4,2.8,5.4,8.5,15.7,24.7];
+ const L4real=[72,88,91,92,93,94], L4null=[1.3,2.5,4.1,6.6,13.4,22.4];
+ Plotly.newPlot('wsweep',[
+  {x:W,y:L5real,type:'scatter',mode:'lines+markers',name:'L5 gerçek recall',line:{color:'#2dd4bf',width:3}},
+  {x:W,y:L4real,type:'scatter',mode:'lines+markers',name:'L4 gerçek recall',line:{color:'#58a6ff',width:3}},
+  {x:W,y:L5null,type:'scatter',mode:'lines+markers',name:'L5 NULL (şans)',line:{color:'#f85149',dash:'dot'}},
+  {x:W,y:L4null,type:'scatter',mode:'lines+markers',name:'L4 NULL (şans)',line:{color:'#f0883e',dash:'dot'}}
+ ],{...PL,xaxis:{title:'W — breakpoint eşleşme penceresi (bp)',type:'log',tickvals:W,ticktext:W.map(String)},
+    yaxis:{title:'recall / null (%)',range:[0,100]},legend:{orientation:'h',y:1.13}},{responsive:true});
+})();
+// tight W bar
+(function(){
+ const W=['W=25','W=50','W=100'];
+ Plotly.newPlot('tightW',[
+  {x:W,y:[36,71,91],type:'bar',name:'L5',marker:{color:'#2dd4bf'},text:['36%','71%','91%'],textposition:'outside'},
+  {x:W,y:[72,88,91],type:'bar',name:'L4',marker:{color:'#58a6ff'},text:['72%','88%','91%'],textposition:'outside'}
+ ],{...PL,barmode:'group',yaxis:{title:'loose recall (%)',range:[0,100]},
+    xaxis:{title:'sıkı pencere — breakpoint lokalizasyon hassasiyeti'},legend:{orientation:'h',y:1.13}},{responsive:true});
+})();
+// band table
+(function(){
+ const rows=[['boy','truth','L5 loose','L5 strict','L4 loose','L4 strict'],
+  ['50-199',63,'61 (97%)','61 (97%)','60 (95%)','60 (95%)'],
+  ['200-999',153,'142 (93%)','141 (92%)','141 (92%)','139 (91%)'],
+  ['1k-10k',177,'167 (94%)','163 (92%)','163 (92%)','157 (89%)'],
+  ['10k+',207,'201 (97%)','198 (96%)','201 (97%)','193 (93%)'],
+  ['TOPLAM',600,'571 (95%)','563 (94%)','565 (94%)','549 (92%)']];
+ const t=document.getElementById('band');
+ t.innerHTML='<thead><tr>'+rows[0].map((c,i)=>'<th'+(i?' style="text-align:right"':'')+'>'+c+'</th>').join('')+'</tr></thead><tbody>'+
+   rows.slice(1).map((r,ri)=>'<tr'+(ri==4?' style="font-weight:700"':'')+'>'+r.map((c,i)=>'<td'+(i?' class="n"':'')+'>'+c+'</td>').join('')+'</tr>').join('')+'</tbody>';
+})();
+</script></body></html>

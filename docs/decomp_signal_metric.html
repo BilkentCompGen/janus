@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SNAPE — signature gauntlet: re-measuring the prune bake-off</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#0f141a;--ink:#e6edf3;--mut:#8b949e;--line:#30363d;--accent:#2dd4bf;--accent2:#58a6ff;--bad:#f85149;--good:#3fb950;--warn:#d29922}
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font:14px/1.6 ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);z-index:9}
+  header h1{font-size:17px;margin:0} header .sub{color:var(--mut);font-size:12.5px}
+  nav{padding:8px 20px;border-bottom:1px solid var(--line);display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;background:var(--panel2)}
+  nav a{color:var(--accent2);text-decoration:none} nav a:hover{text-decoration:underline}
+  main{padding:20px;max-width:1500px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:18px}
+  .card h2{font-size:15px;margin:0 0 4px} .card .lede{color:var(--mut);font-size:12.5px;margin:0 0 12px}
+  .kpi{font-size:30px;font-weight:700;line-height:1.1} .kpi .u{font-size:13px;color:var(--mut);font-weight:400}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+  .kpibox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .kpibox .lbl{color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+  .tblwrap{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th,td{border-bottom:1px solid var(--line);padding:6px 9px;text-align:right;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--mut);cursor:pointer;user-select:none;position:sticky;top:0;background:var(--panel)}
+  tr:hover td{background:#11161d}
+  code{font-family:ui-monospace,monospace;background:#0b0f14;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:12px}
+  .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)} .mut{color:var(--mut)}
+  .pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;border:1px solid var(--line)}
+  .pill.win{background:rgba(63,185,80,.15);border-color:var(--good);color:var(--good)}
+  .pill.lose{background:rgba(248,81,73,.13);border-color:var(--bad);color:var(--bad)}
+  ul{margin:6px 0 0 18px;padding:0} li{margin:4px 0}
+  .big{font-size:15px}
+</style></head><body>
+<header><h1>SNAPE — signature gauntlet</h1>
+<span class="sub">Re-measuring the prune bake-off on the signal each SV type <i>actually</i> leaves in the 2-colour core graph</span>
+<span class="sub" style="margin-left:auto" id="ts"></span></header>
+<nav>
+  <a href="#head">Headline</a><a href="#why">Why the metric changed</a><a href="#det">The 5 detectors</a>
+  <a href="#neg">Negative control</a><a href="#inv">The inversion</a><a href="#front">Frontier &amp; the COPY cliff</a>
+  <a href="#board">Leaderboard</a><a href="#type">By SV type</a><a href="#take">What to do</a>
+</nav>
+<main>
+
+<div class="card" id="head"><h2>Headline</h2>
+<p class="lede">The old metric ranked the algorithms almost exactly backwards.</p>
+<div class="kpis">
+  <div class="kpibox"><div class="lbl">old vs new, Pearson</div><div class="kpi bad" id="k_pearson"></div><div class="mut" style="font-size:11.5px">recip70 vs real recall</div></div>
+  <div class="kpibox"><div class="lbl">full-graph recall</div><div class="kpi" id="k_full"></div><div class="mut" style="font-size:11.5px">was 364/1407 under recip70</div></div>
+  <div class="kpibox"><div class="lbl">best small graph</div><div class="kpi good" id="k_best"></div><div class="mut" style="font-size:11.5px" id="k_best_sub"></div></div>
+  <div class="kpibox"><div class="lbl">old winner now</div><div class="kpi bad" id="k_oldwin"></div><div class="mut" style="font-size:11.5px">hyb_maxrecip: 92% of COPY signal destroyed</div></div>
+  <div class="kpibox"><div class="lbl">negative control</div><div class="kpi good">0<span class="u">/400</span></div><div class="mut" style="font-size:11.5px">false positives, all 29 graphs</div></div>
+</div>
+<p style="margin-top:14px" class="big">Every pruner preserves the somatic colour and junction signal almost perfectly. The <b>only</b> thing that
+separates them is <code>COPY</code> — the tumour/normal depth ratio measured <i>on the shared backbone</i>. The hybrid family that
+won the old bake-off got there by deleting that backbone. Tight footprints scored well and made duplications permanently uncallable.</p>
+</div>
+
+<div class="card" id="why"><h2>Why the metric changed — four measured findings</h2>
+<p class="lede">All from probing <code>refined.bin</code> directly (probe_signal.log, probe2.log, probe3_inv.log). Nothing here was assumed.</p>
+<div class="grid">
+<div>
+<h3 style="font-size:13px;margin:0 0 6px">1 · Moved sequence stays <span class="warn">shared</span></h3>
+<p class="mut" style="font-size:12.5px;margin:0">In a coordinate-free sequence graph a translocated or dispersed-duplicated segment keeps its
+sequence, so its cores keep their identity. Measured interior: <code>rTRA 99.6% shared</code>, <code>dDUP 99.8%</code>, <code>nrTRA 99.6%</code>.
+Their entire signal is at the junctions — there is no colour signal to find.</p>
+</div>
+<div>
+<h3 style="font-size:13px;margin:0 0 6px">2 · Junctions are <span class="accent">novel bridges</span>, not edges</h3>
+<p class="mut" style="font-size:12.5px;margin:0">The core spanning a novel joint is itself novel, so a junction is <code>shared → novel* → shared</code>,
+never a direct edge between two positioned cores. The old metric looked for the direct edge and so found none:</p>
+<table style="margin-top:8px"><thead><tr><th>type</th><th>direct edge</th><th>novel bridge</th></tr></thead><tbody>
+<tr><td>rTRA</td><td class="bad">0/34</td><td class="good">32/36</td></tr>
+<tr><td>dDUP</td><td class="bad">0/14</td><td class="good">17/18</td></tr>
+<tr><td>nrTRA</td><td class="bad">0/16</td><td class="good">16/18</td></tr>
+<tr><td>dupINVdup</td><td class="bad">11/39</td><td class="good">60/60</td></tr>
+<tr><td>DUP</td><td class="bad">8/99</td><td class="good">119/130</td></tr>
+</tbody></table>
+</div>
+<div>
+<h3 style="font-size:13px;margin:0 0 6px">3 · A large inversion's interior is <span class="bad">invisible</span></h3>
+<p class="mut" style="font-size:12.5px;margin:0">A read lying entirely inside a big inversion sees the reverse complement read backwards — byte-identical
+to the reference. Nothing can tell. Only boundary-spanning reads carry the strand-1 signal, so the interior signal decays with size.
+This is information-theoretic, not an algorithm failure. The boundary detector recovers it: <b>27/27</b> at 50kb+.</p>
+<table style="margin-top:8px"><thead><tr><th>SVLEN</th><th>strand-1 tum</th><th>strand-0 shared</th><th>strand-0 norm-only</th></tr></thead><tbody>
+<tr><td>0–500</td><td>0.375</td><td class="good">0.000</td><td class="good">0.600</td></tr>
+<tr><td>500–2k</td><td>0.500</td><td class="good">0.000</td><td class="good">0.500</td></tr>
+<tr><td>2k–10k</td><td>0.495</td><td>0.498</td><td>0.000</td></tr>
+<tr><td>10k–50k</td><td>0.341</td><td class="warn">0.657</td><td>0.001</td></tr>
+<tr><td>50k+</td><td class="bad">0.172</td><td class="bad">0.826</td><td>0.001</td></tr>
+</tbody></table>
+</div>
+<div>
+<h3 style="font-size:13px;margin:0 0 6px">4 · <span class="accent">normal-only</span> is a first-class signal</h3>
+<p class="mut" style="font-size:12.5px;margin:0">Genuinely lost sequence turns the reference cores normal-only, cleanly:
+<code>DEL</code> and <code>CUT</code> interiors are <b>100.0%</b> normal-only (median frac 1.000; 299/299 records ≥0.9).
+And <code>refpos</code> stores <b>both strands</b> (84.9M records = 42.4M positions × 2) — shared cores are 42,187,779 strand-0
+vs 346 strand-1, while positioned tumour-only cores are 155,341 strand-1 vs 5,484 strand-0. Reverse-complement present only in
+tumour <i>is</i> an inversion.</p>
+</div>
+</div></div>
+
+<div class="card" id="det"><h2>The five detectors, and what calibrates each</h2>
+<p class="lede">Each threshold comes from a measured separation between signal and anti-signal — not a tuned constant.</p>
+<div class="tblwrap"><table><thead><tr><th>primitive</th><th>applies to</th><th>what it looks for</th><th>signal</th><th>anti-signal</th><th>full-graph</th><th>FP (random loci)</th></tr></thead>
+<tbody id="tb_det"></tbody></table></div>
+<p class="mut" style="font-size:12.5px;margin-top:10px">A record hits only if <b>all</b> of its expected primitives fire. The expected set comes from the record's
+<code>(SVTYPE, ALT, OP_TYPE)</code> — e.g. <code>CUT</code>→LOSS, <code>COPYinv-PASTE</code>→INVSIG+COPY+JUNC, <code>CUT-PASTE</code>→JUNC only.</p>
+</div>
+
+<div class="card" id="neg"><h2>Negative control — and the confound it caught</h2>
+<p class="lede">400 matched random loci: same span length, same expected signature, position shuffled away from any true event.</p>
+<p>Final: <b class="good">0/400</b> false positives on every one of the 29 graphs. But the first version of this metric scored
+<b class="bad">14–15/400</b> on the aggressively-pruned graphs, and that was a real bug in <i>my</i> metric, not in those algorithms:
+<code>LOSS</code> and <code>INVSIG</code> normalised by <i>cores surviving in the graph</i>. Delete enough shared backbone and the
+denominator collapses, so a handful of leftover error normal-only cores looks like a perfect deletion — an aggressive pruner could
+manufacture recall out of nothing. Fixed by normalising against <b>reference positions</b>, which are graph-independent and therefore
+identical across all 29 graphs. Without the control this would have silently inflated exactly the algorithms under test.</p>
+</div>
+
+<div class="card" id="inv"><h2>The inversion</h2>
+<p class="lede">Old <code>recip70</code> (footprint overlap / union) against real recall, across the 27 algorithms scored on both.</p>
+<div class="grid">
+  <div><div id="p_inv" style="height:400px"></div></div>
+  <div>
+    <p>The old metric is <b class="bad">anti-correlated</b> with real recall: Pearson <b id="t_pearson"></b>, Spearman
+    <b id="t_rho"></b>. It is equally anti-correlated with the copy signal (<b id="t_rhocopy"></b>) and with keeping anchors
+    (<b id="t_rhoanch"></b>).</p>
+    <p>This was not noise. <code>recip = overlap/union</code> rewards a <i>tight footprint</i>. The cheapest way to make a footprint
+    tight is to delete the shared backbone around it. That backbone is exactly what carries the duplication depth signal and the
+    anchors. So the metric paid algorithms to destroy the thing we need.</p>
+    <p class="mut">The five hybrids scored 398–401 and sit at 972–978 real. Everything that scored the "ceiling" 364 sits at 1201–1230.</p>
+  </div>
+</div></div>
+
+<div class="card" id="front"><h2>Frontier — and the COPY cliff</h2>
+<p class="lede">Graph size against real recall. Hover for detail; the dashed line is the Pareto frontier.</p>
+<div id="p_front" style="height:460px"></div>
+<p style="margin-top:10px">There is a cliff between <code>1.78%</code> and <code>2.47%</code> of the nodes: recall jumps
+<b>979 → 1201</b>. That is the point where the shared backbone survives in enough depth to measure a tumour/normal ratio.
+Below it, every duplication (DUP, dDUP, COPY-PASTE — 354 records) becomes permanently uncallable, whatever else is kept.</p>
+</div>
+
+<div class="card" id="board"><h2>Leaderboard</h2>
+<p class="lede">Click any header to sort. <span class="pill win">green</span> = Pareto-optimal. Ceilings are the full graph.</p>
+<div class="tblwrap"><table id="tb_board"><thead><tr>
+<th>algo</th><th>%nodes</th><th>present</th><th>% of full</th><th>local</th><th>anchored</th><th>clean</th><th>events</th>
+<th>frag</th><th>COPY<br><span class="mut">/354</span></th><th>GAIN<br><span class="mut">/130</span></th><th>INVSIG<br><span class="mut">/560</span></th>
+<th>JUNC<br><span class="mut">/538</span></th><th>LOSS<br><span class="mut">/412</span></th><th>SNPbub</th><th>indelBub</th><th>negFP</th><th>old recip70</th>
+</tr></thead><tbody></tbody></table></div></div>
+
+<div class="card" id="type"><h2>Full graph, by SV type</h2>
+<p class="lede">What the substrate can support at best. <code>present</code> = signature detectable; <code>clean</code> = in a ≤48-node typeable piece.</p>
+<div class="grid"><div><div id="p_type" style="height:420px"></div></div>
+<div class="tblwrap"><table id="tb_type"><thead><tr><th>type</th><th>n</th><th>present</th><th>%</th><th>local</th><th>anchored</th><th>clean</th></tr></thead><tbody></tbody></table></div>
+</div></div>
+
+<div class="card" id="take"><h2>What to do</h2>
+<ul class="big">
+<li><b>Retire <code>recip70</code>.</b> At Pearson −0.998 against real recall it is not a weak proxy, it is a reversed one. Every
+conclusion from the previous bake-off that rested on it — including "the hybrids beat the full-graph ceiling" — is void.</li>
+<li><b>Ship <code>edgeseed</code> (2.78%) or <code>anchormin</code> (2.62%)</b>, not a hybrid. They hold 98.4% / 98.3% of the full
+graph's recall at ~36–38× compression, with 0 false positives and anchors retained on 84% / 71% of recovered events.
+<code>minsize</code> (2.47%, 97.6%) is the knee if size dominates.</li>
+<li><b>The shared backbone is load-bearing.</b> The original instinct to delete "some but not all" shared cores was right, and the
+place it is unsafe is specifically the copied spans. A copy-aware pruner — keep backbone where <code>tcov/ncov</code> departs from 1 —
+should beat every algorithm here, and no algorithm in the bake-off tried it.</li>
+<li><b>INS was never broken.</b> 120/130 under <code>GAIN</code>, on every graph. The 0/130 was the metric.</li>
+<li><b>Honest open problem:</b> 177 records (12.6%) are unrecoverable from the full graph itself, so no pruner can fix them.
+Large inversions lose their interior signal for information-theoretic reasons, and 74 COPY records never show a ratio.</li>
+</ul></div>
+
+</main>
+<script>
+const DATA = {"rows": [{"algo": "full", "pct": 100.0, "present": 1230, "pct_of_full": 100.0, "local": 971, "anchored": 1149, "clean": 409, "events": 858, "frag": 1.48, "COPY": 280, "GAIN": 120, "INVSIG": 525, "JUNC": 466, "LOSS": 385, "snp": 17677, "indel": 4379, "negfp": 0, "old_recip70": 364}, {"algo": "detangle", "pct": 5.415, "present": 1217, "pct_of_full": 98.9, "local": 964, "anchored": 1136, "clean": 407, "events": 845, "frag": 1.48, "COPY": 268, "GAIN": 120, "INVSIG": 525, "JUNC": 465, "LOSS": 385, "snp": 17677, "indel": 4379, "negfp": 0, "old_recip70": 364}, {"algo": "alt", "pct": 4.974, "present": 1217, "pct_of_full": 98.9, "local": 966, "anchored": 1136, "clean": 409, "events": 845, "frag": 1.44, "COPY": 269, "GAIN": 120, "INVSIG": 525, "JUNC": 465, "LOSS": 384, "snp": 17676, "indel": 4379, "negfp": 0, "old_recip70": 364}, {"algo": "kcore", "pct": 3.819, "present": 1214, "pct_of_full": 98.7, "local": 965, "anchored": 1035, "clean": 408, "events": 843, "frag": 1.44, "COPY": 266, "GAIN": 120, "INVSIG": 525, "JUNC": 465, "LOSS": 384, "snp": 17676, "indel": 4379, "negfp": 0, "old_recip70": 364}, {"algo": "edgeseed", "pct": 2.779, "present": 1210, "pct_of_full": 98.4, "local": 964, "anchored": 1017, "clean": 406, "events": 842, "frag": 1.41, "COPY": 267, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 382, "snp": 17653, "indel": 4369, "negfp": 0, "old_recip70": 364}, {"algo": "covgate", "pct": 3.826, "present": 1210, "pct_of_full": 98.4, "local": 960, "anchored": 1131, "clean": 406, "events": 841, "frag": 1.59, "COPY": 266, "GAIN": 120, "INVSIG": 522, "JUNC": 465, "LOSS": 382, "snp": 17651, "indel": 4369, "negfp": 0, "old_recip70": 367}, {"algo": "recipe", "pct": 7.444, "present": 1210, "pct_of_full": 98.4, "local": 963, "anchored": 1126, "clean": 406, "events": 841, "frag": 1.44, "COPY": 267, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 381, "snp": 17635, "indel": 4366, "negfp": 0, "old_recip70": 364}, {"algo": "anchormin", "pct": 2.62, "present": 1209, "pct_of_full": 98.3, "local": 963, "anchored": 857, "clean": 406, "events": 838, "frag": 1.44, "COPY": 262, "GAIN": 120, "INVSIG": 525, "JUNC": 465, "LOSS": 384, "snp": 17676, "indel": 4379, "negfp": 0, "old_recip70": 364}, {"algo": "adhalo", "pct": 3.408, "present": 1208, "pct_of_full": 98.2, "local": 963, "anchored": 885, "clean": 406, "events": 838, "frag": 1.44, "COPY": 260, "GAIN": 120, "INVSIG": 525, "JUNC": 465, "LOSS": 384, "snp": 17676, "indel": 4379, "negfp": 0, "old_recip70": 364}, {"algo": "minsize", "pct": 2.466, "present": 1201, "pct_of_full": 97.6, "local": 962, "anchored": 729, "clean": 405, "events": 835, "frag": 1.41, "COPY": 257, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 382, "snp": 17653, "indel": 4369, "negfp": 0, "old_recip70": 364}, {"algo": "recipe_it2", "pct": 2.794, "present": 1019, "pct_of_full": 82.8, "local": 862, "anchored": 39, "clean": 349, "events": 674, "frag": 1.39, "COPY": 72, "GAIN": 120, "INVSIG": 523, "JUNC": 463, "LOSS": 381, "snp": 17625, "indel": 4365, "negfp": 0, "old_recip70": null}, {"algo": "recipe_it3", "pct": 2.768, "present": 994, "pct_of_full": 80.8, "local": 851, "anchored": 32, "clean": 343, "events": 661, "frag": 1.38, "COPY": 65, "GAIN": 120, "INVSIG": 523, "JUNC": 408, "LOSS": 381, "snp": 17624, "indel": 4365, "negfp": 0, "old_recip70": null}, {"algo": "sweepT2", "pct": 1.778, "present": 979, "pct_of_full": 79.6, "local": 829, "anchored": 46, "clean": 323, "events": 636, "frag": 1.42, "COPY": 25, "GAIN": 120, "INVSIG": 525, "JUNC": 465, "LOSS": 384, "snp": 17676, "indel": 4379, "negfp": 0, "old_recip70": 398}, {"algo": "sweepT0", "pct": 1.778, "present": 979, "pct_of_full": 79.6, "local": 829, "anchored": 46, "clean": 323, "events": 636, "frag": 1.42, "COPY": 25, "GAIN": 120, "INVSIG": 525, "JUNC": 465, "LOSS": 384, "snp": 17676, "indel": 4379, "negfp": 0, "old_recip70": 398}, {"algo": "sweepR8", "pct": 1.603, "present": 978, "pct_of_full": 79.5, "local": 829, "anchored": 41, "clean": 322, "events": 637, "frag": 1.39, "COPY": 26, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17657, "indel": 4373, "negfp": 0, "old_recip70": 398}, {"algo": "sweepR6", "pct": 1.593, "present": 978, "pct_of_full": 79.5, "local": 829, "anchored": 41, "clean": 322, "events": 637, "frag": 1.39, "COPY": 26, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17657, "indel": 4373, "negfp": 0, "old_recip70": 398}, {"algo": "sweepR14", "pct": 1.627, "present": 978, "pct_of_full": 79.5, "local": 829, "anchored": 41, "clean": 322, "events": 637, "frag": 1.39, "COPY": 26, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17657, "indel": 4373, "negfp": 0, "old_recip70": 398}, {"algo": "sweepR10", "pct": 1.612, "present": 978, "pct_of_full": 79.5, "local": 829, "anchored": 41, "clean": 322, "events": 637, "frag": 1.39, "COPY": 26, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17657, "indel": 4373, "negfp": 0, "old_recip70": 398}, {"algo": "hyb_minfull", "pct": 1.663, "present": 978, "pct_of_full": 79.5, "local": 829, "anchored": 44, "clean": 323, "events": 636, "frag": 1.4, "COPY": 25, "GAIN": 120, "INVSIG": 524, "JUNC": 465, "LOSS": 384, "snp": 17668, "indel": 4376, "negfp": 0, "old_recip70": 398}, {"algo": "sweepT6", "pct": 1.462, "present": 977, "pct_of_full": 79.4, "local": 828, "anchored": 39, "clean": 322, "events": 636, "frag": 1.39, "COPY": 25, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17655, "indel": 4370, "negfp": 0, "old_recip70": 398}, {"algo": "sweepT4", "pct": 1.579, "present": 977, "pct_of_full": 79.4, "local": 828, "anchored": 41, "clean": 322, "events": 636, "frag": 1.39, "COPY": 25, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17657, "indel": 4373, "negfp": 0, "old_recip70": 398}, {"algo": "sweepR3", "pct": 1.571, "present": 977, "pct_of_full": 79.4, "local": 828, "anchored": 41, "clean": 322, "events": 636, "frag": 1.39, "COPY": 25, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17657, "indel": 4373, "negfp": 0, "old_recip70": 398}, {"algo": "hyb_covpure", "pct": 1.598, "present": 977, "pct_of_full": 79.4, "local": 829, "anchored": 40, "clean": 323, "events": 636, "frag": 1.41, "COPY": 24, "GAIN": 120, "INVSIG": 524, "JUNC": 465, "LOSS": 384, "snp": 17676, "indel": 4379, "negfp": 0, "old_recip70": 398}, {"algo": "hyb_balanced", "pct": 1.579, "present": 977, "pct_of_full": 79.4, "local": 828, "anchored": 41, "clean": 322, "events": 636, "frag": 1.39, "COPY": 25, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17657, "indel": 4373, "negfp": 0, "old_recip70": 398}, {"algo": "sweepR2", "pct": 1.558, "present": 976, "pct_of_full": 79.3, "local": 827, "anchored": 40, "clean": 322, "events": 635, "frag": 1.39, "COPY": 24, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 384, "snp": 17657, "indel": 4373, "negfp": 0, "old_recip70": 398}, {"algo": "sweepT8", "pct": 1.438, "present": 975, "pct_of_full": 79.3, "local": 828, "anchored": 38, "clean": 322, "events": 635, "frag": 1.38, "COPY": 24, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 382, "snp": 17653, "indel": 4369, "negfp": 0, "old_recip70": 398}, {"algo": "hyb_anchorcov", "pct": 1.483, "present": 973, "pct_of_full": 79.1, "local": 828, "anchored": 39, "clean": 322, "events": 635, "frag": 1.38, "COPY": 22, "GAIN": 120, "INVSIG": 523, "JUNC": 465, "LOSS": 382, "snp": 17655, "indel": 4370, "negfp": 0, "old_recip70": 398}, {"algo": "sweepT12", "pct": 1.433, "present": 972, "pct_of_full": 79.0, "local": 828, "anchored": 38, "clean": 322, "events": 635, "frag": 1.38, "COPY": 22, "GAIN": 120, "INVSIG": 522, "JUNC": 465, "LOSS": 382, "snp": 17648, "indel": 4369, "negfp": 0, "old_recip70": 398}, {"algo": "hyb_maxrecip", "pct": 1.444, "present": 972, "pct_of_full": 79.0, "local": 825, "anchored": 39, "clean": 321, "events": 634, "frag": 1.6, "COPY": 22, "GAIN": 120, "INVSIG": 522, "JUNC": 465, "LOSS": 382, "snp": 17651, "indel": 4369, "negfp": 0, "old_recip70": 401}], "front": [{"pct": 1.433, "present": 972, "algo": "sweepT12"}, {"pct": 1.438, "present": 975, "algo": "sweepT8"}, {"pct": 1.462, "present": 977, "algo": "sweepT6"}, {"pct": 1.593, "present": 978, "algo": "sweepR6"}, {"pct": 1.778, "present": 979, "algo": "sweepT0"}, {"pct": 2.466, "present": 1201, "algo": "minsize"}, {"pct": 2.62, "present": 1209, "algo": "anchormin"}, {"pct": 2.779, "present": 1210, "algo": "edgeseed"}, {"pct": 3.819, "present": 1214, "algo": "kcore"}, {"pct": 4.974, "present": 1217, "algo": "alt"}, {"pct": 100.0, "present": 1230, "algo": "full"}], "bytype": [{"type": "DEL", "n": 260, "present": 243, "local": 240, "anchored": 240, "clean": 127}, {"type": "DUP", "n": 130, "present": 87, "local": 86, "anchored": 87, "clean": 86}, {"type": "INS", "n": 130, "present": 120, "local": 116, "anchored": 120, "clean": 84}, {"type": "INV", "n": 130, "present": 122, "local": 85, "anchored": 121, "clean": 41}, {"type": "delINVdup", "n": 80, "present": 49, "local": 34, "anchored": 47, "clean": 1}, {"type": "dupINVdup", "n": 80, "present": 78, "local": 39, "anchored": 78, "clean": 0}, {"type": "delINVdel", "n": 60, "present": 58, "local": 57, "anchored": 38, "clean": 0}, {"type": "dupINVdel", "n": 60, "present": 53, "local": 39, "anchored": 36, "clean": 0}, {"type": "INVdup", "n": 54, "present": 43, "local": 14, "anchored": 42, "clean": 0}, {"type": "DUP_INV", "n": 36, "present": 29, "local": 19, "anchored": 29, "clean": 0}, {"type": "INS_iDEL", "n": 36, "present": 33, "local": 32, "anchored": 32, "clean": 0}, {"type": "INV_rTRA", "n": 36, "present": 32, "local": 0, "anchored": 32, "clean": 0}, {"type": "INVdel", "n": 36, "present": 34, "local": 33, "anchored": 18, "clean": 2}, {"type": "dDUP_INV", "n": 36, "present": 31, "local": 30, "anchored": 29, "clean": 1}, {"type": "dDUP_iDEL", "n": 36, "present": 31, "local": 30, "anchored": 31, "clean": 2}, {"type": "delINV", "n": 36, "present": 34, "local": 34, "anchored": 18, "clean": 0}, {"type": "dupINV", "n": 36, "present": 34, "local": 12, "anchored": 34, "clean": 0}, {"type": "rTRA", "n": 36, "present": 32, "local": 32, "anchored": 32, "clean": 32}, {"type": "INV_DUP", "n": 27, "present": 24, "local": 7, "anchored": 22, "clean": 1}, {"type": "INV_dDUP", "n": 18, "present": 15, "local": 0, "anchored": 15, "clean": 0}, {"type": "INV_nrTRA", "n": 18, "present": 16, "local": 0, "anchored": 16, "clean": 0}, {"type": "dDUP", "n": 18, "present": 16, "local": 16, "anchored": 16, "clean": 16}, {"type": "nrTRA", "n": 18, "present": 16, "local": 16, "anchored": 16, "clean": 16}], "prim": [{"prim": "COPY", "hit": 280, "n": 354, "fp": 5, "fpn": 108}, {"prim": "GAIN", "hit": 120, "n": 130, "fp": 0, "fpn": 37}, {"prim": "INVSIG", "hit": 525, "n": 560, "fp": 0, "fpn": 159}, {"prim": "JUNC", "hit": 466, "n": 538, "fp": 0, "fpn": 154}, {"prim": "LOSS", "hit": 385, "n": 412, "fp": 0, "fpn": 120}], "full": {"present": 1230, "n": 1407, "events": 858, "events_n": 1000, "snp": 17677, "snp_n": 20000, "indel": 4379, "indel_n": 5000, "anchored": 1149, "clean": 409}, "corr": {"rho": -0.859, "p": 1.0177005217528686e-08, "pearson": -0.998, "rho_copy": -0.861, "rho_anch": -0.839}};
+document.getElementById('ts').textContent = 'complex L5 · refined.bin K=43,322,458 · 29 graphs · 1,407 SV records / 1,000 events';
+const F = DATA.full, C = DATA.corr;
+document.getElementById('k_pearson').textContent = C.pearson;
+document.getElementById('k_full').innerHTML = F.present + '<span class="u">/' + F.n + '</span>';
+const frontBest = DATA.rows.filter(r=>r.algo==='edgeseed')[0];
+document.getElementById('k_best').innerHTML = frontBest.pct + '<span class="u">% nodes</span>';
+document.getElementById('k_best_sub').textContent = 'edgeseed — ' + frontBest.present + ' (' + frontBest.pct_of_full + '% of full)';
+const ow = DATA.rows.filter(r=>r.algo==='hyb_maxrecip')[0];
+document.getElementById('k_oldwin').innerHTML = ow.present + '<span class="u"> (' + ow.pct_of_full + '%)</span>';
+document.getElementById('t_pearson').textContent = C.pearson;
+document.getElementById('t_rho').textContent = C.rho + ' (p=' + C.p.toExponential(1) + ')';
+document.getElementById('t_rhocopy').textContent = C.rho_copy;
+document.getElementById('t_rhoanch').textContent = C.rho_anch;
+
+const DET = [
+ ['LOSS','DEL, CUT','strand-0 reference cores over the span turn normal-only','median frac 1.000 (299/299 ≥0.9)','—','LOSS'],
+ ['GAIN','INS','novel not-in-reference tumour cores anchored at the point','novel comp ≥3 cores','error band: comp size median 1, p90 2','GAIN'],
+ ['INVSIG','INV, *inv-PASTE','strand-1 (rev-comp) cores present only in tumour','shared 42,187,779 strand-0 vs 346 strand-1','—','INVSIG'],
+ ['COPY','DUP, dDUP, COPY-*','tumour/normal depth ratio over the span','DUP 2.09 · COPY-PASTE 1.91 · dDUP 1.88','CUT-PASTE 1.00 · INV 0.94','COPY'],
+ ['JUNC','anything with TARGET','direct positioned somatic edge OR a novel bridge','bridges: rTRA 32/36, dDUP 17/18','direct edges: rTRA 0/34, dDUP 0/14','JUNC'],
+];
+const pmap = {}; DATA.prim.forEach(p=>pmap[p.prim]=p);
+document.getElementById('tb_det').innerHTML = DET.map(d=>{
+  const p = pmap[d[5]];
+  return '<tr><td><code>'+d[0]+'</code></td><td class="mut">'+d[1]+'</td><td style="text-align:left">'+d[2]+
+   '</td><td class="good">'+d[3]+'</td><td class="mut">'+d[4]+'</td><td><b>'+p.hit+'</b>/'+p.n+
+   '</td><td class="'+(p.fp?'warn':'good')+'">'+p.fp+'/'+p.fpn+'</td></tr>';
+}).join('');
+
+const dark = {template:'plotly_dark', paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+  font:{color:'#e6edf3',size:11}, margin:{t:14,r:14,b:46,l:56}, hovermode:'closest'};
+
+// --- inversion scatter ---
+const both = DATA.rows.filter(r=>r.old_recip70!==null);
+Plotly.newPlot('p_inv', [{
+  x: both.map(r=>r.old_recip70), y: both.map(r=>r.present), text: both.map(r=>r.algo), mode:'markers',
+  type:'scatter', marker:{size:11, color: both.map(r=>r.COPY), colorscale:'Viridis', showscale:true,
+  colorbar:{title:{text:'COPY hits',side:'right'},thickness:10}, line:{color:'#30363d',width:1}},
+  hovertemplate:'<b>%{text}</b><br>old recip70=%{x}<br>new present=%{y}<extra></extra>'
+}], Object.assign({}, dark, {xaxis:{title:'OLD metric — recip≥0.70'}, yaxis:{title:'NEW metric — signature present'}}), {responsive:true});
+
+// --- frontier ---
+const fr = DATA.front;
+Plotly.newPlot('p_front', [
+ {x: DATA.rows.map(r=>r.pct), y: DATA.rows.map(r=>r.present), text: DATA.rows.map(r=>r.algo), mode:'markers', type:'scatter',
+  name:'algorithms', marker:{size:10, color:DATA.rows.map(r=>r.anchored), colorscale:'Turbo', showscale:true,
+  colorbar:{title:{text:'anchored',side:'right'},thickness:10}, line:{color:'#30363d',width:1}},
+  hovertemplate:'<b>%{text}</b><br>%{x}% nodes<br>present=%{y}<extra></extra>'},
+ {x: fr.map(r=>r.pct), y: fr.map(r=>r.present), mode:'lines', name:'Pareto frontier', line:{dash:'dash', color:'#2dd4bf', width:2}, hoverinfo:'skip'}
+], Object.assign({}, dark, {xaxis:{title:'% of original 43.3M nodes kept (log)', type:'log'}, yaxis:{title:'SV records recoverable (of 1,407)'},
+   showlegend:true, legend:{x:0.62,y:0.08},
+   shapes:[{type:'rect',x0:1.78,x1:2.47,y0:960,y1:1240,fillcolor:'rgba(248,81,73,.10)',line:{width:0}}],
+   annotations:[{x:Math.log10(2.1),y:1090,text:'COPY cliff<br>979 → 1201',showarrow:false,font:{color:'#f85149',size:11}}]}), {responsive:true});
+
+// --- by type ---
+const bt = DATA.bytype;
+Plotly.newPlot('p_type', [
+ {x: bt.map(r=>r.present), y: bt.map(r=>r.type), name:'present', type:'bar', orientation:'h', marker:{color:'#2dd4bf'}},
+ {x: bt.map(r=>r.n-r.present), y: bt.map(r=>r.type), name:'missed', type:'bar', orientation:'h', marker:{color:'#30363d'}}
+], Object.assign({}, dark, {barmode:'stack', xaxis:{title:'records'}, yaxis:{automargin:true}, showlegend:true, legend:{x:0.7,y:0.05}}), {responsive:true});
+
+// --- tables ---
+const FRONT = new Set(DATA.front.map(f=>f.algo));
+function fill(tid, rows, cols, fmt){
+  const tb = document.querySelector(tid+' tbody');
+  tb.innerHTML = rows.map(r=>'<tr>'+cols.map(c=>fmt(r,c)).join('')+'</tr>').join('');
+}
+fill('#tb_board', DATA.rows, ['algo','pct','present','pct_of_full','local','anchored','clean','events','frag','COPY','GAIN','INVSIG','JUNC','LOSS','snp','indel','negfp','old_recip70'],
+ (r,c)=>{
+  if(c==='algo') return '<td>'+r.algo+(FRONT.has(r.algo)?' <span class="pill win">pareto</span>':'')+'</td>';
+  if(c==='COPY') return '<td class="'+(r.COPY<100?'bad':'')+'">'+r.COPY+'</td>';
+  if(c==='anchored') return '<td class="'+(r.anchored<100?'bad':'')+'">'+r.anchored+'</td>';
+  if(c==='present') return '<td><b>'+r.present+'</b></td>';
+  if(c==='old_recip70') return '<td class="mut">'+(r.old_recip70===null?'—':r.old_recip70)+'</td>';
+  return '<td>'+r[c]+'</td>';
+ });
+fill('#tb_type', DATA.bytype, ['type','n','present','pct','local','anchored','clean'],
+ (r,c)=> c==='pct' ? '<td>'+(100*r.present/r.n).toFixed(0)+'%</td>' : '<td>'+r[c]+'</td>');
+
+// sortable
+document.querySelectorAll('table').forEach(t=>{
+  t.querySelectorAll('th').forEach((th,i)=>{
+    let asc=false;
+    th.addEventListener('click',()=>{
+      const tb=t.querySelector('tbody'); const rs=[...tb.rows];
+      rs.sort((a,b)=>{const x=a.cells[i].innerText.replace(/[^\d.\-]/g,''),y=b.cells[i].innerText.replace(/[^\d.\-]/g,'');
+        const nx=parseFloat(x),ny=parseFloat(y);
+        if(!isNaN(nx)&&!isNaN(ny)) return asc?nx-ny:ny-nx;
+        return asc?a.cells[i].innerText.localeCompare(b.cells[i].innerText):b.cells[i].innerText.localeCompare(a.cells[i].innerText);});
+      asc=!asc; rs.forEach(r=>tb.appendChild(r));
+    });
+  });
+});
+</script></body></html>

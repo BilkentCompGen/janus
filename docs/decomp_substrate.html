@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SNAPE decomposition substrate — complex L5 graph + truth</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#0f141a;--ink:#e6edf3;--mut:#8b949e;--line:#30363d;--accent:#2dd4bf;--accent2:#58a6ff;--warn:#f0883e;--som:#f778ba;--good:#3fb950}
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0} header .sub{color:var(--mut);font-size:12.5px}
+  .tabs{display:flex;gap:6px;padding:10px 20px 0;border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap}
+  .tab{padding:8px 16px;border:1px solid var(--line);border-bottom:none;border-radius:8px 8px 0 0;cursor:pointer;color:var(--mut);font-size:13px}
+  .tab.on{color:var(--ink);background:var(--panel);font-weight:600}
+  main{padding:20px;max-width:1180px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:18px}
+  .card h2{font-size:14px;margin:0 0 4px} .card .h{color:var(--mut);font-size:12px;margin:0 0 10px}
+  .kstrip{display:flex;flex-wrap:wrap;gap:26px;margin:2px 0 4px}
+  .kpi{font-size:23px;font-weight:700;line-height:1.1} .kpi .u{font-size:12px;color:var(--mut);font-weight:400;display:block;margin-top:2px}
+  .kpi.acc{color:var(--accent)} .kpi.acc2{color:var(--accent2)} .kpi.som{color:var(--som)} .kpi.warn{color:var(--warn)} .kpi.good{color:var(--good)}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:5px 9px;text-align:left;white-space:nowrap}
+  th{color:var(--mut)} td.n{text-align:right;font-variant-numeric:tabular-nums} td.d{color:var(--good)}
+  code{font-family:ui-monospace,monospace;background:#0b0f14;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:12px}
+  .note{color:var(--mut);font-size:12px;margin-top:8px} .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);color:var(--mut)}
+  pre.rule{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:11.5px;color:#c9d1d9;overflow-x:auto;margin:6px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>The decomposition substrate — <code>complex</code> L5 graph &amp; ground truth</h1>
+  <span class="sub"><code>svp graph --level 5 --min-mult 3</code> + <code>refine</code> · truth = 26,000-variant <code>complex</code> sim · all metrics computed twice (census_v3 ↔ scipy)</span>
+  <span class="sub" style="margin-left:auto" id="ts"></span>
+</header>
+<div class="tabs">
+  <div class="tab on" data-t="full" onclick="show('full')">① Full refined graph</div>
+  <div class="tab" data-t="recipe" onclick="show('recipe')">② Your recipe</div>
+  <div class="tab" data-t="pruned" onclick="show('pruned')">③ My alternative (somatic+halo)</div>
+  <div class="tab" data-t="quality" onclick="show('quality')">④ Fragment quality · recovery · iteration</div>
+</div>
+
+<main id="tab-full">
+<div class="card">
+  <h2>Graph at a glance <span class="tag">combined 2-colour graph, post-refine</span></h2>
+  <p class="h">A node is a 64-bit core signature + per-colour read counts; an edge is a genuine sequence overlap.</p>
+  <div class="kstrip">
+    <div class="kpi acc">43,322,458<span class="u">nodes (cores)</span></div>
+    <div class="kpi acc">42,969,330<span class="u">edges</span></div>
+    <div class="kpi">98.11%<span class="u">degree-2 backbone</span></div>
+    <div class="kpi">229,507<span class="u">branch nodes (0.53%)</span></div>
+    <div class="kpi">421,630<span class="u">components</span></div>
+    <div class="kpi warn">71.9%<span class="u">in one giant component</span></div>
+  </div>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>1 · Ground-truth inventory</h2>
+    <p class="h">26,000 events / 26,407 records. Sparse field (not hypermutated like <code>hard</code>).</p>
+    <div id="gt_inv" style="height:230px"></div>
+    <table style="margin-top:8px">
+      <tr><th>class</th><th class="n">events</th><th>detail</th></tr>
+      <tr><td>SNP</td><td class="n">20,000</td><td class="sub">point</td></tr>
+      <tr><td>short indel &lt;50bp</td><td class="n">5,000</td><td class="sub">2,500 INS + 2,500 DEL</td></tr>
+      <tr><td>classic SV ≥50bp</td><td class="n">650</td><td class="sub">DEL 260·INS 130·DUP 130·INV 130</td></tr>
+      <tr><td>complex SV</td><td class="n">350</td><td class="sub">19 grammars · 757 records</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>2 · Variants within 150 bp → islands</h2>
+    <p class="h">150 bp ≈ one LCP core: breakpoints closer than a core collide. Distinct-event model.</p>
+    <div class="kstrip">
+      <div class="kpi warn">41<span class="u">islands (≥2 events)</span></div>
+      <div class="kpi warn">83<span class="u">events entangled (0.3%)</span></div>
+      <div class="kpi">3<span class="u">largest island</span></div>
+    </div>
+    <div id="isl_sweep" style="height:210px"></div>
+    <p class="note"><b>1,000 real SVs: 994 isolated</b>, 6 touch a SNP/indel, <b>0 collide with another SV</b>. Reference repeats — not variant proximity — tangle this graph.</p>
+  </div>
+</div>
+<div class="card">
+  <h2>3 · Node degree distribution</h2>
+  <p class="h">Almost a straight line: 98.1% degree-2. The signal is in the 0.5% that branch.</p>
+  <div class="grid" style="grid-template-columns:1.4fr 1fr">
+    <div id="deg" style="height:300px"></div>
+    <div><table>
+      <tr><th>class (in,out)</th><th class="n">nodes</th><th class="n">%</th></tr>
+      <tr><td>linear (≤1,≤1)</td><td class="n">42,502,628</td><td class="n">98.108</td></tr>
+      <tr><td>isolated (0,0)</td><td class="n">376,124</td><td class="n">0.868</td></tr>
+      <tr><td>source tip (in=0)</td><td class="n">108,494</td><td class="n">0.250</td></tr>
+      <tr><td>sink tip (out=0)</td><td class="n">105,705</td><td class="n">0.244</td></tr>
+      <tr><td>in-branch</td><td class="n">112,334</td><td class="n">0.259</td></tr>
+      <tr><td>out-branch</td><td class="n">109,979</td><td class="n">0.254</td></tr>
+      <tr><td>hub</td><td class="n">7,194</td><td class="n">0.017</td></tr>
+    </table><p class="note">Max degree 81. 7,194 hubs = true tangle nodes.</p></div>
+  </div>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>4 · Cycles</h2>
+    <div class="kstrip">
+      <div class="kpi">68,502<span class="u">independent cycles</span></div>
+      <div class="kpi">270<span class="u">cyclic regions (SCCs)</span></div>
+      <div class="kpi warn">1,269,847<span class="u">largest cycle (SCC)</span></div>
+    </div>
+    <div id="cyc" style="height:210px"></div>
+    <p class="note">2.99M nodes (6.9%) in a cycle. The 1.27M giant is a <b>reference repeat tangle</b> (shared). Somatic cycles are tumor-only: 235 SCCs vs normal's 20.</p>
+  </div>
+  <div class="card">
+    <h2>5 · Dead-end tips &amp; their colour</h2>
+    <div class="kstrip">
+      <div class="kpi">214,199<span class="u">dead-ends</span></div>
+      <div class="kpi som">27,580<span class="u">tumor-only (gain)</span></div>
+      <div class="kpi acc2">22,978<span class="u">normal-only (loss)</span></div>
+    </div>
+    <div id="tipcol" style="height:210px"></div>
+    <p class="note">Backbone = 24 reads/core; 83.5% of dead-ends ≤8 reads (error-like). ~1,900 deep somatic ends are the real insertion/deletion tips. This is why a prune must keep somatic dead-ends.</p>
+  </div>
+</div>
+</main>
+
+<main id="tab-recipe" style="display:none">
+<div class="card">
+  <h2>Your recipe — remove backbone middles, keep the coordinate skeleton <span class="tag">7.44% kept</span></h2>
+  <p class="h">Single pass, masks on the original graph, first match decides (shape &gt; highway):</p>
+  <pre class="rule">① isolated (deg 0)                                        → DELETE
+② shared-only shape (all-shared SCC · all-shared bubble arms) → DELETE   [shape > highway]
+③ tip (deg-1 end → junction, len L, ordered free..junction):
+     L≤4 → del whole · all-shared → del whole
+     somatic & L≥5 → keep junction-side..free-most-somatic, delete shared free tail
+④ shared-only highway (both ends junction): L≤20 keep · L&gt;20 keep 10 each end, del middle
+⑤ standalone contig (both ends dead-end): all-shared → del · somatic → keep
+⑥ else (junctions deg≥3, somatic non-tip) → KEEP</pre>
+  <div class="kstrip">
+    <div class="kpi acc">3,224,797<span class="u">nodes kept (7.44%)</span></div>
+    <div class="kpi acc">3,145,798<span class="u">edges</span></div>
+    <div class="kpi good">130,271<span class="u">fragments (largest 13,073)</span></div>
+    <div class="kpi good">21<span class="u">median piece (cores)</span></div>
+    <div class="kpi som">16.0%<span class="u">somatic-coloured</span></div>
+  </div>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>What each rule removed (40.1M cores)</h2>
+    <div id="rwater" style="height:230px"></div>
+    <p class="note"><b>Shape rule caught only 1,070</b> — the 1.27M repeat tangle is <i>mixed</i> (somatic threads through it), so "all-shared shape" doesn't fire on it. But rule ④ (highway middles, 39.2M) <b>shattered it anyway</b>.</p>
+  </div>
+  <div class="card">
+    <h2>Before → after</h2>
+    <table>
+      <tr><th>metric</th><th class="n">full</th><th class="n">recipe</th></tr>
+      <tr><td>nodes</td><td class="n">43,322,458</td><td class="n d">3,224,797</td></tr>
+      <tr><td>edges</td><td class="n">42,969,330</td><td class="n d">3,145,798</td></tr>
+      <tr><td>components</td><td class="n">421,630</td><td class="n d">130,271</td></tr>
+      <tr><td>largest component</td><td class="n">31,141,239</td><td class="n d">13,073</td></tr>
+      <tr><td>non-trivial SCCs</td><td class="n">270</td><td class="n d">63</td></tr>
+      <tr><td>largest cycle (SCC)</td><td class="n">1,269,847</td><td class="n d">558</td></tr>
+      <tr><td>nodes in cycles</td><td class="n">2,992,766</td><td class="n d">3,882</td></tr>
+      <tr><td>somatic kept</td><td class="n">835,617</td><td class="n d">514,759</td></tr>
+    </table>
+    <p class="note">Somatic cost 320,858 = 254,182 isolated (deg-0) + 66,676 short (≤4) somatic tips. Every <b>deep (L≥5) somatic end is kept</b>.</p>
+  </div>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>Many small graphs</h2>
+    <p class="h">130,271 fragments, median 21 cores — a junction + its 10-core stubs, or a somatic piece + anchors.</p>
+    <div id="rcomp" style="height:250px"></div>
+    <p class="note">Only 70 fragments &gt; 2k nodes (residual tangles). The genome-wide junction skeleton survives as ~21-core stubs.</p>
+  </div>
+  <div class="card">
+    <h2>Degree distribution (recipe)</h2>
+    <p class="h">Backbone cut into stubs → tips 7.8%. The length-10 stub is the highway-end, by construction.</p>
+    <div id="rdeg" style="height:250px"></div>
+    <p class="note">63 tiny SCCs left (largest 558) — repeat tangle's cyclic core is gone. Max degree 43.</p>
+  </div>
+</div>
+</main>
+
+<main id="tab-pruned" style="display:none">
+<div class="card">
+  <h2>My alternative — keep only the somatic neighbourhoods <span class="tag">4.97% kept</span></h2>
+  <p class="h">A different trade-off from ②: instead of preserving the genome-wide coordinate skeleton, keep <b>only</b> somatic nodes + somatic-edge endpoints (DUP back-edges) + a 10-hop shared halo; drop the reference desert entirely. Same spirit (fragment + keep somatic), smaller and more somatic-focused.</p>
+  <div class="kstrip">
+    <div class="kpi acc">2,155,019<span class="u">nodes (4.97%)</span></div>
+    <div class="kpi good">91,817<span class="u">fragments (largest 13,095)</span></div>
+    <div class="kpi som">27.0%<span class="u">somatic-coloured (14× enriched)</span></div>
+    <div class="kpi good">24<span class="u">median piece (cores)</span></div>
+  </div>
+</div>
+<div class="grid">
+  <div class="card">
+    <h2>② vs ③ — how they differ</h2>
+    <table>
+      <tr><th></th><th class="n">② recipe</th><th class="n">③ mine</th></tr>
+      <tr><td>nodes kept</td><td class="n">3,224,797</td><td class="n">2,155,019</td></tr>
+      <tr><td>&nbsp;→ shared</td><td class="n">2,710,038</td><td class="n">1,573,584</td></tr>
+      <tr><td>&nbsp;→ somatic</td><td class="n">514,759</td><td class="n">581,435</td></tr>
+      <tr><td>fragments</td><td class="n">130,271</td><td class="n">91,817</td></tr>
+      <tr><td>ref desert backbone</td><td class="n">kept as stubs</td><td class="n">dropped</td></tr>
+      <tr><td>short somatic tips ≤4</td><td class="n">dropped</td><td class="n">kept</td></tr>
+    </table>
+    <p class="note">② keeps the whole junction skeleton (coordinate scaffold); ③ keeps somatic + local anchors only. ② is a superset on shared, ③ a superset on somatic tips.</p>
+  </div>
+  <div class="card">
+    <h2>Component sizes (mine)</h2>
+    <div id="pcomp" style="height:250px"></div>
+    <p class="note">Median 24 cores; 18 fragments &gt; 2k. Each ~24-core piece ≈ a somatic event + its two 10-core shared anchors.</p>
+  </div>
+</div>
+</main>
+
+<main id="tab-quality" style="display:none">
+<div class="card">
+  <h2>Are the fragments signal or noise?</h2>
+  <p class="h">Two things you asked: what a 2-node graph even is, and how much of the dust is noise.</p>
+  <div class="grid" style="grid-template-columns:1fr 1fr">
+    <div>
+      <h2 style="font-size:13px">A 2-node graph = 2 cores + 1 edge, cut loose</h2>
+      <p class="note" style="margin-top:2px">When the backbone/anchors around a kept pair are pruned away, the pair survives as its own tiny island. In ② there are 16,901 — mostly low-coverage (<b>median 8 reads</b> vs the 45-read backbone), i.e. shallow somatic spurs or stub remnants. Colour of the pair:</p>
+      <div id="q2node" style="height:180px"></div>
+    </div>
+    <div>
+      <h2 style="font-size:13px">Somatic-bearing vs pure-shared (noise) fragments</h2>
+      <p class="note" style="margin-top:2px">A fragment with no tumor/normal core is pure reference scaffold — noise for SV purposes. <b>② is 47.5% pure-shared</b> (the coordinate skeleton you asked to keep); <b>③ is only 2.1%</b> — 97.9% of its fragments carry somatic signal.</p>
+      <div id="qnoise" style="height:200px"></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Coverage — the premise, corrected</h2>
+    <p class="h">The <code>21 vs 24</code> I gave earlier was median piece <b>SIZE</b> (node count), not coverage. On actual read-coverage it's the opposite:</p>
+    <table>
+      <tr><th>median reads/core</th><th class="n">② recipe</th><th class="n">③ alt</th></tr>
+      <tr><td>all nodes (total)</td><td class="n d">45</td><td class="n">40</td></tr>
+      <tr><td>shared</td><td class="n">47</td><td class="n">45</td></tr>
+      <tr><td>tumor-only (tcov)</td><td class="n">13</td><td class="n">11</td></tr>
+      <tr><td>normal-only (ncov)</td><td class="n">24</td><td class="n">23</td></tr>
+      <tr><td>somatic fraction</td><td class="n">16.0%</td><td class="n">27.0%</td></tr>
+    </table>
+    <p class="note">② is <b>higher</b> because it deleted the shallow short somatic tips and is 84% high-cov shared. ③ keeps every connected somatic core incl. shallow tumor-only tips (27%, tcov≈11) → those drag its median down. Backbone depth is 24/colour (haploid 30×).</p>
+  </div>
+  <div class="card">
+    <h2>GT recovery — which SVs survive each prune</h2>
+    <p class="h">§11 decomposition-recovery (≥70% coverage of each truth SV), run on all three graphs. Full graph = the achievable ceiling.</p>
+    <div id="qrec" style="height:180px"></div>
+    <p class="note"><b>③ matches the full-graph ceiling exactly (1360/1407, 97%, 0 lost).</b> ② loses <b>8</b> SVs — <code>delINVdup×4 · DUP_INV×2 · nrTRA×1 · DUP×1</code> (mostly &gt;1 kb complex/dup) — the cost of deleting short somatic tips. ③ loses 0 that ② keeps. (47 sub-kb SVs are unrecoverable even in the full graph — quantization-limited.)</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Iterating your recipe — converges, but recall erodes</h2>
+  <p class="h">Re-applying ② to its own output. It converges fast (shared stubs become all-shared tips → deleted), but each pass strips the shared <b>anchors</b> that localize an SV, even though it barely touches somatic cores.</p>
+  <div class="grid" style="grid-template-columns:1.3fr 1fr">
+    <div id="qiter" style="height:250px"></div>
+    <div>
+      <table>
+        <tr><th>pass</th><th class="n">nodes</th><th class="n">somatic del</th><th class="n">recall</th></tr>
+        <tr><td>full</td><td class="n">43,322,458</td><td class="n">—</td><td class="n">97%</td></tr>
+        <tr><td>① (recipe)</td><td class="n">3,224,797</td><td class="n">320,858</td><td class="n">96%</td></tr>
+        <tr><td>② ×2</td><td class="n">1,210,592</td><td class="n">1,021</td><td class="n">94%</td></tr>
+        <tr><td>③ ×3</td><td class="n">1,199,086</td><td class="n">533</td><td class="n">91%</td></tr>
+      </table>
+      <p class="note">Converges toward a somatic-focused graph (~1.2M) — the same destination as ③'s philosophy — but every pass costs recall (anchors erode). So iterating is <b>not free</b>: 1 pass is the sweet spot; more trades localizability for size.</p>
+    </div>
+  </div>
+</div>
+</main>
+
+<script>
+const D = /*__DATA__*/ {
+  gt: [["SNP",20000],["short indel",5000],["classic SV",650],["complex SV",350]],
+  sweep: {t:[0,25,73,150,300,500], tangles:[0,6,19,41,92,151], events:[0,12,38,83,185,303]},
+  deg: {d:[0,1,2,3,4,5,6,7,8,9,10,11], n:[376124,214199,42508673,205199,12831,2663,839,476,318,256,165,127]},
+  cyc: {lab:["normal","tumor","combined"], scc:[20,235,270], largest:[5277,14402,1269847]},
+  tipcol: {cls:['tumor-only','normal-only','shared','mixed(+tum)','mixed(oth)'], n:[27580,22978,92003,4634,4442]},
+  rwater: {lab:["④ highway middles","③ tips/standalone","① isolated","②b shared bubbles","②a shared SCC"], n:[39207003,442192,376124,71272,1070]},
+  rcomp: {lab:["2","3-5","6-10","11-20","21-50","51-100","101-500","501-2k",">2k"], n:[16901,5755,1939,33170,60830,2561,1341,449,70]},
+  rdeg: {d:[0,1,2,3,4,5,6,7,8], n:[7255,250882,2866568,97374,1370,496,285,163,112]},
+  pcomp: {lab:["2","3-5","6-10","11-20","21-50","51-100","101-500","501-2k",">2k"], n:[17143,7843,3176,6914,54021,1764,798,140,18]},
+  q2node: {lab:["tumor+tumor","normal+shared","shared+tumor","normal+normal","shared+shared"], n:[4269,4139,4135,3741,617]},
+  qnoise: {names:["② recipe","③ alt"], som:[68439,89895], shared:[61832,1922]},
+  qrec: {names:["full (ceiling)","② recipe","③ alt"], n:[1360,1352,1360]},
+  qiter: {pass:["full","①","②×2","③×3"], nodes:[43322458,3224797,1210592,1199086], recall:[97,96,94,91]}
+};
+const PL={template:'plotly_dark',paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#e6edf3',size:11},margin:{t:8,r:10,b:34,l:46}};
+const cfg={responsive:true,displayModeBar:false};
+const AC='#2dd4bf',A2='#58a6ff',WA='#f0883e',SO='#f778ba',GD='#3fb950';
+
+Plotly.newPlot('gt_inv',[{type:'bar',orientation:'h',x:D.gt.map(r=>r[1]),y:D.gt.map(r=>r[0]),marker:{color:[A2,A2,AC,SO]},text:D.gt.map(r=>r[1].toLocaleString()),textposition:'auto'}],{...PL,xaxis:{type:'log',title:'events (log)'},margin:{...PL.margin,l:90}},cfg);
+Plotly.newPlot('isl_sweep',[{type:'scatter',mode:'lines+markers',x:D.sweep.t,y:D.sweep.events,name:'entangled events',line:{color:WA}},{type:'scatter',mode:'lines+markers',x:D.sweep.t,y:D.sweep.tangles,name:'islands',line:{color:AC}}],{...PL,legend:{orientation:'h',y:1.15},xaxis:{title:'proximity threshold (bp)'},yaxis:{title:'count'},shapes:[{type:'line',x0:150,x1:150,y0:0,y1:303,line:{color:'#8b949e',dash:'dot',width:1}}]},cfg);
+Plotly.newPlot('deg',[{type:'bar',x:D.deg.d,y:D.deg.n,marker:{color:D.deg.d.map(d=>d===2?A2:(d<=1?'#6e7681':WA))}}],{...PL,yaxis:{type:'log',title:'nodes (log)'},xaxis:{title:'total degree',dtick:1}},cfg);
+Plotly.newPlot('cyc',[{type:'bar',x:D.cyc.lab,y:D.cyc.scc,name:'SCCs',marker:{color:AC},yaxis:'y'},{type:'scatter',mode:'lines+markers',x:D.cyc.lab,y:D.cyc.largest,name:'largest SCC',line:{color:WA},yaxis:'y2'}],{...PL,legend:{orientation:'h',y:1.18},yaxis:{title:'SCC count'},yaxis2:{overlaying:'y',side:'right',type:'log',title:'largest (log)'}},cfg);
+Plotly.newPlot('tipcol',[{type:'bar',x:D.tipcol.cls,y:D.tipcol.n,marker:{color:[SO,A2,'#6e7681','#b56576','#8b949e']},text:D.tipcol.n.map(v=>v.toLocaleString()),textposition:'auto'}],{...PL,yaxis:{type:'log',title:'tips (log)'},xaxis:{title:'tip chain colour'},margin:{...PL.margin,b:55}},cfg);
+
+let doneR=false,doneP=false;
+function renderRecipe(){ if(doneR)return; doneR=true;
+  Plotly.newPlot('rwater',[{type:'bar',orientation:'h',x:D.rwater.n,y:D.rwater.lab,marker:{color:['#6e7681',WA,'#6e7681',SO,SO]},text:D.rwater.n.map(v=>v.toLocaleString()),textposition:'auto'}],{...PL,xaxis:{type:'log',title:'cores deleted (log)'},margin:{...PL.margin,l:135}},cfg);
+  Plotly.newPlot('rcomp',[{type:'bar',x:D.rcomp.lab,y:D.rcomp.n,marker:{color:GD},text:D.rcomp.n.map(v=>v.toLocaleString()),textposition:'none'}],{...PL,yaxis:{type:'log',title:'fragments (log)'},xaxis:{title:'component size (nodes)'}},cfg);
+  Plotly.newPlot('rdeg',[{type:'bar',x:D.rdeg.d,y:D.rdeg.n,marker:{color:D.rdeg.d.map(d=>d===2?A2:(d===1?WA:GD))}}],{...PL,yaxis:{type:'log',title:'nodes (log)'},xaxis:{title:'total degree',dtick:1}},cfg);
+}
+function renderPruned(){ if(doneP)return; doneP=true;
+  Plotly.newPlot('pcomp',[{type:'bar',x:D.pcomp.lab,y:D.pcomp.n,marker:{color:AC},text:D.pcomp.n.map(v=>v.toLocaleString()),textposition:'none'}],{...PL,yaxis:{type:'log',title:'fragments (log)'},xaxis:{title:'component size (nodes)'}},cfg);
+}
+let doneQ=false;
+function renderQuality(){ if(doneQ)return; doneQ=true;
+  Plotly.newPlot('q2node',[{type:'bar',orientation:'h',x:D.q2node.n,y:D.q2node.lab,marker:{color:[SO,A2,SO,A2,'#6e7681']},text:D.q2node.n.map(v=>v.toLocaleString()),textposition:'auto'}],{...PL,xaxis:{title:'2-node fragments'},margin:{...PL.margin,l:105}},cfg);
+  Plotly.newPlot('qnoise',[{type:'bar',x:D.qnoise.names,y:D.qnoise.som,name:'somatic-bearing',marker:{color:AC}},{type:'bar',x:D.qnoise.names,y:D.qnoise.shared,name:'pure-shared (noise)',marker:{color:'#6e7681'}}],{...PL,barmode:'stack',legend:{orientation:'h',y:1.18},yaxis:{title:'fragments'}},cfg);
+  Plotly.newPlot('qrec',[{type:'bar',x:D.qrec.names,y:D.qrec.n,marker:{color:['#6e7681',WA,AC]},text:D.qrec.n.map(v=>v+'/1407'),textposition:'auto'}],{...PL,yaxis:{range:[1300,1370],title:'SVs recovered'}},cfg);
+  Plotly.newPlot('qiter',[{type:'bar',x:D.qiter.pass,y:D.qiter.nodes,name:'nodes',marker:{color:A2},yaxis:'y'},{type:'scatter',mode:'lines+markers',x:D.qiter.pass,y:D.qiter.recall,name:'recall %',line:{color:WA},yaxis:'y2'}],{...PL,legend:{orientation:'h',y:1.15},yaxis:{type:'log',title:'nodes (log)'},yaxis2:{overlaying:'y',side:'right',range:[85,100],title:'recall %'}},cfg);
+}
+function show(t){
+  document.querySelectorAll('.tab').forEach(e=>e.classList.toggle('on',e.dataset.t===t));
+  document.getElementById('tab-full').style.display  = t==='full'  ?'block':'none';
+  document.getElementById('tab-recipe').style.display= t==='recipe'?'block':'none';
+  document.getElementById('tab-pruned').style.display= t==='pruned'?'block':'none';
+  document.getElementById('tab-quality').style.display= t==='quality'?'block':'none';
+  if(t==='recipe'){ renderRecipe(); ['rwater','rcomp','rdeg'].forEach(id=>Plotly.Plots.resize(id)); }
+  if(t==='pruned'){ renderPruned(); Plotly.Plots.resize('pcomp'); }
+  if(t==='quality'){ renderQuality(); ['q2node','qnoise','qrec','qiter'].forEach(id=>Plotly.Plots.resize(id)); }
+}
+document.getElementById('ts').textContent='complex L5 · 2026-07-15';
+</script>
+</body>
+</html>
