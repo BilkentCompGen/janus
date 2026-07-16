@@ -27,3 +27,17 @@ scripts/fakebin
 # bloom-counting build artifacts
 /svp_bloom*
 /build_bloom/
+
+# claude workspace (contains git worktrees)
+.claude
+
+# stray LaTeX build — the paper lives in /home/yuio/paper
+/paper
+
+# lab: compiled binaries + generated reports (sources + shape catalog are tracked)
+lab/classify
+lab/cut_real
+lab/generate
+lab/pickwin
+lab/render_bin
+lab/htmls

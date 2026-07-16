@@ -1,16 +1,40 @@
-// SoA adapter over biolcp (init_lps_offset / lps_deepen). Each core's signature is XXH3-64 over
-// the core's own bytes, computed once here and returned in sigs_out. end is EXCLUSIVE (biolcp
+// SoA adapter over biolcp (init_lps_offset / lps_deepen). Each core's signature is MurmurHash64A
+// over the core's own bytes, computed once here and returned in sigs_out. end is EXCLUSIVE (biolcp
 // cores carry inclusive end, +1). LCP_INIT() runs once on first use (process-global alphabet).
-#define XXH_INLINE_ALL
-#include <xxhash.h>
 extern "C" {
 #include "lps.h"
 #include "encoding.h"
 }
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 
-uint64_t core_sig(const char* key, int len) { return (uint64_t)XXH3_64bits(key, (size_t)len); }
+// MurmurHash64A (Austin Appleby, public domain). Node identity = this hash over the core's raw
+// bytes. One definition, used everywhere a core signature is needed (graph build, blacklist, truth)
+// so all sigs stay consistent; seed fixed at 0 for determinism across runs/tools.
+uint64_t core_sig(const char* key, int len) {
+    const uint64_t m = 0xc6a4a7935bd1e995ULL;
+    const int r = 47;
+    uint64_t h = (uint64_t)len * m;                        // seed 0 -> h = 0 ^ (len*m)
+    const int nblocks = len / 8;
+    for (int i = 0; i < nblocks; i++) {
+        uint64_t k; std::memcpy(&k, key + i * 8, 8);       // memcpy: safe on unaligned core offsets
+        k *= m; k ^= k >> r; k *= m;
+        h ^= k; h *= m;
+    }
+    const unsigned char* tail = (const unsigned char*)(key + nblocks * 8);
+    switch (len & 7) {
+        case 7: h ^= (uint64_t)tail[6] << 48; [[fallthrough]];
+        case 6: h ^= (uint64_t)tail[5] << 40; [[fallthrough]];
+        case 5: h ^= (uint64_t)tail[4] << 32; [[fallthrough]];
+        case 4: h ^= (uint64_t)tail[3] << 24; [[fallthrough]];
+        case 3: h ^= (uint64_t)tail[2] << 16; [[fallthrough]];
+        case 2: h ^= (uint64_t)tail[1] << 8;  [[fallthrough]];
+        case 1: h ^= (uint64_t)tail[0];       h *= m;
+    }
+    h ^= h >> r; h *= m; h ^= h >> r;
+    return h;
+}
 
 namespace {
 struct Scratch { uint64_t* st; uint64_t* en; uint64_t* sig; int cap; };
