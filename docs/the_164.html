@@ -1,0 +1,116 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>SNAPE — the 164</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+ :root{--bg:#0d1117;--panel:#161b22;--panel2:#0f141a;--ink:#e6edf3;--mut:#8b949e;--line:#30363d;--accent:#2dd4bf;--accent2:#58a6ff;--bad:#f85149;--good:#3fb950;--warn:#d29922}
+ *{box-sizing:border-box} html,body{margin:0}
+ body{background:var(--bg);color:var(--ink);font:14px/1.6 ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+ header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);z-index:9}
+ header h1{font-size:17px;margin:0} header .sub{color:var(--mut);font-size:12.5px}
+ main{padding:20px;max-width:1400px;margin:0 auto}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px}
+ .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:18px}
+ .card h2{font-size:15px;margin:0 0 4px} .card .lede{color:var(--mut);font-size:12.5px;margin:0 0 12px}
+ .kpi{font-size:30px;font-weight:700;line-height:1.1} .kpi .u{font-size:13px;color:var(--mut);font-weight:400}
+ .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px}
+ .kpibox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px}
+ .kpibox .lbl{color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+ table{border-collapse:collapse;width:100%;font-size:12.5px}
+ th,td{border-bottom:1px solid var(--line);padding:6px 9px;text-align:right;white-space:nowrap}
+ th:first-child,td:first-child{text-align:left} th{color:var(--mut)}
+ code{font-family:ui-monospace,monospace;background:#0b0f14;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:12px}
+ .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)} .mut{color:var(--mut)}
+ ul{margin:6px 0 0 18px;padding:0} li{margin:5px 0} .big{font-size:15px}
+ .bar{height:26px;border-radius:5px;display:flex;overflow:hidden;margin:10px 0 4px}
+ .bar div{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#0d1117}
+</style></head><body>
+<header><h1>SNAPE — the 164</h1><span class="sub">Why the full graph cannot see 164 of 1,407 large SVs. All of them are ≥50bp; no SNV or short indel is in this set.</span>
+<span class="sub" style="margin-left:auto">complex L5 · refined.bin K=43,322,458</span></header><main>
+
+<div class="card"><h2>Answer</h2>
+<p class="lede">Split by cause. The majority is the measuring instrument, exactly as suspected.</p>
+<div class="bar" id="bar"></div>
+<div class="kpis" style="margin-top:14px">
+ <div class="kpibox"><div class="lbl">metric-blind (repeat gap)</div><div class="kpi warn">97<span class="u">/164 · 59%</span></div><div class="mut" style="font-size:11.5px">refpos has no core at the breakpoint</div></div>
+ <div class="kpibox"><div class="lbl">real caller misses</div><div class="kpi bad">57<span class="u">/164 · 35%</span></div><div class="mut" style="font-size:11.5px">cores present, signal absent</div></div>
+ <div class="kpibox"><div class="lbl">span too short</div><div class="kpi mut">11<span class="u">/164 · 7%</span></div><div class="mut" style="font-size:11.5px">&lt;3 cores; below core resolution</div></div>
+ <div class="kpibox"><div class="lbl">ceiling, gap-aware</div><div class="kpi good">1252<span class="u">/1407</span></div><div class="mut" style="font-size:11.5px">was 1243 · NEG-FP 0/400</div></div>
+</div>
+<p style="margin-top:14px" class="big"><b>The 164 are all large SVs.</b> The gauntlet splits the truth set at 50bp — SNPs and indels are a separate 25,000-record bucket — so nothing here is a small variant. You were right that they should not vanish by magic. They don't: <b>59% of them sit where my ruler has no markings.</b></p>
+</div>
+
+<div class="card"><h2>1 · The refpos gap — the real cause</h2>
+<p class="lede"><code>refpos</code> applies the same <code>(A+X)→(X+B)</code> repeat merge as the graph (refpos.cpp: “byte-identical to fasta_cores … ref_flags + ref_merge”). In a repeat run the cores are absorbed into the flanks, so <b>no core carries a position there</b>.</p>
+<div class="grid">
+<div>
+<p><b>4.74% of the genome has no refpos core at all</b> — and the distribution is not random:</p>
+<table><thead><tr><th>contig</th><th>1kb bins with no core</th></tr></thead><tbody id="tb_gap"></tbody></table>
+<p class="mut" style="margin-top:8px">Y, 9, 16, 15, 22, 13 — the satellite and acrocentric chromosomes. This is the repeat merge, not assembly gaps: <b>0 of the 97</b> gap-misses are N-runs; all 97 are real sequence.</p>
+</div>
+<div>
+<p>Independent confirmation, from the other direction. Widening the anchor tolerance recovers most JUNC failures — the junctions <i>exist</i>, their anchors just sit outside the coreless region:</p>
+<div id="p_tol" style="height:230px"></div>
+<p class="mut">At the failing breakpoints the max node degree is <b>0</b> (baseline at passing records: 3). There is nothing there to anchor to.</p>
+</div>
+</div></div>
+
+<div class="card"><h2>2 · It is not the filters — every one was rebuilt and measured</h2>
+<p class="lede">Four full rebuilds: mm=1 (441M nodes), vote off (880M), vote+blacklist off (850M). Total cost of the entire pipeline: under 10 records of 164.</p>
+<table><thead><tr><th>stage</th><th>cost</th><th>evidence</th></tr></thead><tbody id="tb_filt"></tbody></table>
+<p class="mut" style="margin-top:10px">The “no filter at all” graph (850M nodes, 20× the production graph) buys nothing real and destroys the metric: <code>GAIN</code> fires on <b>37/37</b> random loci and no piece is typeable (<code>clean=0</code>).</p>
+</div>
+
+<div class="card"><h2>3 · Length — they are not short</h2>
+<p class="lede">The short-span theory is dead: median length of a miss is 5,746bp vs 7,923bp for a hit. Only 37/164 are under 500bp; 87 are ≥5kb.</p>
+<div class="grid"><div><div id="p_len" style="height:280px"></div></div>
+<div><table><thead><tr><th>SVLEN</th><th>n</th><th>hit</th><th>miss</th><th>miss%</th></tr></thead><tbody id="tb_len"></tbody></table>
+<p class="mut" style="margin-top:10px">The gap-misses are the <i>long</i> ones (median 6,919bp, 59 of them ≥5kb) — big SVs landing in satellite repeats. The genuinely-absent ones are shorter (median 2,362bp).</p></div></div></div>
+
+<div class="card"><h2>4 · The 57 that are really missing</h2>
+<p class="lede">Cores present at the breakpoint, metric able to see, signal still not there. This is the only part that is a caller question — 4.1% of the truth set.</p>
+<div class="grid">
+<div><table><thead><tr><th>reason</th><th>n</th></tr></thead><tbody id="tb_real"></tbody></table></div>
+<div><ul>
+<li><b>COPY ratio below 1.4 (19)</b> — the duplication is there but its depth ratio does not reach threshold. Worth one look: are these subclonal, or in repeat-confounded depth?</li>
+<li><b>JUNC disjoint (16)</b> — novel material at <i>both</i> breakpoints but in different components: the junction bridge is broken in the middle. Almost all <code>delINVdup</code>. This is the one genuine structural failure and the best lead.</li>
+<li><b>INVSIG no strand-1 (10)</b> — inversions with no reverse-complement signal. Consistent with the information-theoretic limit: a read entirely inside a large inversion is byte-identical to the reference.</li>
+<li><b>no novel at target (8)</b> — the paste site has no novel material.</li>
+</ul></div></div></div>
+
+<div class="card"><h2>5 · By type, and the frontier</h2>
+<div class="grid">
+<div><div id="p_type" style="height:340px"></div></div>
+<div><p>Under the gap-aware metric (ceiling 1252, NEG-FP 0/400):</p>
+<table><thead><tr><th>algo</th><th>%nodes</th><th>present</th><th>% of full</th></tr></thead><tbody id="tb_front"></tbody></table>
+<p class="mut" style="margin-top:10px">Ranking is unchanged by the fix: <code>anchormin</code> at 2.62% for size, <code>uc_r2</code> at 4.10% for recall.</p></div></div></div>
+
+<div class="card"><h2>What I would do</h2>
+<ul class="big">
+<li><b>Do not touch the pipeline.</b> refine, mm=3, the vote and the blacklist together cost &lt;10 of the 164, and two of them are net positive. Rebuilding without them makes things strictly worse.</li>
+<li><b>The ceiling is a property of the ruler, not the caller.</b> 1252/1407 is the best <i>measurable</i> number. 97 records sit in repeat regions where the merge leaves no coordinates — the caller may well be finding them; I cannot currently tell, and I will not claim either way.</li>
+<li><b>To actually measure the 97</b>, refpos must be rebuilt so repeat loci keep their coordinates (emit all loci per signature, with a multi-locus resolution rule). That is a change to the diagnostic tool, not to svp. It is the single highest-value next step.</li>
+<li><b>The one real lead is JUNC-disjoint (16, mostly delINVdup)</b>: novel material at both ends that fails to connect. That is a genuine graph-structure question worth chasing.</li>
+<li><b>Honest residual:</b> ~57 records (4.1%) are genuinely not recoverable from this graph, of which ~10 are the information-theoretic large-inversion case.</li>
+</ul></div>
+</main><script>
+const D = {"ceiling": {"std": 1243, "gapaware": 1252, "n": 1407, "events": 878, "events_n": 1000, "negfp": 0, "clean": 427, "raw": 1261}, "split": {"total": 164, "gapblind": 97, "real": 67, "real_unscoreable": 11, "real_false": 57, "recovered_gapaware": 9}, "gapcov": {"pct": 4.74, "contigs": [["Y", 48.0], ["9", 12.0], ["16", 11.9], ["15", 11.1], ["22", 9.0], ["13", 8.5], ["1", 5.4], ["X", 2.8]]}, "tolsweep": [[400, 466], [800, 472], [1500, 479], [3000, 484], [6000, 504], [12000, 513], [25000, 516]], "lenrows": [{"band": "50\u2013200", "n": 61, "hit": 39, "miss": 22, "pct": 36}, {"band": "200\u2013500", "n": 93, "hit": 78, "miss": 15, "pct": 16}, {"band": "500\u20131,000", "n": 126, "hit": 123, "miss": 3, "pct": 2}, {"band": "1,000\u20135,000", "n": 256, "hit": 219, "miss": 37, "pct": 14}, {"band": "5,000\u201320,000", "n": 667, "hit": 591, "miss": 76, "pct": 11}, {"band": "20,000+", "n": 204, "hit": 193, "miss": 11, "pct": 5}], "realreasons": [["COPY ratio below 1.4", 19], ["JUNC novel at both ends but disjoint", 16], ["INVSIG no strand-1 anywhere", 10], ["JUNC no novel at target", 8], ["COPY span too small to judge", 11], ["GAIN no/too-few novel", 3], ["JUNC no novel either end", 1]], "bytype": [{"t": "delINVdup", "n": 80, "present": 50, "miss": 30}, {"t": "DUP", "n": 130, "present": 105, "miss": 25}, {"t": "DEL", "n": 260, "present": 245, "miss": 15}, {"t": "INV", "n": 130, "present": 118, "miss": 12}, {"t": "INVdup", "n": 54, "present": 43, "miss": 11}, {"t": "INS", "n": 130, "present": 122, "miss": 8}, {"t": "DUP_INV", "n": 36, "present": 29, "miss": 7}, {"t": "dupINVdel", "n": 60, "present": 53, "miss": 7}, {"t": "dDUP_INV", "n": 36, "present": 31, "miss": 5}, {"t": "dDUP_iDEL", "n": 36, "present": 31, "miss": 5}, {"t": "rTRA", "n": 36, "present": 32, "miss": 4}, {"t": "INS_iDEL", "n": 36, "present": 33, "miss": 3}], "filters": [["refine (tip/bubble removal)", "1 record", "and buys +72 typeable pieces, \u22123 false positives"], ["--min-mult 3", "0 records", "rebuilt at mm=1 \u2192 441M nodes; COPY 297\u2192298, DUP 105\u2192105, LOSS 353\u2192353"], ["strand vote", "~1 DUP", "hit rate identical (92.8% vs 93.1%); it only halves the cores"], ["repeat blacklist", "NET POSITIVE", "\u22124 COPY but +10 LOSS"]], "frontier": [{"algo": "sweepT12", "pct": 1.433, "present": 1015, "pctfull": 81.1}, {"algo": "sweepT8", "pct": 1.438, "present": 1018, "pctfull": 81.3}, {"algo": "sweepT6", "pct": 1.462, "present": 1022, "pctfull": 81.6}, {"algo": "sweepR2", "pct": 1.558, "present": 1023, "pctfull": 81.7}, {"algo": "hyb_minfull", "pct": 1.663, "present": 1026, "pctfull": 81.9}, {"algo": "sweepT0", "pct": 1.778, "present": 1028, "pctfull": 82.1}, {"algo": "minsize", "pct": 2.466, "present": 1226, "pctfull": 97.9}, {"algo": "anchormin", "pct": 2.62, "present": 1233, "pctfull": 98.5}, {"algo": "uc_strict", "pct": 3.717, "present": 1239, "pctfull": 99.0}, {"algo": "uc_r2", "pct": 4.098, "present": 1246, "pctfull": 99.5}, {"algo": "uc_r8", "pct": 5.941, "present": 1247, "pctfull": 99.6}, {"algo": "uc_loose", "pct": 6.022, "present": 1248, "pctfull": 99.7}, {"algo": "full", "pct": 100.0, "present": 1252, "pctfull": 100.0}], "medlen": {"hit": 7923, "miss": 5746, "gap": 6919, "real": 2362}};
+const dark={template:'plotly_dark',paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#e6edf3',size:11},margin:{t:12,r:12,b:40,l:48}};
+const S=D.split, tot=S.total;
+document.getElementById('bar').innerHTML =
+ `<div style="width:${100*S.gapblind/tot}%;background:#d29922">metric-blind ${S.gapblind}</div>`+
+ `<div style="width:${100*S.real_false/tot}%;background:#f85149">real ${S.real_false}</div>`+
+ `<div style="width:${100*S.real_unscoreable/tot}%;background:#484f58">short ${S.real_unscoreable}</div>`;
+document.getElementById('tb_gap').innerHTML = D.gapcov.contigs.map(c=>`<tr><td>chr${c[0]}</td><td class="${c[1]>10?'bad':''}">${c[1].toFixed(1)}%</td></tr>`).join('');
+document.getElementById('tb_filt').innerHTML = D.filters.map(f=>`<tr><td><code>${f[0]}</code></td><td class="${f[1].includes('POSITIVE')?'good':''}">${f[1]}</td><td class="mut" style="text-align:left">${f[2]}</td></tr>`).join('');
+document.getElementById('tb_len').innerHTML = D.lenrows.map(r=>`<tr><td>${r.band}</td><td>${r.n}</td><td>${r.hit}</td><td>${r.miss}</td><td class="${r.pct>20?'bad':''}">${r.pct}%</td></tr>`).join('');
+document.getElementById('tb_real').innerHTML = D.realreasons.map(r=>`<tr><td>${r[0]}</td><td><b>${r[1]}</b></td></tr>`).join('');
+document.getElementById('tb_front').innerHTML = D.frontier.map(f=>`<tr><td>${f.algo}</td><td>${f.pct}</td><td><b>${f.present}</b></td><td>${f.pctfull}%</td></tr>`).join('');
+Plotly.newPlot('p_tol',[{x:D.tolsweep.map(t=>t[0]),y:D.tolsweep.map(t=>t[1]),mode:'lines+markers',line:{color:'#2dd4bf'},marker:{size:7}}],
+ Object.assign({},dark,{xaxis:{title:'anchor tolerance (bp, log)',type:'log'},yaxis:{title:'JUNC hits of 538'}}),{responsive:true});
+Plotly.newPlot('p_len',[{x:D.lenrows.map(r=>r.band),y:D.lenrows.map(r=>r.hit),name:'hit',type:'bar',marker:{color:'#2dd4bf'}},
+ {x:D.lenrows.map(r=>r.band),y:D.lenrows.map(r=>r.miss),name:'miss',type:'bar',marker:{color:'#f85149'}}],
+ Object.assign({},dark,{barmode:'stack',xaxis:{title:'SVLEN'},yaxis:{title:'records'},showlegend:true}),{responsive:true});
+Plotly.newPlot('p_type',[{x:D.bytype.map(r=>r.present),y:D.bytype.map(r=>r.t),name:'present',type:'bar',orientation:'h',marker:{color:'#2dd4bf'}},
+ {x:D.bytype.map(r=>r.miss),y:D.bytype.map(r=>r.t),name:'miss',type:'bar',orientation:'h',marker:{color:'#f85149'}}],
+ Object.assign({},dark,{barmode:'stack',xaxis:{title:'records'},yaxis:{automargin:true},showlegend:true}),{responsive:true});
+</script></body></html>
