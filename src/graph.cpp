@@ -153,9 +153,15 @@ using EdgeMap = ankerl::unordered_dense::map<SEdge, std::pair<uint32_t, uint32_t
 //
 // Identical parse, vote and merge as pass 1 -- the vote is a pure function of the read's bytes and the
 // index, so it lands on the same strand here and the counted adjacencies match the node set.
+// Repeat-run capture (SVP_SPLIT_REPEATS). A read physically threads  A -> X.. -> B  through a collapsed
+// repeat run X. That pairing of the in-flank A to the out-flank B exists ONLY here, in the read: once the
+// graph is built the repeat node has N in-flanks and N out-flanks and which goes with which is gone. So the
+// thread is recorded now, and the X-cut (tools/trace.cpp apply_xcut) splits the run per (in,out) pair later
+// -- keeping the repeat's VERTICES instead of dissolving them into the flanks the way ref_merge does.
 void process_read_edges(std::string& s, int level, int margin, int col,
                         const ankerl::unordered_dense::map<uint64_t, uint32_t>& idx,
-                        EdgeMap& emap, std::string& rc_buf, uint64_t& cpu_ext) {
+                        EdgeMap& emap, std::string& rc_buf, uint64_t& cpu_ext,
+                        const uint8_t* is_repeat, std::vector<std::array<uint32_t, 3>>* trip) {
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
@@ -164,11 +170,27 @@ void process_read_edges(std::string& s, int level, int margin, int col,
     auto chain = [&](const char* data, const Parse& p) {
         ref_merge(data, p.st, p.en, p.sig, keep, fl, 65535, eff);
         uint64_t prev = 0; bool have = false;
+        // repeat-run state: the node id of the last non-repeat core seen (the in-flank), and the run itself
+        uint32_t in_flank = UINT32_MAX, run_mid = UINT32_MAX; bool in_run = false;
         for (const Span& e : eff) {
-            if (idx.find(e.sig) == idx.end()) { have = false; continue; }   // core died at the mm gate -> chain breaks
+            auto it = idx.find(e.sig);
+            if (it == idx.end()) {                                         // core died at the mm gate -> chain breaks
+                if (in_run && trip) { trip->push_back({run_mid, in_flank, UINT32_MAX}); in_run = false; }
+                have = false; in_flank = UINT32_MAX; continue;
+            }
+            const uint32_t id = it->second;
             if (have && prev != e.sig) { auto& c = emap[SEdge(prev, e.sig)]; (col == 0 ? c.first : c.second)++; }
             prev = e.sig; have = true;
+            if (is_repeat) {
+                if (is_repeat[id]) {
+                    if (!in_run) { in_run = true; run_mid = id; }          // run opens; anchor it at its first core
+                } else {
+                    if (in_run) { if (trip) trip->push_back({run_mid, in_flank, id}); in_run = false; }  // A -> X.. -> B
+                    in_flank = id;
+                }
+            }
         }
+        if (in_run && trip) trip->push_back({run_mid, in_flank, UINT32_MAX});   // read ended inside the run
     };
 
     Parse p = parse_strand(s.data(), len, level, margin, keep, fl, cpu_ext);
@@ -544,7 +566,9 @@ struct SCEdge { uint64_t a, b; uint32_t n, t; };   // sig-pair adjacency + per-c
 // and the on-disk CEdge conversion happen in the caller.
 void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, int threads,
                      const ankerl::unordered_dense::map<uint64_t, uint32_t>& idx,
-                     std::vector<SCEdge>& out) {
+                     std::vector<SCEdge>& out,
+                     const uint8_t* is_repeat = nullptr,
+                     std::vector<std::array<uint32_t, 3>>* all_trip = nullptr, std::mutex* tmtx = nullptr) {
     constexpr int NSHARD = 64;
     EdgeMap gmap[NSHARD]; std::mutex gmtx[NSHARD];
     const int nshards = (int)shards.size();
@@ -626,6 +650,7 @@ void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, in
             }
             local.clear();
         };
+        std::vector<std::array<uint32_t, 3>> local_trip;
         while (true) {
             Batch b;
             {
@@ -635,10 +660,14 @@ void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, in
                 b = std::move(q.front()); q.pop(); cv_full.notify_one();
             }
             const int c = b.col & 1;
-            for (std::string& s : b.seqs) process_read_edges(s, level, margin, c, idx, local, rc_buf, local_ext);
+            for (std::string& s : b.seqs) process_read_edges(s, level, margin, c, idx, local, rc_buf, local_ext, is_repeat, is_repeat ? &local_trip : nullptr);
             if (local.size() >= FLUSH) flush();
         }
         flush();
+        if (is_repeat && all_trip && tmtx && !local_trip.empty()) {
+            std::lock_guard<std::mutex> lk(*tmtx);
+            all_trip->insert(all_trip->end(), local_trip.begin(), local_trip.end());
+        }
         cpu_w_ns += thr_ns() - wcpu0; cpu_ext_ns += local_ext;
     };
     std::vector<std::thread> rds, wks;
@@ -721,11 +750,49 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     std::vector<SigCount>().swap(nodes);
     const Snap P2 = snap();
 
+    // ---- repeat-resolution capture (opt-in SVP_SPLIT_REPEATS) ------------------------------------
+    // The alternative to dissolving a repeat run into its flanks. ref_merge (Stage 3) deletes the run's
+    // VERTICES, so any SV whose breakpoint falls inside a repeat has no node to be found at -- measured:
+    // 75 of the 156 unrecoverable large SVs, concentrated on chrY/9/15/16. Here the run keeps its nodes and
+    // the read's in->run->out thread is recorded instead; tools/trace.cpp apply_xcut then splits the run
+    // into one copy per (in,out) pair, which removes the tangle WITHOUT removing the sequence.
+    // A repeat is flagged by coverage, not by the index: a run collapsed from C loci carries ~C x the
+    // single-copy depth. Use with SVP_NOMERGE=1, or the runs are already gone before this sees them.
+    const bool split_rep = std::getenv("SVP_SPLIT_REPEATS");
+    std::vector<uint8_t> is_repeat;
+    std::vector<std::array<uint32_t, 3>> triples; std::mutex tmtx;
+    if (split_rep) {
+        std::vector<uint32_t> zn, zt;
+        for (uint64_t i = 0; i < K; i++) { if (ncov[i]) zn.push_back(ncov[i]); if (tcov[i]) zt.push_back(tcov[i]); }
+        auto med = [](std::vector<uint32_t>& v) -> uint32_t { if (v.empty()) return 0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
+        const uint32_t dn = med(zn), dt = med(zt);
+        const char* rme = std::getenv("SVP_REPEAT_MULT");
+        const double rmult = rme ? std::atof(rme) : 1.5;        // flag = coverage >= rmult x median single-copy depth
+        const uint32_t tn = (uint32_t)(rmult * dn), tt = (uint32_t)(rmult * dt);
+        is_repeat.assign(K, 0); uint64_t nf = 0;
+        for (uint64_t i = 0; i < K; i++) if ((dn && ncov[i] >= tn) || (dt && tcov[i] >= tt)) { is_repeat[i] = 1; nf++; }
+        std::fprintf(stderr, "[split] candidate-repeat nodes: %lu/%lu (%.2f%%) | single-copy depth n=%u t=%u; flag >= %.2fx -> ncov>=%u or tcov>=%u (SVP_REPEAT_MULT)\n",
+                     (unsigned long)nf, (unsigned long)K, 100.0 * nf / (double)K, dn, dt, rmult, tn, tt);
+    }
+
     // ---- pass 2: count per-colour edge traversals between surviving cores (no payload fill) ----
     std::vector<SCEdge> sedges;
-    edge_count_pool(shards_all, level, margin, threads, idx, sedges);
+    edge_count_pool(shards_all, level, margin, threads, idx, sedges,
+                    split_rep ? is_repeat.data() : nullptr, split_rep ? &triples : nullptr, split_rep ? &tmtx : nullptr);
     const Snap P3 = snap();
     tic.mark("edge_count");
+    if (split_rep) {
+        ankerl::unordered_dense::map<uint64_t, ankerl::unordered_dense::map<uint64_t, uint32_t>> agg;
+        for (const auto& t : triples) agg[t[0]][((uint64_t)t[1] << 32) | t[2]]++;
+        std::vector<RepTriple> recs;
+        for (const auto& m : agg) for (const auto& p : m.second) recs.push_back({(uint32_t)m.first, (uint32_t)(p.first >> 32), (uint32_t)p.first, p.second});
+        FILE* ft = xopen(dir + "/threads.bin.tmp", "wb");
+        uint64_t nr = recs.size(); wr(ft, &nr, 8); wr(ft, recs.data(), nr * sizeof(RepTriple));
+        atomic_close(ft, dir + "/threads.bin.tmp", dir + "/threads.bin");
+        std::fprintf(stderr, "[split] %lu raw in->run->out threads -> %lu distinct triples over %lu runs -> threads.bin\n",
+                     (unsigned long)triples.size(), (unsigned long)nr, (unsigned long)agg.size());
+        std::vector<std::array<uint32_t, 3>>().swap(triples);
+    }
 
     // ---- resolve sig-pair edges -> node-id CEdge with counts (sig<->id is a bijection => distinct) ----
     std::vector<CEdge> ce; ce.reserve(sedges.size());
