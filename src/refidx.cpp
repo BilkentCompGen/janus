@@ -19,6 +19,8 @@ namespace {
 refidx::Index g_ix;
 bool g_on = false;
 bool g_vote = true;           // SVP_NOVOTE=1: keep the merge, drop the vote (dual-strand A/B)
+bool g_merge = true;          // SVP_NOMERGE=1: keep the vote, drop the (A+X)->(X+B) merge. DIAGNOSTIC:
+                              // isolates the merge's cost. SVP_NOREFIDX drops BOTH, which confounds them.
 uint32_t g_pct = 80;          // SVP_VOTE_PCT: a strand needs this % of the DECIDING cores
 
 // SVP_VOTE_ERR=<p>: flip a DECIDED vote with probability p. This is not a model of anything -- it is a
@@ -49,12 +51,14 @@ void ref_load(const char* path, int level) {
     g_on = true;
     if (std::getenv("SVP_NOVOTE")) g_vote = false;
     if (const char* p = std::getenv("SVP_VOTE_PCT")) g_pct = (uint32_t)std::atoi(p);
+    if (std::getenv("SVP_NOMERGE")) g_merge = false;
     if (const char* p = std::getenv("SVP_VOTE_ERR")) g_verr = (uint32_t)(std::atof(p) * 1e6);
     std::fprintf(stderr,
         "[refidx] %s: %lu cores, %.0f MB | FW %lu  RC %lu  BOTH %lu (abstain)  REPEAT %lu (merged) | vote %s @%u%%\n",
         path, (unsigned long)g_ix.hdr.nentry, g_ix.len / 1e6, (unsigned long)g_ix.hdr.nfw,
         (unsigned long)g_ix.hdr.nrc, (unsigned long)g_ix.hdr.nboth, (unsigned long)g_ix.hdr.nrepeat,
         g_vote ? "on" : "OFF (dual-strand)", g_pct);
+    if (!g_merge) std::fprintf(stderr, "[refidx] (A+X)->(X+B) merge: OFF (SVP_NOMERGE) -- diagnostic\n");
     if (g_verr)
         std::fprintf(stderr, "[refidx] FAULT INJECTED: %.4f%% of decided votes are flipped (SVP_VOTE_ERR)\n",
                      g_verr / 1e4);
@@ -102,7 +106,7 @@ void ref_merge(const char* data, const uint64_t* st, const uint64_t* en, const u
     out.clear();
     const int nk = (int)keep.size();
     // No index: every kept core passes through untouched, and extract's own sig already names it.
-    if (!g_on) { for (int i = 0; i < nk; i++) out.push_back({(uint32_t)st[keep[i]], (uint32_t)en[keep[i]], sig[keep[i]]}); return; }
+    if (!g_on || !g_merge) { for (int i = 0; i < nk; i++) out.push_back({(uint32_t)st[keep[i]], (uint32_t)en[keep[i]], sig[keep[i]]}); return; }
 
     // A merged span's bytes are not any single core's bytes, so its name has to be hashed afresh.
     auto merged = [&](uint64_t a, uint64_t b) {
