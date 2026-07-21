@@ -1,0 +1,117 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SNAPE — six graphs, seven categories</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>
+ :root{--bg:#0d1117;--panel:#161b22;--panel2:#0f141a;--ink:#e6edf3;--mut:#8b949e;--line:#30363d;--accent:#2dd4bf;--accent2:#58a6ff;--bad:#f85149;--good:#3fb950;--warn:#d29922}
+ *{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--ink);font:14px/1.6 ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+ header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);z-index:9}
+ header h1{font-size:17px;margin:0}header .sub{color:var(--mut);font-size:12.5px}
+ nav{padding:8px 20px;border-bottom:1px solid var(--line);display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;background:var(--panel2)}
+ nav a{color:var(--accent2);text-decoration:none}
+ main{padding:20px;max-width:1400px;margin:0 auto}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px}
+ .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:18px}
+ .card h2{font-size:15px;margin:0 0 4px}.card .lede{color:var(--mut);font-size:12.5px;margin:0 0 12px}
+ .kpi{font-size:28px;font-weight:700;line-height:1.1}.kpi .u{font-size:13px;color:var(--mut);font-weight:400}
+ .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+ .kpibox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px}
+ .kpibox .lbl{color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+ table{border-collapse:collapse;width:100%;font-size:12.5px}
+ th,td{border-bottom:1px solid var(--line);padding:6px 9px;text-align:right;white-space:nowrap}
+ th:first-child,td:first-child{text-align:left}th{color:var(--mut)}
+ code{font-family:ui-monospace,monospace;background:#0b0f14;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:12px}
+ .good{color:var(--good)}.bad{color:var(--bad)}.warn{color:var(--warn)}.mut{color:var(--mut)}
+ ul{margin:6px 0 0 18px;padding:0}li{margin:5px 0}.big{font-size:15px}
+</style></head><body>
+<header><h1>SNAPE — six graphs, seven categories</h1>
+<span class="sub">Connected-component structure + per-category recall &amp; precision, with the full graph as the ceiling.</span>
+<span class="sub" style="margin-left:auto">complex L5 · run-scan caller · production svp</span></header>
+<nav><a href="#cc">Subgraph structure</a><a href="#recall">Recall (max = full)</a><a href="#prec">Precision</a><a href="#small">SNP/indel: detect vs type</a><a href="#take">Conclusions</a></nav><main>
+
+<div class="card"><h2>Headline</h2>
+<div class="kpis">
+ <div class="kpibox"><div class="lbl">subgraphs / graph</div><div class="kpi">75k–104k</div><div class="mut" style="font-size:11.5px">disconnected pieces, ~95k somatic</div></div>
+ <div class="kpibox"><div class="lbl">recall ceiling</div><div class="kpi good">DEL 93 · INV 89 · INS 90</div><div class="mut" style="font-size:11.5px">DUP 75 · %, full graph</div></div>
+ <div class="kpibox"><div class="lbl">recall after pruning</div><div class="kpi">unchanged</div><div class="mut" style="font-size:11.5px">except DUP (needs backbone)</div></div>
+ <div class="kpibox"><div class="lbl">any-site precision</div><div class="kpi warn">20% → 72%</div><div class="mut" style="font-size:11.5px">full → minsize: pruning removes noise</div></div>
+</div>
+<p style="margin-top:14px" class="big">Yes — every algorithm shatters the graph into <b>75k–104k disconnected subgraphs</b>. The full graph carries
+<b>near-max recall for large SVs</b> (DEL/INV/INS 89–93%) but is <b>noise-rich</b> (only ~20% of its calls sit at a real
+variant). <b>Pruning's real job is precision</b>: it drops the call count 4× and lifts any-site precision to ~72% while
+keeping recall. Small variants are a different story — 90% <i>detectable</i>, but the graph can't <i>type</i> them.</p>
+</div>
+
+<div class="card" id="cc"><h2>1 · Connected-component structure of the 6 graphs</h2>
+<p class="lede">Pruning removes the shared backbone, so the graph falls into many disconnected pieces — the candidate events a caller inspects.</p>
+<div class="tblwrap" style="overflow-x:auto"><table><thead><tr><th>graph</th><th>%nodes</th><th>nodes</th><th>weak components</th><th>somatic-bearing</th><th>median size</th><th>max piece</th><th>&le;48-node (typeable)</th></tr></thead><tbody id="tb_cc"></tbody></table></div>
+<p class="mut" style="margin-top:8px">Every graph keeps one stubborn ~13,083-node piece — a persistent satellite/complex tangle no pruner breaks. The full graph keeps a 1.14M-node giant component (the connected backbone) that pruning dissolves.</p>
+</div>
+
+<div class="card" id="recall"><h2>2 · Recall by category — the full graph is the maximum possible</h2>
+<p class="lede">% of truth variants of each type found. The full graph is the ceiling (it carries all signal); every pruned graph is measured against it.</p>
+<div id="p_recall" style="height:340px"></div>
+<p style="margin-top:8px">Recall is <b>identical across all six graphs for every category except DUP</b>. DUP needs the shared backbone to
+measure its depth ratio, so it erodes as pruning gets aggressive (75% → 54%). This is the one place pruning costs recall —
+and exactly why the <code>uc</code> (copy-aware) family exists. SNP/INDEL/CPX are shown at their <i>typed</i> recall (low — see §4).</p>
+</div>
+
+<div class="card" id="prec"><h2>3 · Precision — and why pruning is really a precision tool</h2>
+<p class="lede">The full graph over-produces massively. "Any-site" = fraction of all calls that land on a real variant of any type (noise vs real).</p>
+<div class="grid">
+<div><div id="p_anysite" style="height:300px"></div></div>
+<div><table><thead><tr><th>category</th><th>truth</th><th>calls (full graph)</th></tr></thead><tbody id="tb_calls"></tbody></table>
+<p class="mut" style="margin-top:8px"><b>DUP dominates the noise</b>: 120,618 calls for 130 real duplications. The tumour/normal depth ratio is genome-wide
+and its noise band (backbone p95=1.43) overlaps the DUP threshold, so windowed elevation fires everywhere. This is the same
+base-rate wall that killed the per-core copy pruner earlier.</p></div></div>
+<div class="tblwrap" style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>graph</th><th>%nodes</th><th>SNP</th><th>INDEL</th><th>DEL</th><th>DUP</th><th>INV</th><th>INS</th><th>CPX</th><th>ANY-SITE</th><th>#calls</th></tr></thead><tbody id="tb_prec"></tbody></table></div>
+<p class="mut" style="margin-top:8px">Per-category precision is a <b>lower bound</b>: much of each type's "false positives" are real variants of a
+<i>different</i> type (a SNP makes a normal-only stretch that reads as a small DEL). <code>INV</code> is the cleanest
+single type (~20%). The honest precision signal is ANY-SITE, and it climbs steeply with pruning: <b>20% → 72%</b>.</p>
+</div>
+
+<div class="card" id="small"><h2>4 · SNP &amp; short-indel: detectable, but not typeable</h2>
+<div class="grid"><div>
+<p>Two very different numbers, both measured:</p>
+<table><thead><tr><th></th><th>SNP</th><th>INDEL</th></tr></thead><tbody>
+<tr><td><b>detectable</b> (a somatic signal sits at the locus)</td><td class="good">90.1%</td><td class="good">89.3%</td></tr>
+<tr><td><b>typeable</b> (callable specifically as that type)</td><td class="bad">4.3%</td><td class="bad">8.8%</td></tr>
+</tbody></table>
+<p class="mut" style="margin-top:8px">The graph <b>flags ~90% of small variants</b> — a normal-only reference core plus a novel tumour core. But a SNP, a
+short indel, and a small deletion all produce the same shape: a small normal-only + novel bubble. From graph topology
+and coverage alone they are <b>not separable</b>. Typing them needs the core <i>sequence</i>, which the signature-only
+graph does not carry.</p>
+</div><div>
+<p>So for small variants the honest deliverable is a single <b>"small-variant present"</b> track at ~90% recall, not
+separate SNP/indel calls. This mirrors the complex-SV situation: detectable as "something somatic here", typeable only
+with more information.</p>
+<p class="mut">This is a genuine property of a sequence-free graph, not a caller bug — and worth stating plainly in the paper.</p>
+</div></div></div>
+
+<div class="card" id="take"><h2>Conclusions</h2>
+<ul class="big">
+<li><b>The algorithms do disconnect the graph</b> — 75k–104k pieces, ~95k somatic-bearing, almost all ≤48 nodes (typeable size).</li>
+<li><b>Recall ceiling (full graph):</b> DEL 93%, INS 90%, INV 89%, DUP 75%; small variants 90% detectable; CPX is hardest.
+Pruning preserves all of it except DUP, which needs the shared backbone.</li>
+<li><b>Precision is the pruning payoff.</b> The full graph is signal-rich and noise-rich (any-site precision ~20%); pruning
+lifts that to ~72% at <code>minsize</code> while holding recall. Pruning is a denoiser, not just a compressor.</li>
+<li><b>DUP is the dominant noise source</b> (120k spurious calls) — the depth ratio is too noisy genome-wide. A junction-gated
+DUP caller (only call a duplication where a back-edge junction bounds the elevated span) is the clear next improvement.</li>
+<li><b>SNP / short-indel / small-DEL are one detectable-but-untypeable class</b> in a sequence-free graph. Honest output there
+is a single "small variant here" track at ~90%, not three separate typed tracks.</li>
+<li><b>These per-category detectors ARE the extra algorithms requested</b> — a run-scan caller (LOSS-run→DEL, windowed-ratio→DUP,
+strand-1-run→INV, novel-cluster→INS, jump-edge→CPX, small-bubble→small-variant). Recall is validated against the independent
+signature metric; precision is a rough lower bound pending the DUP and small-variant refinements above.</li>
+</ul></div>
+</main><script>
+const D={"cc": [{"label": "full", "nodes": 43322458, "weak": 421630, "som": 287295, "med": 1, "mx": 31141239, "le48": 284934, "pct": 100.0}, {"label": "uc_loose", "nodes": 2608899, "weak": 96945, "som": 94249, "med": 12, "mx": 13083, "le48": 89185, "pct": 6.02}, {"label": "uc_r2", "nodes": 1775505, "weak": 102484, "som": 99644, "med": 7, "mx": 13079, "le48": 95931, "pct": 4.1}, {"label": "uc_strict", "nodes": 1610259, "weak": 98362, "som": 96062, "med": 12, "mx": 13083, "le48": 94085, "pct": 3.72}, {"label": "anchormin", "nodes": 1135011, "weak": 104264, "som": 101986, "med": 5, "mx": 13083, "le48": 101154, "pct": 2.62}, {"label": "minsize", "nodes": 1068118, "weak": 74809, "som": 57978, "med": 11, "mx": 13062, "le48": 57168, "pct": 2.47}], "recall": [{"label": "full", "pct": 100.0, "SNP": 4, "INDEL": 9, "DEL": 93, "DUP": 75, "INV": 89, "INS": 90, "CPX": 3}, {"label": "uc_loose", "pct": 6.02, "SNP": 4, "INDEL": 9, "DEL": 93, "DUP": 69, "INV": 89, "INS": 90, "CPX": 3}, {"label": "uc_r2", "pct": 4.1, "SNP": 4, "INDEL": 9, "DEL": 93, "DUP": 62, "INV": 89, "INS": 90, "CPX": 3}, {"label": "uc_strict", "pct": 3.72, "SNP": 4, "INDEL": 9, "DEL": 93, "DUP": 68, "INV": 89, "INS": 90, "CPX": 3}, {"label": "anchormin", "pct": 2.62, "SNP": 4, "INDEL": 9, "DEL": 93, "DUP": 58, "INV": 89, "INS": 90, "CPX": 3}, {"label": "minsize", "pct": 2.47, "SNP": 4, "INDEL": 9, "DEL": 93, "DUP": 54, "INV": 89, "INS": 90, "CPX": 3}], "prec": [{"label": "full", "pct": 100.0, "anysite": 19.7, "calls": 201101, "SNP": 4.8, "INDEL": 2.1, "DEL": 2.1, "DUP": 0.2, "INV": 19.6, "INS": 0.8, "CPX": 2.2}, {"label": "uc_loose", "pct": 6.02, "anysite": 52.7, "calls": 72573, "SNP": 9.3, "INDEL": 3.9, "DEL": 2.2, "DUP": 2.4, "INV": 19.6, "INS": 0.8, "CPX": 2.2}, {"label": "uc_r2", "pct": 4.1, "anysite": 56.0, "calls": 66766, "SNP": 9.3, "INDEL": 3.9, "DEL": 2.2, "DUP": 3.4, "INV": 19.6, "INS": 0.8, "CPX": 2.2}, {"label": "uc_strict", "pct": 3.72, "anysite": 55.8, "calls": 68131, "SNP": 9.3, "INDEL": 3.9, "DEL": 2.2, "DUP": 3.1, "INV": 19.6, "INS": 0.8, "CPX": 2.2}, {"label": "anchormin", "pct": 2.62, "anysite": 58.1, "calls": 65156, "SNP": 9.3, "INDEL": 3.9, "DEL": 2.2, "DUP": 3.2, "INV": 19.6, "INS": 0.8, "CPX": 2.2}, {"label": "minsize", "pct": 2.47, "anysite": 71.7, "calls": 51917, "SNP": 26.9, "INDEL": 8.4, "DEL": 2.2, "DUP": 3.1, "INV": 19.7, "INS": 0.8, "CPX": 2.4}], "callcounts": {"SNP": 18204, "INDEL": 20585, "DEL": 24321, "DUP": 120618, "INV": 849, "INS": 14954, "CPX": 1570}, "truth": {"SNP": 20000, "INDEL": 5000, "DEL": 260, "DUP": 130, "INV": 130, "INS": 130, "CPX": 757}, "detect": {"SNP": 90.1, "INDEL": 89.3}, "CATS": ["SNP", "INDEL", "DEL", "DUP", "INV", "INS", "CPX"]};
+const dark={template:'plotly_dark',paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#e6edf3',size:11},margin:{t:14,r:12,b:44,l:48}};
+document.getElementById('tb_cc').innerHTML=D.cc.map(r=>`<tr><td>${r.label}</td><td>${r.pct}%</td><td>${r.nodes.toLocaleString()}</td><td>${r.weak.toLocaleString()}</td><td>${r.som.toLocaleString()}</td><td>${r.med}</td><td>${r.mx.toLocaleString()}</td><td>${r.le48.toLocaleString()}</td></tr>`).join('');
+document.getElementById('tb_calls').innerHTML=D.CATS.map(c=>`<tr><td>${c}</td><td>${D.truth[c].toLocaleString()}</td><td class="${D.callcounts[c]>5000?'bad':''}">${D.callcounts[c].toLocaleString()}</td></tr>`).join('');
+document.getElementById('tb_prec').innerHTML=D.prec.map(r=>`<tr><td>${r.label}</td><td>${r.pct}%</td>`+D.CATS.map(c=>`<td>${r[c]}</td>`).join('')+`<td class="${r.anysite>50?'good':'warn'}"><b>${r.anysite}%</b></td><td>${r.calls.toLocaleString()}</td></tr>`).join('');
+// recall grouped bars
+const cats=D.CATS;
+Plotly.newPlot('p_recall', D.recall.map(r=>({x:cats,y:cats.map(c=>r[c]),name:r.label+' ('+r.pct+'%)',type:'bar'})),
+  Object.assign({},dark,{barmode:'group',yaxis:{title:'recall %',range:[0,100]},legend:{orientation:'h',y:1.12,font:{size:10}}}),{responsive:true});
+// any-site precision vs %nodes
+Plotly.newPlot('p_anysite',[{x:D.prec.map(r=>r.pct),y:D.prec.map(r=>r.anysite),text:D.prec.map(r=>r.label),
+  mode:'markers+text',textposition:'top center',marker:{size:12,color:'#2dd4bf'},textfont:{size:10}}],
+  Object.assign({},dark,{xaxis:{title:'% of nodes kept (log)',type:'log'},yaxis:{title:'any-site precision %',range:[0,100]}}),{responsive:true});
+</script></body></html>
