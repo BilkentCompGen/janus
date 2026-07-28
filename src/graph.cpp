@@ -4,6 +4,8 @@
 #include "graph.h"
 #include "btllib/bloom_filter.hpp"   // vendored: plain (atomic, lock-free) BloomFilter
 // extract is declared in svp.h (provided by src/extract.cpp over biolcp).
+#include "posmap.h"       // SVP_POSAWARE: reference position map (sig -> loci), consumer
+#include "placement.h"    // SVP_POSAWARE: lookup-based read placement (no DP alignment)
 
 #include <sys/stat.h>
 #include <sys/resource.h>
@@ -682,6 +684,169 @@ void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, in
                  cpu_rd_ns.load() / 1e9, cpu_ext_ns.load() / 1e9, cpu_w_ns.load() / 1e9, tot);
 }
 
+// ============================================================================================
+// SVP_POSAWARE: node identity is (sig, locus). Pass 1 (the bloom count above) is UNCHANGED and its
+// survivor sigs are the survival gate. Placement runs ONCE here in pass 2 -- pass 1 never places, so
+// there is no pass1/pass2 placement-consistency requirement; determinism holds within this pass alone.
+// A repeat sig that pass 1 kept is split here into one node per reference copy the reads actually
+// landed on; the read-order edge between two distant-locus nodes is the SV junction.
+// ============================================================================================
+struct SL { uint64_t sig, locus; };
+inline bool operator==(const SL& a, const SL& b) { return a.sig == b.sig && a.locus == b.locus; }
+struct SLHash { uint64_t operator()(const SL& k) const { return k.sig * 0x9e3779b97f4a7c15ULL + k.locus; } };
+struct SLP { SL a, b; };
+inline bool operator==(const SLP& x, const SLP& y) { return x.a == y.a && x.b == y.b; }
+struct SLPHash { uint64_t operator()(const SLP& k) const {
+    uint64_t h = k.a.sig * 0x9e3779b97f4a7c15ULL + k.a.locus;
+    return (h ^ (k.b.sig * 0x100000001b3ULL)) + k.b.locus; } };
+using NodeMap = ankerl::unordered_dense::map<SL, std::pair<uint32_t, uint32_t>, SLHash>;
+using PairMap = ankerl::unordered_dense::map<SLP, std::pair<uint32_t, uint32_t>, SLPHash>;
+struct PANode { uint64_t sig, locus; uint32_t n, t; };
+struct PAEdge { uint64_t sa, la, sb, lb; uint32_t n, t; };
+
+// One read -> place cores against the posmap, count per-(sig,locus) node occurrences and per-colour
+// (sig,locus)->(sig,locus) edge traversals between surviving cores. Same parse/vote as pass 1; merge is
+// OFF (posaware forces SVP_NOMERGE) so ref_merge is a passthrough and eff carries the raw cores.
+void process_read_edges_pa(std::string& s, int level, int margin, int col,
+                           const ankerl::unordered_dense::map<uint64_t, uint32_t>& surv,
+                           const posmap::Map& pm, NodeMap& nmap, PairMap& emap,
+                           std::string& rc_buf, uint64_t& cpu_ext) {
+    for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
+    const uint64_t len = s.size();
+    if (len < (uint64_t)(2 * margin + 4)) return;
+    std::vector<int> keep; std::vector<uint8_t> fl; std::vector<Span> eff; std::vector<uint64_t> locus;
+    auto go = [&](const char* data, const Parse& p) {
+        ref_merge(data, p.st, p.en, p.sig, keep, fl, 65535, eff);   // passthrough under posaware (merge off)
+        place(eff, pm, locus);
+        bool have = false; SL prev{0, 0};
+        for (size_t i = 0; i < eff.size(); i++) {
+            if (surv.find(eff[i].sig) == surv.end()) { have = false; continue; }   // survival gate (sig cleared mm in pass 1)
+            const SL cur{eff[i].sig, locus[i]};
+            { auto& c = nmap[cur]; (col == 0 ? c.first : c.second)++; }
+            if (have && !(prev == cur)) { auto& c = emap[SLP{prev, cur}]; (col == 0 ? c.first : c.second)++; }
+            prev = cur; have = true;
+        }
+    };
+    Parse p = parse_strand(s.data(), len, level, margin, keep, fl, cpu_ext);
+    const int v = ref_vote(fl, false);
+    if (v >= 0) go(s.data(), p);
+    if (v <= 0) { rc_into(s, rc_buf); p = parse_strand(rc_buf.data(), len, level, margin, keep, fl, cpu_ext); go(rc_buf.data(), p); }
+}
+
+// Pass-2 pool for posaware: same reader/worker skeleton as edge_count_pool, but each worker accumulates
+// (sig,locus) node counts AND (sig,locus)-pair edge counts, flushed into 64 sharded global maps.
+void edge_count_pool_pa(const std::vector<Shard>& shards, int level, int margin, int threads,
+                        const ankerl::unordered_dense::map<uint64_t, uint32_t>& surv, const posmap::Map& pm,
+                        std::vector<PANode>& out_nodes, std::vector<PAEdge>& out_edges) {
+    constexpr int NSHARD = 64;
+    NodeMap gnode[NSHARD]; std::mutex gnmtx[NSHARD];
+    PairMap gedge[NSHARD]; std::mutex gemtx[NSHARD];
+    const int nshards = (int)shards.size();
+    const int nrd = nshards;
+    const char* dpenv = std::getenv("SVP_DECP");
+    const int dec_p = dpenv ? std::max(1, std::atoi(dpenv)) : std::max(2, (threads / 4) / std::max(1, nshards));
+    const char* nwe = std::getenv("SVP_FILL_NW");
+    const int nw  = nwe ? std::max(1, std::atoi(nwe)) : std::max(1, threads - nrd - nrd * dec_p);
+    std::atomic<size_t> next{0}, done{0};
+    std::atomic<int> readers_left{nrd};
+    std::atomic<uint64_t> cpu_rd_ns{0}, cpu_w_ns{0}, cpu_ext_ns{0};
+    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
+    std::queue<Batch> q;
+    constexpr size_t Q_CAP = 256, BATCH = 64;
+    constexpr unsigned BLOCK = 1u << 20;
+    auto reader = [&]() {
+        const uint64_t cpu0 = thr_ns();
+        std::vector<char> buf(BLOCK);
+        std::vector<std::string> batch; batch.reserve(BATCH);
+        std::string carry; int col_local = 0; uint32_t cur_shard = 0; uint64_t shard_reads = 0;
+        auto flush = [&]() {
+            if (batch.empty()) return;
+            const uint32_t r0 = (uint32_t)(shard_reads - batch.size());
+            std::unique_lock<std::mutex> lk(qmtx);
+            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
+            q.push(Batch{std::move(batch), col_local, cur_shard, r0}); cv_empty.notify_one();
+            batch.clear(); batch.reserve(BATCH);
+        };
+        size_t si; std::string svseq;
+        while ((si = next.fetch_add(1)) < shards.size()) {
+            col_local = shards[si].col; cur_shard = (uint32_t)si; shard_reads = 0;
+            const bool svb = is_svb(shards[si].path);
+            FILE* f = svb ? open_svb(shards[si].path) : open_decode(shards[si].path, dec_p);
+            if (svb) {
+                while (svb_next(f, svseq)) { shard_reads++; batch.emplace_back(std::move(svseq)); if (batch.size() >= BATCH) flush(); }
+                std::fclose(f);
+            } else {
+                int line_no = 0; carry.clear(); int got;
+                while ((got = (int)std::fread(buf.data(), 1, BLOCK, f)) > 0) {
+                    const char* base = buf.data(); const char* end = base + got; const char* start = base;
+                    for (const char* p = base; p < end; p++) if (*p == '\n') {
+                        const size_t n = (size_t)(p - start);
+                        if (line_no == 1) {
+                            if (carry.empty()) batch.emplace_back(start, n);
+                            else { carry.append(start, n); batch.push_back(std::move(carry)); carry.clear(); }
+                            shard_reads++;
+                            if (batch.size() >= BATCH) flush();
+                        } else if (!carry.empty()) carry.clear();
+                        line_no = (line_no + 1) & 3; start = p + 1;
+                    }
+                    if (start < end && line_no == 1) carry.append(start, end - start);
+                }
+                pclose(f);
+            }
+            flush();
+            std::fprintf(stderr, "[edge-pa] shard %zu/%d done (col=%d)\n", (size_t)done.fetch_add(1) + 1, nshards, col_local);
+        }
+        flush();
+        if (readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(qmtx); cv_empty.notify_all(); }
+        cpu_rd_ns += thr_ns() - cpu0;
+    };
+    auto worker = [&]() {
+        const uint64_t wcpu0 = thr_ns();
+        uint64_t local_ext = 0;
+        std::string rc_buf; rc_buf.reserve(1u << 16);
+        NodeMap lnode; lnode.reserve(1u << 20);
+        PairMap ledge; ledge.reserve(1u << 20);
+        constexpr size_t FLUSH = 1u << 22;
+        auto flush = [&]() {
+            { std::vector<std::vector<std::pair<SL, std::pair<uint32_t, uint32_t>>>> by(NSHARD);
+              for (const auto& kv : lnode) by[SLHash{}(kv.first) & (NSHARD - 1)].push_back(kv);
+              for (int sh = 0; sh < NSHARD; sh++) { if (by[sh].empty()) continue; std::lock_guard<std::mutex> lk(gnmtx[sh]);
+                  for (const auto& kv : by[sh]) { auto& c = gnode[sh][kv.first]; c.first += kv.second.first; c.second += kv.second.second; } }
+              lnode.clear(); }
+            { std::vector<std::vector<std::pair<SLP, std::pair<uint32_t, uint32_t>>>> by(NSHARD);
+              for (const auto& kv : ledge) by[SLPHash{}(kv.first) & (NSHARD - 1)].push_back(kv);
+              for (int sh = 0; sh < NSHARD; sh++) { if (by[sh].empty()) continue; std::lock_guard<std::mutex> lk(gemtx[sh]);
+                  for (const auto& kv : by[sh]) { auto& c = gedge[sh][kv.first]; c.first += kv.second.first; c.second += kv.second.second; } }
+              ledge.clear(); }
+        };
+        while (true) {
+            Batch b;
+            { std::unique_lock<std::mutex> lk(qmtx);
+              cv_empty.wait(lk, [&]{ return !q.empty() || readers_left.load() == 0; });
+              if (q.empty()) break;
+              b = std::move(q.front()); q.pop(); cv_full.notify_one(); }
+            const int c = b.col & 1;
+            for (std::string& s : b.seqs) process_read_edges_pa(s, level, margin, c, surv, pm, lnode, ledge, rc_buf, local_ext);
+            if (lnode.size() + ledge.size() >= FLUSH) flush();
+        }
+        flush();
+        cpu_w_ns += thr_ns() - wcpu0; cpu_ext_ns += local_ext;
+    };
+    std::vector<std::thread> rds, wks;
+    for (int i = 0; i < nrd; i++) rds.emplace_back(reader);
+    for (int i = 0; i < nw;  i++) wks.emplace_back(worker);
+    for (auto& t : rds) t.join();
+    for (auto& t : wks) t.join();
+    size_t tn = 0, te = 0;
+    for (int sh = 0; sh < NSHARD; sh++) { tn += gnode[sh].size(); te += gedge[sh].size(); }
+    out_nodes.clear(); out_nodes.reserve(tn);
+    out_edges.clear(); out_edges.reserve(te);
+    for (int sh = 0; sh < NSHARD; sh++) for (const auto& kv : gnode[sh]) out_nodes.push_back({kv.first.sig, kv.first.locus, kv.second.first, kv.second.second});
+    for (int sh = 0; sh < NSHARD; sh++) for (const auto& kv : gedge[sh]) out_edges.push_back({kv.first.a.sig, kv.first.a.locus, kv.first.b.sig, kv.first.b.locus, kv.second.first, kv.second.second});
+    std::fprintf(stderr, "[edge-pa] pool CPU-sec: reader=%.1f | worker=%.1f | distinct nodes=%zu edges=%zu\n",
+                 cpu_rd_ns.load() / 1e9, cpu_w_ns.load() / 1e9, tn, te);
+}
+
 }  // namespace
 
 // ---- merged stage: reads -> bloom-count -> edge-count -> self-contained graph.bin ----
@@ -693,6 +858,9 @@ void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, in
 void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir,
                      int level, int margin, int min_mult, int threads) {
     init_comp_lut();
+    // SVP_POSAWARE splits repeat copies by locus, so the (A+X)->(X+B) merge must be OFF: force it before
+    // ref_load reads the env. The index stays loaded -- posaware still needs the strand vote to orient reads.
+    if (std::getenv("SVP_POSAWARE")) setenv("SVP_NOMERGE", "1", 1);
     // The reference index is ON by default: it decides each read's strand AND merges the repeat cores.
     // SVP_REFIDX overrides the path; SVP_NOREFIDX=1 drops it entirely (dual-strand, no merge -- the
     // pre-vote build); SVP_NOVOTE=1 keeps the merge but not the vote. Built by tools/build_refidx.
@@ -749,6 +917,65 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     }
     std::vector<SigCount>().swap(nodes);
     const Snap P2 = snap();
+
+    // ---- SVP_POSAWARE: (sig,locus) node model. Place cores against the posmap in pass 2, key nodes by
+    // (sig,locus), write graph.bin (byte-sig identity PRESERVED -> eval_sig/refine stay valid) + a
+    // locus.bin sidecar (u64 K, u64 locus[K]). Wholly separate from the sig-only path below; unset =>
+    // that path runs byte-for-byte as before. `idx` (sig->id, above) is the survival gate. ----
+    if (std::getenv("SVP_POSAWARE")) {
+        const char* pmp = std::getenv("SVP_POSMAP");
+        posmap::Map pm;
+        if (!pm.open(pmp ? pmp : "outputs/svp/refpos_l5_all.bin")) {
+            std::fprintf(stderr, "[FATAL] posaware: cannot open posmap (set SVP_POSMAP)\n"); std::abort();
+        }
+        std::vector<PANode> pn; std::vector<PAEdge> pe;
+        edge_count_pool_pa(shards_all, level, margin, threads, idx, pm, pn, pe);
+        pm.close();
+        std::fprintf(stderr, "[posaware] observed %zu (sig,locus) nodes, %zu (sig,locus) edges\n", pn.size(), pe.size());
+
+        const char* cme = std::getenv("SVP_POSAWARE_COPYMIN");
+        const uint32_t copymin = cme ? (uint32_t)std::atoi(cme) : 1;   // per-copy read floor (default keep all observed)
+        std::sort(pn.begin(), pn.end(), [](const PANode& a, const PANode& b){ return a.sig != b.sig ? a.sig < b.sig : a.locus < b.locus; });
+        std::vector<uint64_t> psig, ploc; std::vector<uint32_t> pncov, ptcov;
+        ankerl::unordered_dense::map<SL, uint32_t, SLHash> nid; nid.reserve(pn.size());
+        for (const PANode& x : pn) {
+            if (x.n + x.t < copymin) continue;
+            nid.emplace(SL{x.sig, x.locus}, (uint32_t)psig.size());
+            psig.push_back(x.sig); ploc.push_back(x.locus); pncov.push_back(x.n); ptcov.push_back(x.t);
+        }
+        std::vector<PANode>().swap(pn);
+        const uint64_t Kp = psig.size();
+        std::vector<CEdge> ce; ce.reserve(pe.size());
+        for (const PAEdge& e : pe) {
+            auto a = nid.find(SL{e.sa, e.la}), b = nid.find(SL{e.sb, e.lb});
+            if (a != nid.end() && b != nid.end() && a->second != b->second) ce.push_back({a->second, b->second, e.n, e.t});
+        }
+        std::vector<PAEdge>().swap(pe);
+        std::sort(ce.begin(), ce.end(), [](const CEdge& x, const CEdge& y){ return x.src != y.src ? x.src < y.src : x.dst < y.dst; });
+
+        const std::string gp = dir + "/graph.bin";
+        FILE* fg = xopen(gp + ".tmp", "wb");
+        uint64_t Kw = Kp; wr(fg, &Kw, 8);
+        wr(fg, psig.data(), Kp * 8); wr(fg, pncov.data(), Kp * 4); wr(fg, ptcov.data(), Kp * 4);
+        uint64_t E = ce.size(); wr(fg, &E, 8); wr(fg, ce.data(), E * sizeof(CEdge));
+        atomic_close(fg, gp + ".tmp", gp);
+        const std::string lp = dir + "/locus.bin";
+        FILE* flx = xopen(lp + ".tmp", "wb");
+        wr(flx, &Kw, 8); wr(flx, ploc.data(), Kp * 8);
+        atomic_close(flx, lp + ".tmp", lp);
+
+        uint64_t nnov = 0, nunr = 0;
+        for (uint64_t i = 0; i < Kp; i++) { if (ploc[i] == posmap::NOVEL) nnov++; else if (ploc[i] == posmap::UNRESOLVED) nunr++; }
+        const double kd = (double)(Kp ? Kp : 1);
+        std::fprintf(stderr, "[posaware] nodes=%lu  placed=%lu (%.1f%%)  novel=%lu (%.1f%%)  unresolved-repeat=%lu (%.1f%%)  copymin=%u  edges=%lu -> %s/graph.bin + locus.bin\n",
+                     (unsigned long)Kp, (unsigned long)(Kp - nnov - nunr), 100.0 * (Kp - nnov - nunr) / kd,
+                     (unsigned long)nnov, 100.0 * nnov / kd, (unsigned long)nunr, 100.0 * nunr / kd,
+                     copymin, (unsigned long)E, dir.c_str());
+        if (ref_on()) { uint64_t vf, vr, vu; ref_read_stats(vf, vr, vu); const double tot = (double)(vf + vr + vu);
+            std::fprintf(stderr, "[posaware] strand vote: %.2f%% fwd, %.2f%% rc, %.3f%% undecided\n",
+                         tot ? 100.0 * vf / tot : 0, tot ? 100.0 * vr / tot : 0, tot ? 100.0 * vu / tot : 0); }
+        return;
+    }
 
     // ---- repeat-resolution capture (opt-in SVP_SPLIT_REPEATS) ------------------------------------
     // The alternative to dissolving a repeat run into its flanks. ref_merge (Stage 3) deletes the run's
