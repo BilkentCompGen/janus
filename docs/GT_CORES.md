@@ -46,7 +46,7 @@ look like here" — the second is what the caller sees.
 |---|---|---|---|
 | SNV | 118,650 / 20,000 | 0.0 | 2.3 |
 | DEL | 3,578 / 2,760 | 6.6 / 6.4 | 2.3 |
-| INS | 3,368 / 2,630 | 0.8 / 1.4 | 3.5 / 4.2 |
+| INS | 3,368 / 2,630 | 0.8 / 1.4 | 3.4 / 4.2 |
 | DUP | 156 / 130 | 149.5 / 83.0 | 2.3 |
 | INV | 78 / 130 | 85.4 / 91.4 | **4.7** |
 | 19 complex grammars | — / 887 | 120–140 | n/a (`alt_skip`) |
@@ -74,5 +74,16 @@ one alt allele — that is the next thing this tool needs, and it needs `TARGET`
 - Cores come from a ±4,000 bp window, not a whole-genome parse. The LCP parse is locally consistent, so
   an interior core is the same either way. `selfcheck` re-cuts 200 sampled variants at double the window
   and asserts the emitted sigs are unchanged: **0/199 differ**, both sets.
+- **The reference span is verified against the simulator's own tumour genome**, not asserted:
+  `scripts/verify_gt_cores.py` rebuilds each ALT allele, takes the 120 bp centred on the junction, and
+  looks for it in `out.fa`. **200/200 on `hard`, 200/200 on `complex`.** One base of error anywhere in
+  the span would break every probe. Two failure modes belong to the verifier, not to gt_cores: its
+  ref→tumour offset model ignores translocations and dispersed dups (so it falls back to scanning the
+  whole contig — 71 of the 200 complex probes land that way), and a locus inside a larger inversion
+  appears reverse-complemented (2 probes, found as RC).
+- **This check caught a real off-by-one.** The insertion point of a symbolic `<INS>` is `POS-1`, BEFORE
+  the POS base, not `POS`. The first version spliced at `POS`: 0/40 probes matched. At `POS-1`, 39/40
+  (the 40th sits inside a 929 kb inversion and matches as RC). Every INS junction core in the first
+  generation of these files was wrong by one base; both sets were regenerated.
 - 12 of 125,830 (`hard`) and 2 of 26,407 (`complex`) records get fewer than K cores on one side — they
   sit within 10 cores of a contig end.
