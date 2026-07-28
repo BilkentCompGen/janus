@@ -61,12 +61,13 @@ static void init_comp_lut() {
     COMP_LUT[(uint8_t)'C'] = 'G'; COMP_LUT[(uint8_t)'G'] = 'C';
 }
 
-// ---- the reference index (src/refidx.{h,cpp}) ----
-// Every core of every read is looked up ONCE and the answer settles two things at the same time:
-//   the strand vote  -> which ONE orientation of this read goes into the graph (see below)
-//   the repeat bit   -> a run of reference repeats is absorbed into its flanks, (A+X)->(X+B)
-// The merge is SHARED with the anchor stage, which MUST apply the identical merge to the reference or
-// the merged reference cores will not match the merged graph nodes.
+// ---- NO REFERENCE ----
+// The graph is built from reads alone. There is no reference index, so no strand vote and no repeat
+// merge: every read enters BOTH ways (its bytes as sequenced and their reverse complement) and every
+// kept core enters as extract() produced it. A locus therefore has a mirror twin in the other strand
+// family; the twins are two nodes with different sigs and no core in common, and pairing them is the
+// scorer's job, not the graph's.
+// Repeats are handled by COVERAGE, not by a reference list (opt-in SVP_SPLIT_REPEATS, below).
 
 // Node identity = core_sig (MurmurHash64A over the core's bytes), computed in extract(). The sig itself
 // is what gets stored per node -- the core bytes are no longer kept.
@@ -83,13 +84,12 @@ struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
     }
 };
 
-// One parse of one strand: extract, drop the cores within `margin` of an end, and ask the index about
-// each survivor exactly once (fl[k] belongs to keep[k]). The extract buffer stays valid in (n,st,en,sig)
-// until the NEXT extract call, which is what lets the caller vote on a parse and only then decide
-// whether to keep it.
+// One parse of one strand: extract and drop the cores within `margin` of an end. The extract buffer
+// stays valid in (n,st,en,sig) until the NEXT extract call, so a parse must be consumed before the
+// other strand is parsed.
 struct Parse { int n; const uint64_t *st, *en, *sig; };
 Parse parse_strand(const char* data, uint64_t len, int level, int margin,
-                   std::vector<int>& keep, std::vector<uint8_t>& fl, uint64_t& cpu_ext) {
+                   std::vector<int>& keep, uint64_t& cpu_ext) {
     Parse p;
     const uint64_t te = thr_ns();
     extract(data, (int)len, 0, level, &p.n, &p.st, &p.en, &p.sig);
@@ -97,8 +97,14 @@ Parse parse_strand(const char* data, uint64_t len, int level, int margin,
     keep.clear();
     const uint64_t mg = (uint64_t)margin;
     for (int i = 0; i < p.n; i++) if (p.st[i] >= mg && p.en[i] + mg <= len) keep.push_back(i);
-    ref_flags(p.sig, keep, fl);
     return p;
+}
+
+// The kept cores of a parse, in read order, as extract() produced them.
+void spans_of(const Parse& p, const std::vector<int>& keep, std::vector<Span>& out) {
+    out.clear();
+    out.reserve(keep.size());
+    for (int i : keep) out.push_back({(uint32_t)p.st[i], (uint32_t)p.en[i], p.sig[i]});
 }
 
 void rc_into(const std::string& s, std::string& rc_buf) {
@@ -110,12 +116,11 @@ void rc_into(const std::string& s, std::string& rc_buf) {
 // One read -> interior signatures (NO edges; edges are emitted in pass 2 over the surviving-sig subset
 // to avoid carrying 40+ GB of raw edges through the pool stage).
 //
-// The read goes in ONCE, in the orientation the reference votes for -- not twice as it used to. Only an
-// undecided read (a split vote, e.g. one that crosses an inversion breakpoint, or one with no reference
-// support at all, e.g. inside a novel insertion) is inserted both ways.
+// The read goes in BOTH ways. Nothing here can tell which orientation a read was sequenced in without a
+// reference, and the parse is not RC-symmetric (the two strands cut at different boundaries), so the two
+// families are simply both kept.
 //
-// cap_st/cap_w (per strand): the pass-2 boundary cache, only reachable on the no-index path (the merge
-// rewrites core boundaries, so with an index both passes must re-extract). Caller guarantees len<=65535.
+// cap_st/cap_w (per strand): the pass-2 boundary cache. Caller guarantees len<=65535.
 void process_read(std::string& s, int level, int margin,
                   std::vector<uint64_t>& lsigs, std::string& rc_buf, uint64_t& cpu_ext,
                   std::vector<uint16_t>* cfs, std::vector<uint16_t>* cfw,
@@ -123,24 +128,21 @@ void process_read(std::string& s, int level, int margin,
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
-    std::vector<int> keep; std::vector<uint8_t> fl; std::vector<Span> eff;
+    std::vector<int> keep; std::vector<Span> eff;
 
-    auto emit = [&](const char* data, const Parse& p, std::vector<uint16_t>* cs, std::vector<uint16_t>* cw) {
-        ref_merge(data, p.st, p.en, p.sig, keep, fl, 65535, eff);
+    auto emit = [&](const Parse& p, std::vector<uint16_t>* cs, std::vector<uint16_t>* cw) {
+        spans_of(p, keep, eff);
         for (const Span& e : eff) {
             if (cs) { cs->push_back((uint16_t)e.st); cw->push_back((uint16_t)(e.en - e.st)); }
             lsigs.push_back(e.sig);
         }
     };
 
-    Parse p = parse_strand(s.data(), len, level, margin, keep, fl, cpu_ext);
-    const int v = ref_vote(fl, true);               // +1 forward, -1 reverse-complement, 0 undecided
-    if (v >= 0) emit(s.data(), p, cfs, cfw);        // the bytes as sequenced ARE the reference's copy
-    if (v <= 0) {                                   // ...or they read backwards off it, so flip them:
-        rc_into(s, rc_buf);                         //    the RC is then the reference-forward copy, and
-        p = parse_strand(rc_buf.data(), len, level, margin, keep, fl, cpu_ext);   // lands on the same
-        emit(rc_buf.data(), p, crs, crw);                                         // nodes as every other
-    }                                                                             // read of that locus
+    Parse p = parse_strand(s.data(), len, level, margin, keep, cpu_ext);
+    emit(p, cfs, cfw);
+    rc_into(s, rc_buf);
+    p = parse_strand(rc_buf.data(), len, level, margin, keep, cpu_ext);
+    emit(p, crs, crw);
 }
 
 // Per-edge (prev_sig, cur_sig) -> (normal_count, tumor_count). Hash mixes the sig pair; not tagged
@@ -153,13 +155,12 @@ using EdgeMap = ankerl::unordered_dense::map<SEdge, std::pair<uint32_t, uint32_t
 // occurrence, into the caller's per-colour slot (col 0 = normal -> .first, col 1 = tumor -> .second),
 // for every consecutive pair where BOTH cores survived the mm gate (are in idx).
 //
-// Identical parse, vote and merge as pass 1 -- the vote is a pure function of the read's bytes and the
-// index, so it lands on the same strand here and the counted adjacencies match the node set.
+// Identical parse to pass 1 -- both strands, every kept core -- so the counted adjacencies match the
+// node set.
 // Repeat-run capture (SVP_SPLIT_REPEATS). A read physically threads  A -> X.. -> B  through a collapsed
 // repeat run X. That pairing of the in-flank A to the out-flank B exists ONLY here, in the read: once the
 // graph is built the repeat node has N in-flanks and N out-flanks and which goes with which is gone. So the
-// thread is recorded now, and the X-cut (tools/trace.cpp apply_xcut) splits the run per (in,out) pair later
-// -- keeping the repeat's VERTICES instead of dissolving them into the flanks the way ref_merge does.
+// thread is recorded now, and the X-cut (tools/trace.cpp apply_xcut) splits the run per (in,out) pair later.
 void process_read_edges(std::string& s, int level, int margin, int col,
                         const ankerl::unordered_dense::map<uint64_t, uint32_t>& idx,
                         EdgeMap& emap, std::string& rc_buf, uint64_t& cpu_ext,
@@ -167,10 +168,10 @@ void process_read_edges(std::string& s, int level, int margin, int col,
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
-    std::vector<int> keep; std::vector<uint8_t> fl; std::vector<Span> eff;
+    std::vector<int> keep; std::vector<Span> eff;
 
-    auto chain = [&](const char* data, const Parse& p) {
-        ref_merge(data, p.st, p.en, p.sig, keep, fl, 65535, eff);
+    auto chain = [&](const Parse& p) {
+        spans_of(p, keep, eff);
         uint64_t prev = 0; bool have = false;
         // repeat-run state: the node id of the last non-repeat core seen (the in-flank), and the run itself
         uint32_t in_flank = UINT32_MAX, run_mid = UINT32_MAX; bool in_run = false;
@@ -195,14 +196,11 @@ void process_read_edges(std::string& s, int level, int margin, int col,
         if (in_run && trip) trip->push_back({run_mid, in_flank, UINT32_MAX});   // read ended inside the run
     };
 
-    Parse p = parse_strand(s.data(), len, level, margin, keep, fl, cpu_ext);
-    const int v = ref_vote(fl, false);              // pass 1 already tallied this read
-    if (v >= 0) chain(s.data(), p);
-    if (v <= 0) {
-        rc_into(s, rc_buf);
-        p = parse_strand(rc_buf.data(), len, level, margin, keep, fl, cpu_ext);
-        chain(rc_buf.data(), p);
-    }
+    Parse p = parse_strand(s.data(), len, level, margin, keep, cpu_ext);
+    chain(p);
+    rc_into(s, rc_buf);
+    p = parse_strand(rc_buf.data(), len, level, margin, keep, cpu_ext);
+    chain(p);
 }
 
 // A sample input is a directory of FASTQ/.svb shards (read in parallel) or a single file.
@@ -705,8 +703,8 @@ struct PANode { uint64_t sig, locus; uint32_t n, t; };
 struct PAEdge { uint64_t sa, la, sb, lb; uint32_t n, t; };
 
 // One read -> place cores against the posmap, count per-(sig,locus) node occurrences and per-colour
-// (sig,locus)->(sig,locus) edge traversals between surviving cores. Same parse/vote as pass 1; merge is
-// OFF (posaware forces SVP_NOMERGE) so ref_merge is a passthrough and eff carries the raw cores.
+// (sig,locus)->(sig,locus) edge traversals between surviving cores. Same parse as pass 1: both strands,
+// raw cores.
 void process_read_edges_pa(std::string& s, int level, int margin, int col,
                            const ankerl::unordered_dense::map<uint64_t, uint32_t>& surv,
                            const posmap::Map& pm, NodeMap& nmap, PairMap& emap,
@@ -714,9 +712,9 @@ void process_read_edges_pa(std::string& s, int level, int margin, int col,
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
-    std::vector<int> keep; std::vector<uint8_t> fl; std::vector<Span> eff; std::vector<uint64_t> locus;
-    auto go = [&](const char* data, const Parse& p) {
-        ref_merge(data, p.st, p.en, p.sig, keep, fl, 65535, eff);   // passthrough under posaware (merge off)
+    std::vector<int> keep; std::vector<Span> eff; std::vector<uint64_t> locus;
+    auto go = [&](const Parse& p) {
+        spans_of(p, keep, eff);
         place(eff, pm, locus);
         bool have = false; SL prev{0, 0};
         for (size_t i = 0; i < eff.size(); i++) {
@@ -727,10 +725,11 @@ void process_read_edges_pa(std::string& s, int level, int margin, int col,
             prev = cur; have = true;
         }
     };
-    Parse p = parse_strand(s.data(), len, level, margin, keep, fl, cpu_ext);
-    const int v = ref_vote(fl, false);
-    if (v >= 0) go(s.data(), p);
-    if (v <= 0) { rc_into(s, rc_buf); p = parse_strand(rc_buf.data(), len, level, margin, keep, fl, cpu_ext); go(rc_buf.data(), p); }
+    Parse p = parse_strand(s.data(), len, level, margin, keep, cpu_ext);
+    go(p);
+    rc_into(s, rc_buf);
+    p = parse_strand(rc_buf.data(), len, level, margin, keep, cpu_ext);
+    go(p);
 }
 
 // Pass-2 pool for posaware: same reader/worker skeleton as edge_count_pool, but each worker accumulates
@@ -858,16 +857,6 @@ void edge_count_pool_pa(const std::vector<Shard>& shards, int level, int margin,
 void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir,
                      int level, int margin, int min_mult, int threads) {
     init_comp_lut();
-    // SVP_POSAWARE splits repeat copies by locus, so the (A+X)->(X+B) merge must be OFF: force it before
-    // ref_load reads the env. The index stays loaded -- posaware still needs the strand vote to orient reads.
-    if (std::getenv("SVP_POSAWARE")) setenv("SVP_NOMERGE", "1", 1);
-    // The reference index is ON by default: it decides each read's strand AND merges the repeat cores.
-    // SVP_REFIDX overrides the path; SVP_NOREFIDX=1 drops it entirely (dual-strand, no merge -- the
-    // pre-vote build); SVP_NOVOTE=1 keeps the merge but not the vote. Built by tools/build_refidx.
-    if (!std::getenv("SVP_NOREFIDX")) {
-        const char* p = std::getenv("SVP_REFIDX");
-        ref_load(p ? p : "outputs/svp/refidx_l5.idx", level);
-    }
     mkdir(dir.c_str(), 0755);
     const std::vector<std::string> ns = collect_shards(normal_fq), ts = collect_shards(tumor_fq);
     std::vector<Shard> shards_n, shards_t, shards_all;
@@ -888,7 +877,7 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
 
     // ---- pass 1: bloom-cascade count BOTH samples in one parallel pool -> survivors with (n,t) ----
     // The cache records every read's core boundaries so pass 2 skips extract (SVP_NOCACHE disables).
-    CoreCache cache; const bool use_cc = !std::getenv("SVP_NOCACHE") && !ref_on();   // the repeat merge rewrites core boundaries -> both passes must re-extract+re-merge (no cache)
+    CoreCache cache; const bool use_cc = !std::getenv("SVP_NOCACHE");
     std::vector<SigCount> nodes; uint64_t nr_n = 0, nr_t = 0;
     run_pool_both(shards_all, level, margin, threads, min_mult, nodes, nr_n, nr_t, cache, use_cc);
     const uint64_t K = nodes.size();
@@ -971,20 +960,14 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
                      (unsigned long)Kp, (unsigned long)(Kp - nnov - nunr), 100.0 * (Kp - nnov - nunr) / kd,
                      (unsigned long)nnov, 100.0 * nnov / kd, (unsigned long)nunr, 100.0 * nunr / kd,
                      copymin, (unsigned long)E, dir.c_str());
-        if (ref_on()) { uint64_t vf, vr, vu; ref_read_stats(vf, vr, vu); const double tot = (double)(vf + vr + vu);
-            std::fprintf(stderr, "[posaware] strand vote: %.2f%% fwd, %.2f%% rc, %.3f%% undecided\n",
-                         tot ? 100.0 * vf / tot : 0, tot ? 100.0 * vr / tot : 0, tot ? 100.0 * vu / tot : 0); }
         return;
     }
 
     // ---- repeat-resolution capture (opt-in SVP_SPLIT_REPEATS) ------------------------------------
-    // The alternative to dissolving a repeat run into its flanks. ref_merge (Stage 3) deletes the run's
-    // VERTICES, so any SV whose breakpoint falls inside a repeat has no node to be found at -- measured:
-    // 75 of the 156 unrecoverable large SVs, concentrated on chrY/9/15/16. Here the run keeps its nodes and
-    // the read's in->run->out thread is recorded instead; tools/trace.cpp apply_xcut then splits the run
-    // into one copy per (in,out) pair, which removes the tangle WITHOUT removing the sequence.
-    // A repeat is flagged by coverage, not by the index: a run collapsed from C loci carries ~C x the
-    // single-copy depth. Use with SVP_NOMERGE=1, or the runs are already gone before this sees them.
+    // A collapsed repeat run keeps its nodes, and the read's in->run->out thread is recorded alongside;
+    // tools/trace.cpp apply_xcut then splits the run into one copy per (in,out) pair, which removes the
+    // tangle WITHOUT removing the sequence. A repeat is flagged by COVERAGE -- a run collapsed from C
+    // loci carries ~C x the single-copy depth -- so no reference list is involved.
     const bool split_rep = std::getenv("SVP_SPLIT_REPEATS");
     std::vector<uint8_t> is_repeat;
     std::vector<std::array<uint32_t, 3>> triples; std::mutex tmtx;
@@ -1043,18 +1026,6 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     tic.mark("write");
     std::fprintf(stderr, "[graph] normal_reads=%lu tumor_reads=%lu nodes=%lu edges=%lu -> %s/graph.bin (v3: sig + edge counts, no payload)\n",
                  (unsigned long)nr_n, (unsigned long)nr_t, (unsigned long)K, (unsigned long)E, dir.c_str());
-    if (ref_on()) {
-        uint64_t vf, vr, vu; ref_read_stats(vf, vr, vu);
-        const double tot = (double)(vf + vr + vu);
-        std::fprintf(stderr, "[graph] strand vote: %.2f%% forward, %.2f%% reverse-complement, %.3f%% undecided (%lu reads, both strands inserted)\n",
-                     tot ? 100.0 * vf / tot : 0.0, tot ? 100.0 * vr / tot : 0.0, tot ? 100.0 * vu / tot : 0.0, (unsigned long)vu);
-        // SVP_VOTE_ERR: say how many reads the injected fault actually flipped. Announcing the rate is
-        // not the same as landing it, and a fault you cannot count is a fault you cannot trust.
-        if (const uint64_t fl = ref_flipped())
-            std::fprintf(stderr, "[graph] strand FAULT: %lu of %lu reads (%.2f%%) went in on the WRONG strand\n",
-                         (unsigned long)fl, (unsigned long)tot, tot ? 100.0 * fl / tot : 0.0);
-        std::fprintf(stderr, "[graph] repeat (A+X)->(X+B) merge: %lu over-long merged spans dropped (>65535 bp)\n", (unsigned long)ref_dropped());
-    }
 
     // ---- per-component CPU-second + execution-efficiency table -------------------------------
     // CPU = in-process (Δself, all threads) + decode (Δchild, rapidgzip). wall = phase wall.

@@ -12,10 +12,9 @@ extern "C" void extract(const char* str, int len, uint64_t offset, int target_le
                              const uint64_t** ends_out, const uint64_t** sigs_out);
 uint64_t core_sig(const char* key, int len);
 
-// The reference index: ONE file, ONE lookup per core, answering both the strand vote (which way round
-// does this read go?) and the repeat merge (is this core a repeat, to be absorbed into its flanks?).
-// graph.cpp and the anchor/fasta tools all go through it so their parses stay byte-identical.
-#include "refidx.h"
+// One kept core of one parse: its span in the read plus its signature. (Was refidx.h's, kept here now
+// that the reference index is gone -- a read's cores go in as extract() produced them, both strands.)
+struct Span { uint32_t st, en; uint64_t sig; };
 
 // Shared graph-stage structs (survivor record + directed node-id edge), hoisted from
 // graph.cpp's anon namespace so other stages can read graph.bin without duplication.

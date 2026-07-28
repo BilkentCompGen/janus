@@ -1,11 +1,11 @@
 #pragma once
 #include <cstdint>
 #include <vector>
-#include "svp.h"        // Span (via refidx.h)
+#include "svp.h"        // Span
 #include "posmap.h"
 
-// Lookup-based read placement (NO dynamic-programming alignment). eff = kept cores in read order;
-// ref_merge is a passthrough under posaware, so eff carries raw cores with read-bp offsets in .st.
+// Lookup-based read placement (NO dynamic-programming alignment). eff = kept cores in read order,
+// raw as extract() produced them, with read-bp offsets in .st.
 // Fills locus[i] (packed via posmap::pack_locus, or posmap::NOVEL):
 //   anchor (1 reference locus)  -> that locus, PINNED, never moved. An SV read's flanking anchors stay
 //                                  at their true distant loci, so the read-order edge across the
