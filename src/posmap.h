@@ -4,7 +4,7 @@
 
 // The position map ("reference linked list"): sig -> every (contig, pos, strand) the core occupies in
 // the reference, KEEPING repeats (multi-locus) and BOTH strands. Built merge-free by tools/refpos so a
-// posaware graph build (which runs ref_merge OFF) sees byte-identical cores. Records are 17 B, packed,
+// posaware graph build sees byte-identical cores. Records are 17 B, packed,
 // sorted by (sig, contig, pos); file = u64 N then Rec[N]. Only consumed under SVP_POSAWARE.
 namespace posmap {
 
@@ -32,7 +32,7 @@ inline uint8_t  locus_strand(uint64_t L) { return (uint8_t)(L >> 63); }
 inline uint32_t locus_contig(uint64_t L) { return (uint32_t)((L >> 40) & 0x7FFFFF); }
 inline uint64_t locus_pos(uint64_t L)    { return L & 0xFFFFFFFFFFULL; }
 
-// Read-only, mmapped straight off disk (like refidx::Index). A per-sig lookup returns the contiguous
+// Read-only, mmapped straight off disk. A per-sig lookup returns the contiguous
 // [first, first+count) slice of Recs; a bucket table over sig>>SHIFT bounds the search to ~one cache line.
 struct Map {
     int fd = -1;

@@ -41,3 +41,6 @@ lab/generate
 lab/pickwin
 lab/render_bin
 lab/htmls
+
+# stray empty build logs
+/build_pa*.log

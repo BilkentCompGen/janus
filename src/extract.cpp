@@ -10,7 +10,7 @@ extern "C" {
 #include <cstring>
 
 // MurmurHash64A (Austin Appleby, public domain). Node identity = this hash over the core's raw
-// bytes. One definition, used everywhere a core signature is needed (graph build, blacklist, truth)
+// bytes. One definition, used everywhere a core signature is needed (graph build, truth)
 // so all sigs stay consistent; seed fixed at 0 for determinism across runs/tools.
 uint64_t core_sig(const char* key, int len) {
     const uint64_t m = 0xc6a4a7935bd1e995ULL;
