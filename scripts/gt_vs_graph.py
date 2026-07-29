@@ -39,6 +39,52 @@ def lookup(sig, ncov, tcov, q):
     return col, n, t
 
 
+def sweep(sig, ncov, tcov, recs):
+    """Where does a ncov/tcov threshold actually separate anchors from junctions?
+
+    An anchor is normal sequence: it should look balanced (n ~ t). A junction is tumour-private: it
+    should look extreme (n << t). A threshold is only meaningful if those two populations do not
+    overlap, so print both distributions before picking one, then sweep.
+    """
+    anc_n, anc_t, jun_n, jun_t = [], [], [], []
+    for r in recs:
+        a = [c[2] for k in ("pre", "post", "pre_rc", "post_rc") for c in r[k]]
+        j = [c[2] for k in ("alt", "alt_rc") if r.get(k) for c in r[k] if c[3] == 1]
+        for q, dn, dt in ((a, anc_n, anc_t), (j, jun_n, jun_t)):
+            if not q:
+                continue
+            _, n, t = lookup(sig, ncov, tcov, q)
+            dn.append(n)
+            dt.append(t)
+    anc_n, anc_t = np.concatenate(anc_n), np.concatenate(anc_t)
+    jun_n, jun_t = np.concatenate(jun_n), np.concatenate(jun_t)
+
+    print(f"\n=== coverage distributions (anchors n={len(anc_n):,}, junctions n={len(jun_n):,}) ===")
+    print(f"{'population':<12}{'':>6}" + "".join(f"{p:>8}%" for p in (1, 5, 25, 50, 75, 95, 99)))
+    for name, a, b in (("anchor", anc_n, anc_t), ("junction", jun_n, jun_t)):
+        for lbl, v in ((f"{name} ncov", a), (f"{name} tcov", b)):
+            qs = np.percentile(v, [1, 5, 25, 50, 75, 95, 99])
+            print(f"{lbl:<18}" + "".join(f"{q:>9.0f}" for q in qs))
+
+    # ratio r = ncov/tcov, with the tcov==0 case called out separately (it is not a ratio at all)
+    print(f"\n=== ncov/tcov ===")
+    for name, a, b in (("anchor", anc_n, anc_t), ("junction", jun_n, jun_t)):
+        z = int((b == 0).sum())
+        m = b > 0
+        r = a[m] / b[m]
+        qs = np.percentile(r, [1, 5, 25, 50, 75, 95, 99])
+        print(f"{name:<10} tcov==0: {z/len(b):>7.2%}   ratio pct: " + " ".join(f"{q:.2f}" for q in qs))
+
+    print(f"\n=== sweep: 'tumour-private' = ncov/tcov < T (tcov==0 excluded as no-ratio) ===")
+    print(f"{'T':>6}{'junction kept':>16}{'anchor leaked':>16}")
+    for T in (0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0):
+        jm = jun_t > 0
+        am = anc_t > 0
+        jk = float(((jun_n[jm] / jun_t[jm]) < T).mean())
+        al = float(((anc_n[am] / anc_t[am]) < T).mean())
+        print(f"{T:>6}{jk:>16.2%}{al:>16.4%}")
+
+
 def main():
     gpath, gt = sys.argv[1], sys.argv[2]
     cap = int(sys.argv[3]) if len(sys.argv) > 3 else 0
@@ -78,6 +124,8 @@ def main():
             n = s["n"]
             print(f"{t:<12}{stat[(t,'recs')]['n']:>8}{n:>10}"
                   f"{s['absent']/n:>9.2%}{s['normal-only']/n:>9.2%}{s['tumour-only']/n:>9.2%}{s['shared']/n:>9.2%}")
+
+    sweep(sig, ncov, tcov, recs)
 
 
 if __name__ == "__main__":
