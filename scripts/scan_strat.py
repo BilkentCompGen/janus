@@ -9,7 +9,7 @@ produce a SHORT run; a 500 bp deletion removes ~6 cores and a 10 kb one ~130. So
 Every candidate is attributed to the truth record it shares the most cores with, and candidates are
 binned by run length (in nodes) and by the implied bp. No truth is used to build the candidates.
 
-usage: scan_strat.py <graph_v3.bin> <gt.jsonl> [LO=0.1] [MINC=3]
+usage: scan_strat.py <graph_v3.bin> <gt.jsonl> [LO=0.1] [MINC=3] [REP=1.75]
 """
 import collections
 import json
@@ -52,14 +52,31 @@ def main():
     gpath, gt = sys.argv[1], sys.argv[2]
     LO = float(sys.argv[3]) if len(sys.argv) > 3 else 0.1
     MINC = int(sys.argv[4]) if len(sys.argv) > 4 else 3
+    REP = float(sys.argv[5]) if len(sys.argv) > 5 else 1.75
 
     sig, ncov, tcov, src, dst = load_graph(gpath)
     dose = np.where(ncov > 0, tcov.astype(np.float64) / np.maximum(ncov, 1), np.inf)
-    mask = (ncov > 0) & (dose < LO)
-    print(f"graph {gpath}: K={len(sig):,}  LO={LO} MINC={MINC}")
-    print(f"nodes with tumour-depleted coverage: {int(mask.sum()):,} ({mask.mean():.2%})")
+    depleted = (ncov > 0) & (dose < LO)
+    print(f"graph {gpath}: K={len(sig):,}  LO={LO} MINC={MINC} REP={REP}")
 
-    cands = components(mask, src, dst, MINC)
+    # Coverage-derived repeat mask -- the reference-free replacement for the blacklist. A core that
+    # occurs at C places in the genome collects ~C x the depth, in BOTH samples: that is not a tumour
+    # excess, it is copy number, and it is exactly what breaks a deletion's run. Such a core is made
+    # TRANSPARENT: it neither starts a call nor ends one, the run passes straight through it.
+    backbone = float(np.median(ncov[(ncov > 0) & (tcov > 0)]))
+    copies = (ncov.astype(np.float64) + tcov) / (2.0 * backbone)
+    repeat = copies > REP
+    print(f"backbone depth (median ncov of shared nodes): {backbone:.0f}")
+    print(f"repeat nodes (>{REP}x backbone in n+t): {int(repeat.sum()):,} ({repeat.mean():.2%})")
+    print(f"tumour-depleted nodes: {int(depleted.sum()):,} ({depleted.mean():.2%})")
+
+    # a run may traverse repeats, but must be carried by at least MINC genuinely depleted nodes
+    raw = components(depleted | repeat, src, dst, MINC)
+    cands = []
+    for c in raw:
+        d = np.asarray(c)[depleted[np.asarray(c, dtype=np.int64)]]
+        if len(d) >= MINC:
+            cands.append(d)
     print(f"candidates: {len(cands):,}\n")
 
     idx, recs = truth_index(gt)
