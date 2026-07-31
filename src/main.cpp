@@ -1,9 +1,9 @@
 // svp (lcp-cortex): 2-colour LCP-core graph built FROM READS (normal vs tumor HiFi reads).
 // READS ONLY; no assembly, no reference. Two resumable, checkpointed stages so the expensive
 // LCP pass is paid once:
-//   svp graph  <normal.fq.gz> <tumor.fq.gz> <dir>  -> dir/graph.bin    (bloom-count + edge-count: sig + counts)
+//   svp graph  <normal.fastq> <tumor.fastq> <dir>  -> dir/graph.bin    (bloom-count + edge-count: sig + counts)
 //   svp refine <dir>                               -> dir/refined.bin  (topology + counts error-correction)
-//   svp run    <normal.fq.gz> <tumor.fq.gz> <dir>  -> both, skipping completed stages
+//   svp run    <normal.fastq> <tumor.fastq> <dir>  -> both, skipping completed stages
 #include "graph.h"
 
 #include <cstdio>
@@ -21,9 +21,9 @@ static bool exists(const std::string& p) { FILE* f = std::fopen(p.c_str(), "rb")
 static void usage() {
     std::fprintf(stderr,
         "usage:\n"
-        "  svp graph  <normal.fq.gz> <tumor.fq.gz> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
+        "  svp graph  <normal.fastq> <tumor.fastq> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
         "  svp refine <dir>                               (graph.bin -> refined.bin: topology+counts EC)\n"
-        "  svp run    <normal.fq.gz> <tumor.fq.gz> <dir> [all opts]   (graph -> refine; skips completed)\n");
+        "  svp run    <normal.fastq> <tumor.fastq> <dir> [all opts]   (graph -> refine; skips completed)\n");
 }
 
 int main(int argc, char** argv) {

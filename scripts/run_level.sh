@@ -10,7 +10,7 @@ LOG="outputs/svp/l${LEVEL}_run.log"
 {
 echo "[L$LEVEL] $(date '+%H:%M:%S') build start (cache=$([ -n "$NOCACHE" ] && echo off || echo on))"
 env ${NOCACHE:+SVP_NOCACHE=1} taskset -c 0-15 /usr/bin/time -v ./svp graph \
-    simulation/reads/normal/hifi.fastq.gz simulation/reads/hard/hifi.fastq.gz "$GDIR" \
+    simulation/reads/normal/hifi.fastq simulation/reads/hard/hifi.fastq "$GDIR" \
     --level "$LEVEL" --threads 16
 if [ ! -f "$GDIR/graph.bin" ]; then echo "[L$LEVEL] BUILD FAILED"; exit 1; fi
 echo "[L$LEVEL] build done; graph.bin=$(du -h "$GDIR/graph.bin"|cut -f1)"
