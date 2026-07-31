@@ -366,7 +366,8 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
         std::string rc_buf; rc_buf.reserve(1u << 16);
         SigNodeMap ln; EdgeMap le; ln.reserve(1u << 20); le.reserve(1u << 20);
         uint64_t ext = 0, emis = 0;
-        constexpr size_t FLUSH = 1u << 22;
+        const char* fe = std::getenv("SVP_FLUSH");   // test hook: force mid-run merges at smoke scale
+        const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 22);
         auto flush = [&]() {
             std::vector<std::vector<std::pair<uint64_t, std::pair<uint32_t, uint32_t>>>> bn(NSHARD);
             for (const auto& kv : ln) bn[kv.first & (NSHARD - 1)].push_back(kv);
@@ -521,7 +522,8 @@ void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, in
         uint64_t local_ext = 0;
         std::string rc_buf; rc_buf.reserve(1u << 16);
         EdgeMap local; local.reserve(1u << 20);
-        constexpr size_t FLUSH = 1u << 22;                                     // merge local -> shards past ~4M distinct edges
+        const char* fe = std::getenv("SVP_FLUSH");   // test hook: force mid-run merges at smoke scale
+        const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 22);                                     // merge local -> shards past ~4M distinct edges
         auto flush = [&]() {
             std::vector<std::vector<std::pair<SEdge, std::pair<uint32_t, uint32_t>>>> by(NSHARD);
             for (const auto& kv : local) by[EdgeHash{}(kv.first) & (NSHARD - 1)].push_back(kv);
@@ -685,7 +687,8 @@ void edge_count_pool_pa(const std::vector<Shard>& shards, int level, int margin,
         std::string rc_buf; rc_buf.reserve(1u << 16);
         NodeMap lnode; lnode.reserve(1u << 20);
         PairMap ledge; ledge.reserve(1u << 20);
-        constexpr size_t FLUSH = 1u << 22;
+        const char* fe = std::getenv("SVP_FLUSH");   // test hook: force mid-run merges at smoke scale
+        const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 22);
         auto flush = [&]() {
             { std::vector<std::vector<std::pair<SL, std::pair<uint32_t, uint32_t>>>> by(NSHARD);
               for (const auto& kv : lnode) by[SLHash{}(kv.first) & (NSHARD - 1)].push_back(kv);
