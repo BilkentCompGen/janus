@@ -8,6 +8,8 @@ extern "C" {
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 // MurmurHash64A (Austin Appleby, public domain). Node identity = this hash over the core's raw
 // bytes. One definition, used everywhere a core signature is needed (graph build, truth)
@@ -49,8 +51,30 @@ void grow(int n) {
     sc.cap = c;
 }
 
+// Homopolymer-compressed copy of the current sequence + the map back to raw offsets.
+// hs[i] is the i-th run's base; hmap[i] is where that run STARTS in the raw string, and
+// hmap[hn] == len closes the last run, so a compressed span [a,b) is raw [hmap[a], hmap[b]).
+thread_local std::string hs;
+thread_local std::vector<uint32_t> hmap;
+
 bool init_alphabet() { LCP_INIT(); return true; }
 }  // namespace
+
+// Measured on this simulation's reads (scripts/homopolymer_errors.py, 20k reads vs the reference):
+// 91.3% of insertion errors merely lengthen a homopolymer run, deletions are 4.6x enriched in runs
+// of >= 10, and indels outnumber substitutions 38:1. Every one of those errors changes the bytes of
+// the core it falls in, i.e. changes the core's SIGNATURE -- the same locus stops being the same node.
+// Collapsing runs before parsing removes that whole error class: TTTT and TTTTT normalise to T.
+// The cost is homopolymer-LENGTH resolution, which no SV-scale call depends on (no read error here
+// reaches 50 bp, so nothing at SV scale was being carried by run lengths anyway).
+void hpc(const char* s, int len, std::string& out, std::vector<uint32_t>& map) {
+    out.clear(); map.clear();
+    out.reserve((size_t)len); map.reserve((size_t)len + 1);
+    for (int i = 0; i < len; i++) {
+        if (i == 0 || s[i] != s[i - 1]) { out.push_back(s[i]); map.push_back((uint32_t)i); }
+    }
+    map.push_back((uint32_t)len);            // sentinel: closes the final run
+}
 
 extern "C" void extract(const char* str, int len, uint64_t offset, int target_level,
                         int* n_out, const uint64_t** starts_out,
@@ -59,8 +83,16 @@ extern "C" void extract(const char* str, int len, uint64_t offset, int target_le
     *n_out = 0; *starts_out = nullptr; *ends_out = nullptr; *sigs_out = nullptr;
     if (target_level < 1 || len < 3) return;
 
+    // Normalise FIRST: parse and hash the homopolymer-compressed sequence, never the raw one.
+    // Doing it here rather than at each call site is deliberate -- extract() is the single door
+    // every sequence enters through (both graph passes, gt_cores, ref_copynum), so no caller can
+    // forget to normalise and end up with signatures that disagree with everyone else's.
+    hpc(str, len, hs, hmap);
+    const int hn = (int)hs.size();
+    if (hn < 3) return;
+
     struct lps p;
-    init_lps_offset(&p, str, len, offset);
+    init_lps_offset(&p, hs.data(), hn, 0);      // parse in compressed space...
     if (target_level > 1) lps_deepen(&p, target_level);
     const int n = p.size;
     if (n <= 0) { free_lps(&p); return; }
@@ -68,8 +100,11 @@ extern "C" void extract(const char* str, int len, uint64_t offset, int target_le
     grow(n);
     for (int i = 0; i < n; i++) {
         const uint64_t s = p.cores[i].start, e = p.cores[i].end + 1;
-        sc.st[i] = s; sc.en[i] = e;
-        sc.sig[i] = core_sig(str + (s - offset), (int)(e - s));
+        sc.sig[i] = core_sig(hs.data() + s, (int)(e - s));
+        // ...but report RAW coordinates, so every caller's positions, margins and sizes still
+        // mean what they meant before. Only the identity of a core changed, not where it is.
+        sc.st[i] = offset + hmap[s];
+        sc.en[i] = offset + hmap[e];
     }
     free_lps(&p);
     *n_out = n; *starts_out = sc.st; *ends_out = sc.en; *sigs_out = sc.sig;
