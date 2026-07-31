@@ -52,8 +52,8 @@ $(BUILD):
 	mkdir -p $@
 
 # ---------- run target (whole-genome, reads only — assemblies are never a caller input) ----------
-READS_N  ?= simulation/reads/normal/hifi.fastq.gz
-READS_T  ?= simulation/reads/wgs/hifi.fastq.gz
+READS_N  ?= simulation/reads/normal/hifi.fastq
+READS_T  ?= simulation/reads/wgs/hifi.fastq
 MINMULT  ?= 1
 THREADS  ?= 16
 run: svp
@@ -66,7 +66,7 @@ run-list:
 	@echo "              tumor =$(READS_T)"
 	@echo "  overrides: LEVEL=$(LEVEL) MINMULT=$(MINMULT) READS_N=... READS_T=..."
 
-install-deps: install-deps-lcptools install-deps-badread install-deps-rapidgzip
+install-deps: install-deps-lcptools install-deps-badread
 
 # biolcp branch: DNA-optimised lcptools. Its own Makefile installs to /usr/local (needs
 # root) so we build the static archive in-place here. -DLARGE_GENOME must match svp's
@@ -86,15 +86,6 @@ lib/Badread/venv/bin/badread:
 	cd lib/Badread && python3 -m venv venv && ./venv/bin/pip install --quiet --upgrade pip && ./venv/bin/pip install --quiet .
 	@./lib/Badread/venv/bin/badread --version
 
-# rapidgzip: parallel single-stream gzip decoder. The `graph` stage popen's it at runtime
-# (open_decode in graph.cpp; default lib/rapidgzip/venv/bin/rapidgzip, override SVP_RAPIDGZIP).
-# Self-contained venv so the system python is untouched; NOT linked into svp. Lives in the
-# repo (lib/), never /tmp — so it survives reboots and `svp run` from the repo root works.
-install-deps-rapidgzip: lib/rapidgzip/venv/bin/rapidgzip
-lib/rapidgzip/venv/bin/rapidgzip:
-	python3 -m venv lib/rapidgzip/venv && ./lib/rapidgzip/venv/bin/pip install --quiet --upgrade pip && ./lib/rapidgzip/venv/bin/pip install --quiet rapidgzip
-	@./lib/rapidgzip/venv/bin/rapidgzip --version
-
 # clean: build artifacts only (binary + objects). Keeps outputs/ — run results are expensive
 # (a graph.bin is ~18 min) so they are NOT swept by a plain `make clean`.
 clean:
@@ -109,7 +100,7 @@ clean-outputs:
 # clean-all: both of the above (build artifacts + run outputs).
 clean-all: clean clean-outputs
 
-.PHONY: install-deps install-deps-lcptools install-deps-badread install-deps-rapidgzip \
+.PHONY: install-deps install-deps-lcptools install-deps-badread \
         clean clean-outputs clean-all run-list run
 
 -include $(OBJ:.o=.d)

@@ -33,7 +33,7 @@ MODEL=pacbio2021
 LENGTH="15000,4000"
 INPUT=""
 OUTDIR=""
-FORMAT=fastq          # fastq -> one hifi.fastq.gz (default, unchanged); svb -> 2-bit shard.<i>.svb dir
+FORMAT=fastq          # fastq -> one hifi.fastq (default, unchanged); svb -> 2-bit shard.<i>.svb dir
 while [ $# -gt 0 ]; do
   case "$1" in
     -i) INPUT="$2"; shift 2;;
@@ -94,16 +94,16 @@ for i in $(seq 0 $((THREADS-1))); do
   [ -s "$REGIONS" ] || continue
   (
     "$SAMTOOLS" faidx "$INPUT" $(cat "$REGIONS") > "$WORK/shard.$i.fa"
-    # svb: pack Badread's FASTQ straight to a 2-bit shard (no gzip, no FASTQ on disk).
-    # fastq: the original gzip sink. sink chosen by FORMAT.
-    if [ "$FORMAT" = svb ]; then SINK=("$SVB_PACK" "$OUTDIR/shard.$i.svb"); else SINK=(gzip); fi
+    # svb: pack Badread's FASTQ straight to a 2-bit shard (no FASTQ on disk).
+    # fastq: written uncompressed -- svp reads plain FASTQ only. sink chosen by FORMAT.
+    if [ "$FORMAT" = svb ]; then SINK=("$SVB_PACK" "$OUTDIR/shard.$i.svb"); else SINK=(cat); fi
     "$BADREAD" simulate --reference "$WORK/shard.$i.fa" --quantity "${DEPTH}x" \
       --error_model "$MODEL" --qscore_model "$MODEL" \
       --identity "$IDENTITY" --length "$LENGTH" \
       --junk_reads 0 --random_reads 0 --chimeras 0 --glitches 0,0,0 \
       --start_adapter 0,0 --end_adapter 0,0 --seed $((SEED+i)) \
       2> "$WORK/shard.$i.log" | "${SINK[@]}" > "$WORK/shard.$i.out" 2>> "$WORK/shard.$i.log"
-    if [ "$FORMAT" != svb ]; then mv -f "$WORK/shard.$i.out" "$WORK/shard.$i.fastq.gz"; else rm -f "$WORK/shard.$i.out"; fi
+    if [ "$FORMAT" != svb ]; then mv -f "$WORK/shard.$i.out" "$WORK/shard.$i.fastq"; else rm -f "$WORK/shard.$i.out"; fi
     rm -f "$WORK/shard.$i.fa"
   ) &
   pids+=("$!")
@@ -130,11 +130,11 @@ PY
   echo "[badread] wrote $(ls "$OUTDIR"/shard.*.svb | wc -l) svb shards to $OUTDIR ($(du -sh "$OUTDIR" | cut -f1))"
   printf 'reads=%s read_bases=%s coverage=%.2fx shards=%s\n' "$RN" "$RBP" "$(awk "BEGIN{printf \"%.2f\",$RBP/$GLEN}")" "$(ls "$OUTDIR"/shard.*.svb | wc -l)" > "$OUTDIR/svb.done"
 else
-  # concatenate shard fastqs (gzip members concat -> valid gz stream)
-  cat "$WORK"/shard.*.fastq.gz > "$OUTDIR/hifi.fastq.gz.tmp"
-  mv -f "$OUTDIR/hifi.fastq.gz.tmp" "$OUTDIR/hifi.fastq.gz"
-  rm -f "$WORK"/shard.*.fastq.gz "$WORK"/shard.*.regions
-  read -r RN RBP < <(zcat "$OUTDIR/hifi.fastq.gz" | awk 'NR%4==2{n++; t+=length($0)} END{print n, t}')
+  # concatenate shard fastqs -- uncompressed, because svp reads plain FASTQ only
+  cat "$WORK"/shard.*.fastq > "$OUTDIR/hifi.fastq.tmp"
+  mv -f "$OUTDIR/hifi.fastq.tmp" "$OUTDIR/hifi.fastq"
+  rm -f "$WORK"/shard.*.fastq "$WORK"/shard.*.regions
+  read -r RN RBP < <(awk 'NR%4==2{n++; t+=length($0)} END{print n, t}' "$OUTDIR/hifi.fastq")
   echo "[badread] reads=$RN read_bases=$RBP genome=$GLEN coverage=$(awk "BEGIN{printf \"%.2f\",$RBP/$GLEN}")x"
-  echo "[badread] wrote $OUTDIR/hifi.fastq.gz ($(du -h "$OUTDIR/hifi.fastq.gz" | cut -f1))"
+  echo "[badread] wrote $OUTDIR/hifi.fastq ($(du -h "$OUTDIR/hifi.fastq" | cut -f1))"
 fi

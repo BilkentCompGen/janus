@@ -1,5 +1,5 @@
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE 1   // expose popen/pclose + sched_getaffinity under strict -std=c++17
+#define _GNU_SOURCE 1   // expose sched_getaffinity under strict -std=c++17
 #endif
 #include "graph.h"
 #include "btllib/bloom_filter.hpp"   // vendored: plain (atomic, lock-free) BloomFilter
@@ -40,11 +40,10 @@ void atomic_close(FILE* f, const std::string& tmp, const std::string& dst) { std
 // ---- CPU-seconds accounting (for the per-component cost/efficiency breakdown) ----
 // thr_ns(): on-CPU time of the CALLING thread only (advances only while scheduled, so
 // blocked/idle time is excluded -> true CPU-seconds, contention-immune).
-// self_cpu_s()/child_cpu_s(): kernel-accounted user+sys CPU for all in-process threads
-// (SELF) and all reaped child processes i.e. rapidgzip decode (CHILDREN).
+// self_cpu_s(): kernel-accounted user+sys CPU for all in-process threads. With the input read
+// directly there are no child processes left to account for.
 static inline uint64_t thr_ns() { struct timespec ts; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec; }
 static double self_cpu_s()  { struct rusage r; getrusage(RUSAGE_SELF, &r);     return r.ru_utime.tv_sec + r.ru_utime.tv_usec / 1e6 + r.ru_stime.tv_sec + r.ru_stime.tv_usec / 1e6; }
-static double child_cpu_s() { struct rusage r; getrusage(RUSAGE_CHILDREN, &r); return r.ru_utime.tv_sec + r.ru_utime.tv_usec / 1e6 + r.ru_stime.tv_sec + r.ru_stime.tv_usec / 1e6; }
 
 namespace {
 using SEdge = std::pair<uint64_t, uint64_t>;        // signature edge (edges.bin record)
@@ -203,20 +202,29 @@ void process_read_edges(std::string& s, int level, int margin, int col,
     chain(p);
 }
 
+static bool is_gz(const std::string& p) { return p.size() >= 3 && p.compare(p.size() - 3, 3, ".gz") == 0; }
+
 // A sample input is a directory of FASTQ/.svb shards (read in parallel) or a single file.
+// Compressed input is rejected, not decompressed: `.fastq.gz` still contains ".fastq", so without
+// this check it would be fopen'd as plain text and parsed into silent garbage.
 std::vector<std::string> collect_shards(const std::string& path) {
     struct stat st;
     if (stat(path.c_str(), &st) != 0) { std::fprintf(stderr, "[FATAL] no input %s\n", path.c_str()); std::abort(); }
+    if (is_gz(path)) { std::fprintf(stderr, "[FATAL] %s is compressed; svp reads uncompressed FASTQ only -- decompress it first\n", path.c_str()); std::abort(); }
     if (!S_ISDIR(st.st_mode)) return {path};
     std::vector<std::string> v;
+    size_t skipped_gz = 0;
     DIR* d = opendir(path.c_str());
     if (!d) { std::fprintf(stderr, "[FATAL] opendir %s\n", path.c_str()); std::abort(); }
     for (struct dirent* e = readdir(d); e; e = readdir(d)) {
         const std::string n = e->d_name;
-        if (n.find(".fastq") != std::string::npos || n.find(".fq") != std::string::npos || n.find(".svb") != std::string::npos) v.push_back(path + "/" + n);
+        if (n.find(".fastq") == std::string::npos && n.find(".fq") == std::string::npos && n.find(".svb") == std::string::npos) continue;
+        if (is_gz(n)) { skipped_gz++; continue; }
+        v.push_back(path + "/" + n);
     }
     closedir(d);
-    if (v.empty()) { std::fprintf(stderr, "[FATAL] no .fastq/.fq/.svb shards in %s\n", path.c_str()); std::abort(); }
+    if (skipped_gz) std::fprintf(stderr, "[graph] %zu compressed shard(s) in %s ignored (uncompressed FASTQ only)\n", skipped_gz, path.c_str());
+    if (v.empty()) { std::fprintf(stderr, "[FATAL] no uncompressed .fastq/.fq/.svb shards in %s\n", path.c_str()); std::abort(); }
     std::sort(v.begin(), v.end());
     return v;
 }
@@ -224,15 +232,13 @@ std::vector<std::string> collect_shards(const std::string& path) {
 struct Shard { std::string path; int col; };
 struct Batch { std::vector<std::string> seqs; int col; uint32_t shard = 0; uint32_t rid0 = 0; };   // rid0 = global read index (within shard) of seqs[0]
 
-// Parallel single-stream gzip decode via rapidgzip: decodes ONE .gz across dec_p cores,
-// in-process at run time -- NO input preprocessing (zlib gzread is ~120 MB/s/core and pins
-// the reader; rapidgzip is ~1.5 GB/s at ~4 cores on the same file). The reader then reads
-// plain FASTQ bytes from the pipe exactly as it did from gzread. Path overridable via env.
-static FILE* open_decode(const std::string& path, int dec_p) {
-    const char* bin = std::getenv("SVP_RAPIDGZIP"); if (!bin) bin = "lib/rapidgzip/venv/bin/rapidgzip";   // installed by `make install-deps`; override via SVP_RAPIDGZIP
-    const std::string cmd = std::string(bin) + " -P " + std::to_string(dec_p) + " -d -c '" + path + "'";
-    FILE* f = popen(cmd.c_str(), "r");
-    if (!f) { std::fprintf(stderr, "[FATAL] popen rapidgzip %s\n", path.c_str()); std::abort(); }
+// Plain, uncompressed FASTQ. Decompression is not part of this program: measured on this box,
+// gunzipping the 80 GB whole-genome .gz costs ~10 min while an assembler reads the resulting
+// 188 GB plain FASTQ, parses it AND builds its graph in ~5 min. Paying that per run -- twice,
+// once per pass -- bought nothing, so the input contract is uncompressed FASTQ, full stop.
+static FILE* open_fastq(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) { std::fprintf(stderr, "[FATAL] fopen %s (input must be uncompressed FASTQ)\n", path.c_str()); std::abort(); }
     return f;
 }
 
@@ -278,7 +284,7 @@ static bool svb_next(FILE* f, std::string& seq) {
 // Pass 1 records every read's filtered LCP core boundaries (uint16 st + uint16 width, fwd and
 // rc streams) so pass 2 replays them instead of re-running extract (~4.5k core-s, 18.6%
 // of the build). Key = (shard, rid=read index within its shard): deterministic across passes
-// (same .gz -> same rapidgzip bytes -> same parse order), so the out-of-order worker queue is
+// (same file -> same byte order -> same parse order), so the out-of-order worker queue is
 // irrelevant. Per-worker append-only arenas (lock-free); a (shard,rid)->location index is
 // scattered after pass 1. Reads > 65535 bp can't be uint16-encoded -> flagged reext (pass 2
 // falls back to extract for them). ~22.8 GB held pass1->pass2 at ~5.69 G emissions.
@@ -363,8 +369,8 @@ struct ShardCascade {
     }
 };
 
-// Both samples in ONE pool: shards_all (normal+tumor) -> 2 readers decompress in parallel
-// (overlapping the two gzip streams instead of decompressing the samples sequentially),
+// Both samples in ONE pool: shards_all (normal+tumor) -> 2 readers stream in parallel
+// (overlapping the two input streams instead of reading the samples sequentially),
 // feeding workers that route each colour-tagged batch into its own per-shard cascade
 // (casc[0]=normal, casc[1]=tumor). Survivors are merged into one (n,t) record per sig.
 // Affordable now only because the bloom cascades are RAM-bounded -- two exact hashmaps of
@@ -377,10 +383,8 @@ void run_pool_both(const std::vector<Shard>& shards, int level, int margin, int 
     for (int c = 0; c < 2; c++) for (int sh = 0; sh < NSHARD; sh++) casc[c][sh].init(min_mult - 1);
     std::mutex gmtx[2][NSHARD];
     const int nshards = (int)shards.size();
-    const int nrd = nshards;                                       // one pipe-reader per file (cheap; decode is in rapidgzip)
-    const char* dpenv = std::getenv("SVP_DECP");
-    const int dec_p = dpenv ? std::max(1, std::atoi(dpenv)) : std::max(2, (threads / 4) / std::max(1, nshards));  // rapidgzip threads/file (~threads/4 total decode)
-    const int nw  = std::max(1, threads - nrd);   // keep full worker count; rapidgzip decode threads ride pipe backpressure
+    const int nrd = nshards;                                       // one reader per file (cheap: fread + newline scan)
+    const int nw  = std::max(1, threads - nrd);
     if (use_cc) cache.init(nw, nshards);          // pass-2 core-boundary cache (per-worker arenas filled below)
     std::atomic<size_t> next{0}, done{0};
     std::atomic<uint64_t> greads[2]{ {0}, {0} };
@@ -415,7 +419,7 @@ void run_pool_both(const std::vector<Shard>& shards, int level, int margin, int 
         while ((si = next.fetch_add(1)) < shards.size()) {
             col_local = shards[si].col; cur_shard = (uint32_t)si; shard_reads = 0;
             const bool svb = is_svb(shards[si].path);
-            FILE* f = svb ? open_svb(shards[si].path) : open_decode(shards[si].path, dec_p);
+            FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
             if (svb) {
                 while (svb_next(f, svseq)) {
                     shard_reads++; batch.emplace_back(std::move(svseq));
@@ -439,7 +443,7 @@ void run_pool_both(const std::vector<Shard>& shards, int level, int margin, int 
                 }
                 if (start < end && line_no == 1) carry.append(start, end - start);
             }
-            pclose(f);
+            std::fclose(f);
             }
             flush();                                 // never let a batch span shards (keeps rid/col single-shard)
             if (use_cc) cache.reads_per_shard[si] = shard_reads;
@@ -572,11 +576,9 @@ void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, in
     constexpr int NSHARD = 64;
     EdgeMap gmap[NSHARD]; std::mutex gmtx[NSHARD];
     const int nshards = (int)shards.size();
-    const int nrd = nshards;                                       // one pipe-reader per file (decode is in rapidgzip)
-    const char* dpenv = std::getenv("SVP_DECP");
-    const int dec_p = dpenv ? std::max(1, std::atoi(dpenv)) : std::max(2, (threads / 4) / std::max(1, nshards));
+    const int nrd = nshards;                                       // one reader per file
     const char* nwe = std::getenv("SVP_FILL_NW");
-    const int nw  = nwe ? std::max(1, std::atoi(nwe)) : std::max(1, threads - nrd - nrd * dec_p);
+    const int nw  = nwe ? std::max(1, std::atoi(nwe)) : std::max(1, threads - nrd);
     std::atomic<size_t> next{0}, done{0};
     std::atomic<int> readers_left{nrd};
     std::atomic<uint64_t> cpu_rd_ns{0}, cpu_w_ns{0}, cpu_ext_ns{0};
@@ -601,7 +603,7 @@ void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, in
         while ((si = next.fetch_add(1)) < shards.size()) {
             col_local = shards[si].col; cur_shard = (uint32_t)si; shard_reads = 0;
             const bool svb = is_svb(shards[si].path);
-            FILE* f = svb ? open_svb(shards[si].path) : open_decode(shards[si].path, dec_p);
+            FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
             if (svb) {
                 while (svb_next(f, svseq)) {
                     shard_reads++; batch.emplace_back(std::move(svseq));
@@ -625,7 +627,7 @@ void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, in
                 }
                 if (start < end && line_no == 1) carry.append(start, end - start);
             }
-            pclose(f);
+            std::fclose(f);
             }
             flush();                                 // shard boundary: keep batches single-shard
             std::fprintf(stderr, "[edge] shard %zu/%d done (col=%d)\n", (size_t)done.fetch_add(1) + 1, nshards, col_local);
@@ -742,10 +744,8 @@ void edge_count_pool_pa(const std::vector<Shard>& shards, int level, int margin,
     PairMap gedge[NSHARD]; std::mutex gemtx[NSHARD];
     const int nshards = (int)shards.size();
     const int nrd = nshards;
-    const char* dpenv = std::getenv("SVP_DECP");
-    const int dec_p = dpenv ? std::max(1, std::atoi(dpenv)) : std::max(2, (threads / 4) / std::max(1, nshards));
     const char* nwe = std::getenv("SVP_FILL_NW");
-    const int nw  = nwe ? std::max(1, std::atoi(nwe)) : std::max(1, threads - nrd - nrd * dec_p);
+    const int nw  = nwe ? std::max(1, std::atoi(nwe)) : std::max(1, threads - nrd);
     std::atomic<size_t> next{0}, done{0};
     std::atomic<int> readers_left{nrd};
     std::atomic<uint64_t> cpu_rd_ns{0}, cpu_w_ns{0}, cpu_ext_ns{0};
@@ -770,7 +770,7 @@ void edge_count_pool_pa(const std::vector<Shard>& shards, int level, int margin,
         while ((si = next.fetch_add(1)) < shards.size()) {
             col_local = shards[si].col; cur_shard = (uint32_t)si; shard_reads = 0;
             const bool svb = is_svb(shards[si].path);
-            FILE* f = svb ? open_svb(shards[si].path) : open_decode(shards[si].path, dec_p);
+            FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
             if (svb) {
                 while (svb_next(f, svseq)) { shard_reads++; batch.emplace_back(std::move(svseq)); if (batch.size() >= BATCH) flush(); }
                 std::fclose(f);
@@ -790,7 +790,7 @@ void edge_count_pool_pa(const std::vector<Shard>& shards, int level, int margin,
                     }
                     if (start < end && line_no == 1) carry.append(start, end - start);
                 }
-                pclose(f);
+                std::fclose(f);
             }
             flush();
             std::fprintf(stderr, "[edge-pa] shard %zu/%d done (col=%d)\n", (size_t)done.fetch_add(1) + 1, nshards, col_local);
@@ -868,11 +868,11 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     Tic tic("graph");
 
     // ---- per-phase CPU-second + wall accounting. wall via steady_clock; CPU via getrusage
-    // (SELF = all in-process threads incl. readers/workers/main; CHILDREN = reaped rapidgzip
-    // decode). Snapshots taken at each phase boundary; deltas attribute cost to that phase. ----
-    struct Snap { double wall, self, child; };
+    // (SELF = all in-process threads incl. readers/workers/main). Snapshots taken at each phase
+    // boundary; deltas attribute cost to that phase. ----
+    struct Snap { double wall, self; };
     const auto torig = std::chrono::steady_clock::now();
-    auto snap = [&]() -> Snap { return { std::chrono::duration<double>(std::chrono::steady_clock::now() - torig).count(), self_cpu_s(), child_cpu_s() }; };
+    auto snap = [&]() -> Snap { return { std::chrono::duration<double>(std::chrono::steady_clock::now() - torig).count(), self_cpu_s() }; };
     const Snap P0 = snap();
 
     // ---- pass 1: bloom-cascade count BOTH samples in one parallel pool -> survivors with (n,t) ----
@@ -1028,19 +1028,18 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
                  (unsigned long)nr_n, (unsigned long)nr_t, (unsigned long)K, (unsigned long)E, dir.c_str());
 
     // ---- per-component CPU-second + execution-efficiency table -------------------------------
-    // CPU = in-process (Δself, all threads) + decode (Δchild, rapidgzip). wall = phase wall.
+    // CPU = Δself (all in-process threads). wall = phase wall.
     // efficiency = CPU / (ncpu * wall) = fraction of the box's cores the phase actually kept busy
     // (1.0 = every core saturated for the whole phase; <1.0 = idle cores / serial sections).
     cpu_set_t cs; CPU_ZERO(&cs);   // efficiency denominator = cores ACTUALLY allotted (taskset/affinity), not the box's total
     const double ncpu = (sched_getaffinity(0, sizeof(cs), &cs) == 0 && CPU_COUNT(&cs) > 0) ? (double)CPU_COUNT(&cs) : (double)sysconf(_SC_NPROCESSORS_ONLN);
     auto row = [&](const char* name, const Snap& lo, const Snap& hi) {
-        const double wall = hi.wall - lo.wall, inproc = hi.self - lo.self, dec = hi.child - lo.child;
-        const double cpu = inproc + dec;
-        std::fprintf(stderr, "[eff] %-16s wall=%8.1fs  CPU=%9.1f  (in-proc=%8.1f  decode=%7.1f)  eff=%5.1f%%\n",
-                     name, wall, cpu, inproc, dec, 100.0 * cpu / (ncpu * wall + 1e-9));
+        const double wall = hi.wall - lo.wall, cpu = hi.self - lo.self;
+        std::fprintf(stderr, "[eff] %-16s wall=%8.1fs  CPU=%9.1f  eff=%5.1f%%\n",
+                     name, wall, cpu, 100.0 * cpu / (ncpu * wall + 1e-9));
     };
     std::fprintf(stderr, "\n===== graph build CPU-seconds & execution efficiency (ncpu=%.0f) =====\n", ncpu);
-    std::fprintf(stderr, "[eff] %-16s %9s  %9s  %9s %9s  %6s\n", "phase", "wall_s", "CPU_s", "in-proc", "decode", "eff");
+    std::fprintf(stderr, "[eff] %-16s %9s  %9s  %6s\n", "phase", "wall_s", "CPU_s", "eff");
     row("count(pool_both)", P0, P1);
     row("sig+idx",          P1, P2);
     row("edge_count",       P2, P3);
