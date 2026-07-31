@@ -5,12 +5,18 @@
 #include <utility>
 #include <vector>
 
-// SoA LCP extraction over biolcp (src/extract.cpp). Each core's signature is MurmurHash64A over the
-// core's own bytes (no flank), computed once here and returned in sigs_out. end is exclusive.
+// SoA LCP extraction over biolcp (src/extract.cpp). The sequence is homopolymer-compressed first,
+// so a core's signature is MurmurHash64A over its COMPRESSED bytes -- run-length slips, which are
+// what long-read indel errors overwhelmingly are, no longer change a locus's identity. starts/ends
+// are still RAW coordinates (end exclusive), so callers' positions and margins are unaffected.
 extern "C" void extract(const char* str, int len, uint64_t offset, int target_level,
                              int* n_out, const uint64_t** starts_out,
                              const uint64_t** ends_out, const uint64_t** sigs_out);
 uint64_t core_sig(const char* key, int len);
+
+// The normalisation extract() applies. Exposed for callers that need the compressed sequence or the
+// compressed->raw offset map themselves; `map` has out.size()+1 entries, map.back() == len.
+void hpc(const char* s, int len, std::string& out, std::vector<uint32_t>& map);
 
 // One kept core of one parse: its span in the read plus its signature. (Was refidx.h's, kept here now
 // that the reference index is gone -- a read's cores go in as extract() produced them, both strands.)
