@@ -357,14 +357,24 @@ struct PlainBloom {
 struct ShardCascade {
     std::vector<PlainBloom> filt;
     ankerl::unordered_dense::map<uint64_t, uint32_t> surv;
+    // The cascade already knows the multiplicity histogram it is walking, it just never said so.
+    // Each occurrence that lands a signature in filter d is that signature's (d+1)-th sighting, so
+    // hist[d] counts the DISTINCT signatures ever seen at least d+1 times: hist[0] = distinct
+    // signatures in the reads, hist[depth] = survivors. Everything between hist[0] and the survivors
+    // is the read-error tail -- signatures no real locus ever produced. Cost: one increment.
+    uint64_t hist[8] = {0};
+    uint64_t emissions = 0;                                   // total core occurrences fed in
     void init(int depth) { filt.resize(depth); for (auto& f : filt) f.init(BLOOM_BYTES_PER_FILTER); }
     void add(uint64_t s, const uint64_t* h, uint32_t cnt) {   // caller holds the shard lock
+        emissions += cnt;
         auto it = surv.find(s);
         if (it != surv.end()) { it->second += cnt; return; }   // already promoted: skip the filter walk entirely
         for (uint32_t j = 0; j < cnt; j++) {
-            bool promoted = true;
-            for (auto& f : filt) if (!f.contains_insert(h)) { promoted = false; break; }
-            if (promoted) { surv[s] += (cnt - j); break; }     // promoted now: absorb remaining occurrences, stop walking
+            bool promoted = true; size_t d = 0;
+            for (auto& f : filt) { if (!f.contains_insert(h)) { promoted = false; break; } d++; }
+            if (!promoted) { hist[d]++; continue; }            // now seen d+1 times
+            hist[filt.size()]++;
+            surv[s] += (cnt - j); break;                       // promoted now: absorb remaining occurrences, stop walking
         }
     }
 };
@@ -559,6 +569,25 @@ void run_pool_both(const std::vector<Shard>& shards, int level, int margin, int 
     std::sort(out_nodes.begin(), out_nodes.end(), [](const SigCount& a, const SigCount& b){ return a.sig < b.sig; });
     const double merge_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - tm0).count();
     std::fprintf(stderr, "[graph]   bloom cascade (both) -> %zu survive min_mult=%d (merge=%.1fs)\n", out_nodes.size(), min_mult, merge_s);
+
+    // ---- where the signatures went: the multiplicity histogram the cascade walked ----
+    // Read errors are not a small correction here; they are most of what comes off the reads. This
+    // says how much, per colour, instead of leaving it to be inferred from the survivor count.
+    for (int c = 0; c < 2; c++) {
+        uint64_t emis = 0, h[8] = {0}, sv = 0;
+        for (int sh = 0; sh < NSHARD; sh++) {
+            emis += casc[c][sh].emissions; sv += casc[c][sh].surv.size();
+            for (int d = 0; d < 8; d++) h[d] += casc[c][sh].hist[d];
+        }
+        if (!emis) continue;
+        std::fprintf(stderr, "[sigs] %-6s emissions=%.3f G | distinct=%.3f M", c ? "tumor" : "normal",
+                     emis / 1e9, h[0] / 1e6);
+        for (int d = 1; d < min_mult && d < 8; d++)
+            std::fprintf(stderr, " | >=%dx=%.3f M (%.2f%%)", d + 1, h[d] / 1e6, h[0] ? 100.0 * h[d] / h[0] : 0.0);
+        std::fprintf(stderr, " | survivors=%.3f M (%.2f%% of distinct) -> discarded as read error: %.3f M (%.2f%%)\n",
+                     sv / 1e6, h[0] ? 100.0 * sv / h[0] : 0.0,
+                     (h[0] - sv) / 1e6, h[0] ? 100.0 * (h[0] - sv) / h[0] : 0.0);
+    }
 }
 
 struct SCEdge { uint64_t a, b; uint32_t n, t; };   // sig-pair adjacency + per-colour counts (before node-id resolve)
