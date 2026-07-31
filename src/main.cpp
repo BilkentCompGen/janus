@@ -22,6 +22,7 @@ static void usage() {
     std::fprintf(stderr,
         "usage:\n"
         "  svp graph  <normal.fastq> <tumor.fastq> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
+        "  svp graph1 <normal.fastq> <tumor.fastq> <dir> [same opts]  (SINGLE PASS: exact maps, no bloom)\n"
         "  svp refine <dir>                               (graph.bin -> refined.bin: topology+counts EC)\n"
         "  svp run    <normal.fastq> <tumor.fastq> <dir> [all opts]   (graph -> refine; skips completed)\n");
 }
@@ -45,6 +46,7 @@ int main(int argc, char** argv) {
     LCP_INIT();
 
     if (cmd == "graph" && pos.size() == 3) run_graph_reads(pos[0], pos[1], pos[2], level, margin, min_mult, threads);
+    else if (cmd == "graph1" && pos.size() == 3) run_graph_reads_single(pos[0], pos[1], pos[2], level, margin, min_mult, threads);
     else if (cmd == "refine" && pos.size() == 1) run_refine(pos[0]);
     else if (cmd == "run" && pos.size() == 3) {
         const std::string& dir = pos[2];
