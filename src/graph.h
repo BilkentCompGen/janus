@@ -14,6 +14,5 @@
 
 // reads -> bloom-count -> edge-count -> self-contained graph.bin.
 void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir, int level, int margin, int min_mult, int threads);
-void run_graph_reads_single(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir, int level, int margin, int min_mult, int threads);
 // Topology + counts error-correction: dir/graph.bin -> dir/refined.bin (same v3 format) (refinement.cpp).
 void run_refine(const std::string& dir);
