@@ -64,10 +64,13 @@ def main():
     # excess, it is copy number, and it is exactly what breaks a deletion's run. Such a core is made
     # TRANSPARENT: it neither starts a call nor ends one, the run passes straight through it.
     backbone = float(np.median(ncov[(ncov > 0) & (tcov > 0)]))
-    copies = (ncov.astype(np.float64) + tcov) / (2.0 * backbone)
+    # ncov ALONE: a repeat carries C x the depth in the NORMAL too, so copy number is a property of
+    # the normal coverage. Including tcov halves the estimate inside a deletion, which is exactly where
+    # the flag is needed, so a repeat there would never be flagged.
+    copies = ncov.astype(np.float64) / backbone
     repeat = copies > REP
     print(f"backbone depth (median ncov of shared nodes): {backbone:.0f}")
-    print(f"repeat nodes (>{REP}x backbone in n+t): {int(repeat.sum()):,} ({repeat.mean():.2%})")
+    print(f"repeat nodes (>{REP}x backbone in ncov): {int(repeat.sum()):,} ({repeat.mean():.2%})")
     print(f"tumour-depleted nodes: {int(depleted.sum()):,} ({depleted.mean():.2%})")
 
     # a run may traverse repeats, but must be carried by at least MINC genuinely depleted nodes
