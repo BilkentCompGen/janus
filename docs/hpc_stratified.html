@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HPC vs no-HPC — region-stratified DEL detection</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#0f141a;--ink:#e6edf3;--mut:#8b949e;--line:#30363d;--accent:#2dd4bf;--accent2:#58a6ff;--warn:#f0883e;--bad:#f85149}
+  *{box-sizing:border-box} html,body{margin:0;min-height:100%}
+  body{background:var(--bg);color:var(--ink);font:14px/1.55 ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:baseline;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);z-index:5}
+  header h1{font-size:17px;margin:0} header .sub{color:var(--mut);font-size:12.5px}
+  nav{display:flex;gap:4px;padding:8px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap;position:sticky;top:49px;background:var(--bg);z-index:4}
+  nav button{background:transparent;border:1px solid var(--line);color:var(--mut);border-radius:999px;padding:4px 12px;font:inherit;font-size:12.5px;cursor:pointer}
+  nav button.on{background:#12242a;border-color:var(--accent);color:var(--accent)}
+  main{padding:20px;max-width:1280px;margin:0 auto}
+  section{display:none} section.on{display:block}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:18px}
+  .card h2{font-size:14px;margin:0 0 4px} .card .note{color:var(--mut);font-size:12.5px;margin:0 0 12px}
+  .kpi{font-size:25px;font-weight:700;line-height:1.15} .kpi .u{font-size:12.5px;color:var(--mut);font-weight:400}
+  .kpi.good{color:var(--accent)} .kpi.bad{color:var(--warn)}
+  .wrap{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:520px}
+  th,td{border-bottom:1px solid var(--line);padding:5px 9px;text-align:right;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--mut);font-weight:500} tr:hover td{background:#11161d}
+  td.h{color:var(--accent);font-weight:600} td.l{color:var(--warn)}
+  code{font-family:ui-monospace,monospace;background:#0b0f14;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:12px}
+  .lead{color:var(--mut);max-width:78ch;margin:0 0 16px}
+  .lead b{color:var(--ink)}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--mut)}
+  .tag.hpc{border-color:var(--accent);color:var(--accent)} .tag.no{border-color:var(--accent2);color:var(--accent2)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Homopolymer normalisation — region-stratified DEL detection</h1>
+  <span class="sub">svp · <code>hard</code> · 233 truth deletions ≥500 bp · same code, one variable</span>
+  <span class="sub" id="ts" style="margin-left:auto"></span>
+</header>
+<nav>
+  <button data-s="s1" class="on">Signature budget</button>
+  <button data-s="s2">Problem-region map</button>
+  <button data-s="s3">Where the SVs sit</button>
+  <button data-s="s4">Recall by region</button>
+  <button data-s="s5">Precision &amp; volume</button>
+  <button data-s="s6">The 2 lost deletions</button>
+</nav>
+<main>
+
+<section id="s1" class="on">
+  <p class="lead">Both builds parse the same 12.5 M reads into the same <b>3.769 G core emissions</b>. The
+  only difference is whether runs of one base are collapsed before the core is hashed. That single change
+  decides how many of those emissions are <b>real loci</b> and how many are <b>read errors wearing a new
+  signature</b>.</p>
+  <div class="grid">
+    <div class="card"><h2>Distinct signatures off the reads</h2>
+      <div class="kpi bad">853.7 M <span class="u">no-HPC</span></div>
+      <div class="kpi good">98.1 M <span class="u">HPC — 8.7× fewer</span></div></div>
+    <div class="card"><h2>Discarded as read error (mm=3)</h2>
+      <div class="kpi bad">755.9 M <span class="u">88.6% of distinct</span></div>
+      <div class="kpi good">37.8 M <span class="u">38.5% — 20× smaller tail</span></div></div>
+    <div class="card"><h2>Graph size</h2>
+      <div class="kpi">97.8 M / 107.2 M <span class="u">no-HPC nodes / edges</span></div>
+      <div class="kpi good">60.3 M / 61.1 M <span class="u">HPC</span></div></div>
+    <div class="card"><h2>Build wall time (16 threads)</h2>
+      <div class="kpi">8 m 55 s <span class="u">no-HPC</span></div>
+      <div class="kpi good">5 m 25 s <span class="u">HPC</span></div></div>
+  </div>
+  <div class="card"><h2>Where the emissions go</h2>
+    <p class="note">Same 3.769 G core occurrences, split by what the signature turned out to be.</p>
+    <div id="p_budget" style="height:300px"></div></div>
+</section>
+
+<section id="s2">
+  <p class="lead">A “problem region” here is not annotation — it is measured from the FASTA by the parse
+  itself: <b>how many places in CHM13 produce the same core signature</b>. A core seen at C places carries
+  C× the depth in normal and tumour alike, so deleting one copy moves the ratio by 1/C and the dosage test
+  cannot fire. Each build is scored on <b>its own</b> map, because the parse decides what counts as
+  repetitive.</p>
+  <div class="grid">
+    <div class="card"><h2>Reference core signatures by class</h2>
+      <div id="p_refclass" style="height:330px"></div></div>
+    <div class="card"><h2>Share of core <i>occurrences</i></h2>
+      <p class="note">Signatures are mostly unique either way; what matters is how much of the genome's
+      core traffic lands on repeated ones.</p>
+      <div id="p_refocc" style="height:280px"></div></div>
+  </div>
+  <div class="card"><h2>Numbers</h2><div class="wrap"><table id="t_ref"></table></div></div>
+  <div class="card"><h2>Genome in 10 kb bins</h2>
+    <p class="note">Binned by the median copy number of the cores in each bin.</p>
+    <div class="wrap"><table id="t_bins"></table></div></div>
+</section>
+
+<section id="s3">
+  <p class="lead">The 233 truth deletions ≥500 bp, classified by the median copy number of their interior
+  cores. HPC moves two of them out of <code>high(100+)</code> and into <code>unique</code> — the same
+  sequence, judged less repetitive once run lengths stop distinguishing it.</p>
+  <div class="grid">
+    <div class="card"><h2>Truth deletions by region class</h2><div id="p_truth" style="height:320px"></div></div>
+    <div class="card"><h2>Detail</h2><div class="wrap"><table id="t_truth"></table></div></div>
+  </div>
+</section>
+
+<section id="s4">
+  <p class="lead">Recall of the deletions <b>in each class</b>. Read the columns, not the total: the
+  aggregate is just a mixture whose weights are the table in the previous tab. In unique sequence both
+  builds are perfect until the threshold starts cutting; outside it both collapse to zero by X=8. The
+  detector is a <b>unique-sequence instrument by construction</b>, and no amount of threshold tuning
+  changes that.</p>
+  <div class="card"><h2>Recall in unique sequence</h2>
+    <p class="note">The threshold means different things in the two builds: HPC cores are ~28% further
+    apart, so the same deletion yields ~35% fewer nodes. Match by precision, not by X.</p>
+    <div id="p_recall_u" style="height:340px"></div></div>
+  <div class="grid">
+    <div class="card"><h2>no-HPC <span class="tag no">per class</span></h2><div class="wrap"><table id="t_rec_no"></table></div></div>
+    <div class="card"><h2>HPC <span class="tag hpc">per class</span></h2><div class="wrap"><table id="t_rec_hpc"></table></div></div>
+  </div>
+</section>
+
+<section id="s5">
+  <p class="lead">Precision is where HPC pays. At every threshold it is higher, and it gets there with
+  <b>2.5–3.6× fewer calls</b> — the false runs it removes are error signatures that used to survive the
+  multiplicity gate. Note that <b>neither build ever produces a call in a repeat class</b>: a depleted
+  node must have low coverage, and repeats do not.</p>
+  <div class="grid">
+    <div class="card"><h2>Precision vs threshold</h2><div id="p_prec" style="height:330px"></div></div>
+    <div class="card"><h2>Call volume vs threshold</h2><div id="p_vol" style="height:330px"></div></div>
+  </div>
+  <div class="card"><h2>Matched operating points</h2>
+    <p class="note">Aligned on the number of deletions found, so the two builds are doing the same job.</p>
+    <div class="wrap"><table id="t_match"></table></div></div>
+</section>
+
+<section id="s6">
+  <p class="lead">At the very loosest threshold (X=3, precision 1.6–3.3%, ~250 k calls) no-HPC finds
+  <b>225/233</b> and HPC <b>223/233</b>. The two it loses are both marginal in <i>both</i> builds. The
+  cause is not signature merging — measured and refuted — it is geometry: HPC cores are longer in raw bp,
+  a core is only depleted if it lies <b>wholly inside</b> the deletion, and the detector needs
+  <b>≥3 connected</b> depleted nodes.</p>
+  <div class="card"><h2>Per-deletion diagnosis</h2><div class="wrap"><table id="t_lost"></table></div></div>
+  <div class="card"><h2>Copy number at those loci, 10 kb bin</h2>
+    <p class="note">The refutation: if HPC merged repeat copies, copy number would rise. It falls.</p>
+    <div class="wrap"><table id="t_cn"></table></div></div>
+</section>
+
+</main>
+<script>
+const D = {
+  budget: {labels:['kept (real loci)','discarded as read error'],
+           noHPC:[97.779, 755.913], HPC:[60.278, 37.786]},
+  ref: [
+    {cls:'unique',        noSig:84889142, noShare:98.20, noOcc:84889142, noOccShare:91.43,
+                          hSig:58706199, hShare:98.27, hOcc:58706199, hOccShare:92.19},
+    {cls:'low(2-9)',      noSig:1481112,  noShare:1.71,  noOcc:3991875,  noOccShare:4.30,
+                          hSig:984876,   hShare:1.65,  hOcc:2623257,  hOccShare:4.12},
+    {cls:'repeat(10-99)', noSig:65409,    noShare:0.08,  noOcc:1528770,  noOccShare:1.65,
+                          hSig:42991,    hShare:0.07,  hOcc:1008476,  hOccShare:1.58},
+    {cls:'high(100+)',    noSig:6318,     noShare:0.01,  noOcc:2438214,  noOccShare:2.63,
+                          hSig:3990,     hShare:0.01,  hOcc:1338274,  hOccShare:2.10}],
+  bins: [{k:'bins',no:'311,737',h:'311,736'},{k:'unique',no:'91.4%  (2850 Mb)',h:'91.9%  (2864 Mb)'},
+         {k:'low(2-9)',no:'4.2%',h:'4.2%'},{k:'repeat(10-99)',no:'1.8%',h:'2.2%'},
+         {k:'high(100+)',no:'2.6%  (82 Mb)',h:'1.8%  (55 Mb)'}],
+  truth: [{cls:'unique',no:210,noMed:6585,h:212,hMed:6727},
+          {cls:'low(2-9)',no:8,noMed:7399,h:7,hMed:5739},
+          {cls:'repeat(10-99)',no:7,noMed:7024,h:8,hMed:6097},
+          {cls:'high(100+)',no:8,noMed:5637,h:6,hMed:6203}],
+  X: [3,5,6,8,10,12,15,20],
+  recall: {
+    noHPC:{unique:[100.0,100.0,100.0,100.0,98.6,95.7,86.7,73.3], low:[87.5,75.0,62.5,37.5,37.5,25.0,12.5,12.5],
+           rep:[71.4,14.3,14.3,0,0,0,0,0], high:[37.5,0,0,0,0,0,0,0], tot:[96.6,93.1,92.7,91.4,90.1,87.1,78.5,66.5]},
+    HPC:  {unique:[100.0,100.0,100.0,98.1,89.6,81.1,73.6,69.8], low:[85.7,57.1,42.9,28.6,0,0,0,0],
+           rep:[37.5,0,0,0,0,0,0,0], high:[33.3,0,0,0,0,0,0,0], tot:[95.7,92.7,92.3,90.1,81.5,73.8,67.0,63.5]}},
+  prec: {noHPC:[1.6,28.6,58.6,92.8,99.3,99.9,100.0,100.0], HPC:[3.3,76.5,92.4,99.5,100.0,100.0,100.0,100.0]},
+  volX: [3,6,10,15],
+  vol:  {noHPC:[251536,4793,2085,1486], HPC:[69079,1881,1311,974]},
+  match:[{found:'216  (92.7%)',no:'X=6 · 4,793 calls · 58.6%',h:'X=5 · 2,430 calls · 76.5%'},
+         {found:'215  (92.3%)',no:'X=7 · 3,128 calls · 82.5%',h:'X=6 · 1,881 calls · 92.4%'},
+         {found:'211  (90.6%)',no:'X=9 · 2,265 calls · 97.5%',h:'X=7 · 1,648 calls · 98.7%'},
+         {found:'210  (90.1%)',no:'X=10 · 2,085 calls · 99.3%',h:'X=8 · 1,542 calls · 99.5%'},
+         {found:'183 → 190',   no:'X=15 · 1,486 calls · 100.0%',h:'X=10 · 1,311 calls · 100.0%'},
+         {found:'155 → 172',   no:'X=20 · 1,155 calls · 100.0%',h:'X=12 · 1,158 calls · 100.0%'}],
+  lost:[{id:'sv125319',loc:'chr1:122,295,921',len:'887 bp',
+         noCores:22,noDep:'6  (27.3%)',noN:'920  (38×)',hCores:15,hDep:'1  (6.7%)',hN:'1,382  (48×)',why:'1 &lt; 3 — no run can form'},
+        {id:'sv125377',loc:'chrY:45,118,102',len:'5,278 bp',
+         noCores:152,noDep:'5  (3.3%)',noN:'4,321  (180×)',hCores:95,hDep:'4  (4.2%)',hN:'1,326  (46×)',why:'4 nodes, but not 3 connected'}],
+  cn:[{bin:'chr1:122.29–122.30 Mb',no:'5 / 688 / 1,597',h:'5 / 543 / 850',noC:308,hC:211},
+      {bin:'chrY:45.11–45.12 Mb',  no:'464 / 3,110 / 3,635',h:'61 / 1,999 / 2,846',noC:322,hC:192}]
+};
+const C={no:'#58a6ff',h:'#2dd4bf',mut:'#8b949e'};
+const LAY={template:'plotly_dark',paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',
+  font:{color:'#e6edf3',size:12},margin:{l:56,r:14,t:28,b:44},legend:{orientation:'h',y:1.16,x:0}};
+const CFG={displayModeBar:false,responsive:true};
+const tbl=(el,head,rows)=>{document.getElementById(el).innerHTML=
+  '<thead><tr>'+head.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+
+  rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody>';};
+
+Plotly.newPlot('p_budget',[
+  {x:D.budget.noHPC,y:D.budget.labels,name:'no-HPC',type:'bar',orientation:'h',marker:{color:C.no},
+   text:D.budget.noHPC.map(v=>v.toFixed(1)+' M'),textposition:'auto'},
+  {x:D.budget.HPC,y:D.budget.labels,name:'HPC',type:'bar',orientation:'h',marker:{color:C.h},
+   text:D.budget.HPC.map(v=>v.toFixed(1)+' M'),textposition:'auto'}],
+  {...LAY,barmode:'group',xaxis:{title:'distinct signatures (millions, log)',type:'log'},margin:{...LAY.margin,l:170}},CFG);
+
+Plotly.newPlot('p_refclass',[
+  {x:D.ref.map(r=>r.cls),y:D.ref.map(r=>r.noSig),name:'no-HPC',type:'bar',marker:{color:C.no}},
+  {x:D.ref.map(r=>r.cls),y:D.ref.map(r=>r.hSig),name:'HPC',type:'bar',marker:{color:C.h}}],
+  {...LAY,barmode:'group',yaxis:{title:'reference signatures (log)',type:'log'}},CFG);
+
+Plotly.newPlot('p_refocc',[
+  {x:D.ref.map(r=>r.cls),y:D.ref.map(r=>r.noOccShare),name:'no-HPC',type:'bar',marker:{color:C.no}},
+  {x:D.ref.map(r=>r.cls),y:D.ref.map(r=>r.hOccShare),name:'HPC',type:'bar',marker:{color:C.h}}],
+  {...LAY,barmode:'group',yaxis:{title:'% of core occurrences',type:'log'}},CFG);
+
+tbl('t_ref',['class','no-HPC signatures','share','occ share','HPC signatures','share','occ share'],
+  D.ref.map(r=>[r.cls,r.noSig.toLocaleString(),r.noShare+'%',r.noOccShare+'%',
+                r.hSig.toLocaleString(),r.hShare+'%',
+                `<span class="${r.hOccShare<r.noOccShare?'':''}">${r.hOccShare}%</span>`]));
+tbl('t_bins',['','no-HPC','HPC'],D.bins.map(b=>[b.k,b.no,b.h]));
+
+Plotly.newPlot('p_truth',[
+  {x:D.truth.map(r=>r.cls),y:D.truth.map(r=>r.no),name:'no-HPC',type:'bar',marker:{color:C.no}},
+  {x:D.truth.map(r=>r.cls),y:D.truth.map(r=>r.h),name:'HPC',type:'bar',marker:{color:C.h}}],
+  {...LAY,barmode:'group',yaxis:{title:'truth deletions ≥500 bp',type:'log'}},CFG);
+tbl('t_truth',['class','no-HPC n','median size','HPC n','median size'],
+  D.truth.map(r=>[r.cls,r.no,r.noMed.toLocaleString()+' bp',r.h,r.hMed.toLocaleString()+' bp']));
+
+Plotly.newPlot('p_recall_u',[
+  {x:D.X,y:D.recall.noHPC.unique,name:'no-HPC · unique',mode:'lines+markers',line:{color:C.no,width:2}},
+  {x:D.X,y:D.recall.HPC.unique,name:'HPC · unique',mode:'lines+markers',line:{color:C.h,width:2}},
+  {x:D.X,y:D.recall.noHPC.tot,name:'no-HPC · all regions',mode:'lines',line:{color:C.no,width:1,dash:'dot'}},
+  {x:D.X,y:D.recall.HPC.tot,name:'HPC · all regions',mode:'lines',line:{color:C.h,width:1,dash:'dot'}}],
+  {...LAY,xaxis:{title:'min run X (nodes)'},yaxis:{title:'recall %',range:[55,102]}},CFG);
+
+const recRows=b=>D.X.map((x,i)=>[x,D.recall[b].unique[i].toFixed(1)+'%',D.recall[b].low[i].toFixed(1)+'%',
+  D.recall[b].rep[i].toFixed(1)+'%',D.recall[b].high[i].toFixed(1)+'%',
+  `<span class="${''}">${D.recall[b].tot[i].toFixed(1)}%</span>`]);
+tbl('t_rec_no',['X','unique','low(2-9)','repeat(10-99)','high(100+)','TOTAL'],recRows('noHPC'));
+tbl('t_rec_hpc',['X','unique','low(2-9)','repeat(10-99)','high(100+)','TOTAL'],recRows('HPC'));
+
+Plotly.newPlot('p_prec',[
+  {x:D.X,y:D.prec.noHPC,name:'no-HPC',mode:'lines+markers',line:{color:C.no,width:2}},
+  {x:D.X,y:D.prec.HPC,name:'HPC',mode:'lines+markers',line:{color:C.h,width:2}}],
+  {...LAY,xaxis:{title:'min run X (nodes)'},yaxis:{title:'precision %',range:[0,104]}},CFG);
+Plotly.newPlot('p_vol',[
+  {x:D.volX,y:D.vol.noHPC,name:'no-HPC',type:'bar',marker:{color:C.no}},
+  {x:D.volX,y:D.vol.HPC,name:'HPC',type:'bar',marker:{color:C.h}}],
+  {...LAY,barmode:'group',xaxis:{title:'min run X (nodes)'},yaxis:{title:'calls (log)',type:'log'}},CFG);
+tbl('t_match',['deletions found','no-HPC','HPC'],D.match.map(m=>[m.found,m.no,`<span class="">${m.h}</span>`]));
+
+tbl('t_lost',['id','locus','size','no-HPC cores','depleted','median ncov','HPC cores','depleted','median ncov','why HPC misses it'],
+  D.lost.map(l=>[l.id,l.loc,l.len,l.noCores,l.noDep,l.noN,l.hCores,l.hDep,l.hN,l.why]));
+tbl('t_cn',['10 kb bin','no-HPC median / p90 / max','HPC median / p90 / max','no-HPC cores','HPC cores'],
+  D.cn.map(c=>[c.bin,c.no,c.h,c.noC,c.hC]));
+
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('section').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); document.getElementById(b.dataset.s).classList.add('on');
+  window.dispatchEvent(new Event('resize'));});
+document.getElementById('ts').textContent='hard · min_mult=3 · dosage<0.1 · measured 2026-08-02';
+</script>
+</body>
+</html>
