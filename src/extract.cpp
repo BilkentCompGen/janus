@@ -6,7 +6,6 @@ extern "C" {
 #include "encoding.h"
 }
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -67,7 +66,10 @@ bool init_alphabet() { LCP_INIT(); return true; }
 // Collapsing runs before parsing removes that whole error class: TTTT and TTTTT normalise to T.
 // The cost is homopolymer-LENGTH resolution, which no SV-scale call depends on (no read error here
 // reaches 50 bp, so nothing at SV scale was being carried by run lengths anyway).
-void hpc(const char* s, int len, std::string& out, std::vector<uint32_t>& map) {
+// The normalisation extract() applies, one line below: run-length slips -- what long-read indel
+// errors overwhelmingly are -- stop changing a locus identity. `map` has out.size()+1 entries,
+// map.back() == len. File-local: extract() is the only caller.
+static void hpc(const char* s, int len, std::string& out, std::vector<uint32_t>& map) {
     out.clear(); map.clear();
     out.reserve((size_t)len); map.reserve((size_t)len + 1);
     for (int i = 0; i < len; i++) {

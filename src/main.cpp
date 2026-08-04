@@ -1,14 +1,23 @@
-// svp (lcp-cortex): 2-colour LCP-core graph built FROM READS (normal vs tumor HiFi reads).
-// READS ONLY; no assembly, no reference. Two resumable, checkpointed stages so the expensive
-// LCP pass is paid once:
-//   svp graph  <normal.fastq> <tumor.fastq> <dir>  -> dir/graph.bin    (bloom-count + edge-count: sig + counts)
-//   svp refine <dir>                               -> dir/refined.bin  (topology + counts error-correction)
-//   svp run    <normal.fastq> <tumor.fastq> <dir>  -> both, skipping completed stages
+// svp: 2-colour LCP-core graph built FROM READS (normal vs tumour reads), then the somatic material
+// carved out of those reads as junction contigs. READS ONLY -- no assembly, and no reference until
+// the contigs are handed to an aligner, outside this binary.
+//
+//   svp graph     <normal> <tumour> <dir>      reads           -> dir/graph.bin
+//   svp junctions <graph.bin> <reads> <out.fa> graph + reads   -> junction contigs
+//   svp pack      <out.svb>                    FASTQ (stdin)   -> 2-bit .svb
+//   svp dump      <in.svb>                     .svb            -> FASTQ (stdout)
+//   svp refine    <dir>                        graph.bin     -> refined.bin (topology EC)
+//   svp run       <normal> <tumour> <dir>      graph -> refine, each skipped if done
+//
+// `graph` and `junctions` are the two halves of calling; `pack`/`dump` are the read format both of
+// them consume, kept here rather than as separate binaries so there is exactly one thing to build.
 #include "graph.h"
+#include "junctions.h"
+#include "refinement.h"
+#include "svb.h"
 
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <string>
 #include <vector>
 
@@ -21,14 +30,24 @@ static bool exists(const std::string& p) { FILE* f = std::fopen(p.c_str(), "rb")
 static void usage() {
     std::fprintf(stderr,
         "usage:\n"
-        "  svp graph  <normal.fastq> <tumor.fastq> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
-        "  svp refine <dir>                               (graph.bin -> refined.bin: topology+counts EC)\n"
-        "  svp run    <normal.fastq> <tumor.fastq> <dir> [all opts]   (graph -> refine; skips completed)\n");
+        "  svp graph     <normal> <tumour> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
+        "  svp junctions <graph.bin> <reads.fastq> <out.fa> [threads] [pad_cores] [per_chunk] [min_flank] [min_vaf]\n"
+        "  svp pack      <out.svb> < reads.fastq\n"
+        "  svp dump      <in.svb> > reads.fastq\n"
+        "  svp refine    <dir>                                  (graph.bin -> refined.bin)\n"
+        "  svp run       <normal> <tumour> <dir> [graph opts]   (graph -> refine; skips completed)\n");
 }
 
 int main(int argc, char** argv) {
     if (argc < 2) { usage(); return 2; }
     const std::string cmd = argv[1];
+
+    // These take their arguments positionally, with no --flags to strip, so they are dispatched
+    // before the graph option parser runs. junctions needs the LCP alphabet; pack/dump do not.
+    if (cmd == "junctions") { LCP_INIT(); return cmd_junctions(argc - 1, argv + 1); }
+    if (cmd == "pack")      return cmd_pack(argc - 1, argv + 1);
+    if (cmd == "dump")      return cmd_dump(argc - 1, argv + 1);
+
     int level = 5, margin = 10, min_mult = 3, threads = 16;
     std::vector<std::string> pos;
     for (int i = 2; i < argc; i++) {

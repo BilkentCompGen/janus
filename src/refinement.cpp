@@ -1,19 +1,7 @@
-// refinement: topology + counts error-correction over the (already mm-floored) core graph.
-//   graph.bin / refined input  ->  refined.bin  (IDENTICAL v2 format; simplify reads refined.bin)
-//
-// Three passes, all judging a structure by its read count RELATIVE TO LOCAL COVERAGE (never a
-// global gate — that is what over-aggressive mm did, distorting real bubbles):
-//   1. TIP removal          - short dead-end core-chains whose count << the junction they hang off,
-//                             and tiny low-count isolated contigs (pure error islands).
-//   2. LOW-COV side-branches - short side-sprouts whose count is a small fraction of a high-count
-//                             neighbour path (recurrent-error cores clinging to a real path).
-//   3. BUBBLE popping        - the low, error-like arm of a short bubble. CONSERVATIVE: a BALANCED
-//                             bubble is a germline het (keep both); a low TUMOR-ONLY arm above a VAF
-//                             floor is a candidate somatic (keep). Only a clearly imbalanced,
-//                             non-somatic minority arm is popped.
-//
-// Removes nodes + incident edges, compacts ids, rewrites the v2 graph. Iterates tips (removal
-// exposes new tips). Counts are the per-node ncov/tcov already in graph.bin.
+// Topology + counts error-correction: <dir>/graph.bin -> <dir>/refined.bin, same v3 format.
+// What each pass does and why it is wired in: src/refinement.h.
+#include "refinement.h"
+
 #include "graph.h"
 #include "svp.h"
 #include "unordered_dense.h"

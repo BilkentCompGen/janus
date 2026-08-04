@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "$FORMAT" = fastq ] || [ "$FORMAT" = svb ] || { echo "[badread] -f must be fastq|svb" >&2; exit 2; }
-SVB_PACK="$ROOT/tools/svb_pack"
+SVB_PACK="$ROOT/svp pack"
 [ "$FORMAT" != svb ] || [ -x "$SVB_PACK" ] || { echo "[badread] svb_pack missing: $SVB_PACK (run 'bash tools/build_svb.sh')" >&2; exit 2; }
 [ -n "$INPUT" ] && [ -n "$OUTDIR" ] || { echo "[badread] need -i <genome.fa> and -o <out_dir>" >&2; exit 2; }
 [ -f "$INPUT" ] || { echo "[badread] input not found: $INPUT" >&2; exit 2; }
