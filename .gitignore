@@ -11,6 +11,7 @@ build
 /svp
 /svp.*
 /colo829
+/hifi          # 369 GB of .svb read data, not source
 
 # experiment/throwaway analysis (not part of the tracked implementation)
 tools/*

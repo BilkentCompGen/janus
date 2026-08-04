@@ -8,8 +8,13 @@ LDFLAGS  := -Llib/lcptools -llcptools -lm
 LDFLAGS  += $(shell command -v mold >/dev/null 2>&1 && echo -fuse-ld=mold)
 
 BUILD  := build
-SRC    := $(wildcard src/*.cpp)
-OBJ    := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRC))
+
+# src/ holds the calling pipeline and nothing else, and all of it links into ONE binary: `svp`.
+# graph + junctions are the two halves of calling, pack/dump are the read format both consume.
+# src/severus/ is the vendored slice of Severus the contig arm calls into. Investigation tools stay
+# in tools/, python and shell in scripts/ -- neither is part of calling.
+SRC := $(wildcard src/*.cpp)
+OBJ := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRC))
 
 # PGO (profile-guided optimization) — biggest free codegen win for the branch-heavy LCP/count
 # pass. Two-step; force a full object rebuild between steps (make does NOT track flag changes):
@@ -29,8 +34,7 @@ OUT     := outputs/svp
 TRASH   := /home/yuio/trash/svp-clean-$(shell date +%Y%m%d-%H%M%S)
 
 svp: $(OBJ)
-	$(CXX) $(CXXFLAGS) $(INC) -o $@ $^ $(LDFLAGS)
-
+	$(CXX) $(CXXFLAGS) $(INC) -o $@ $^ $(LDFLAGS) -lpthread
 
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INC) -c $< -o $@
@@ -40,8 +44,8 @@ $(BUILD):
 	mkdir -p $@
 
 # ---------- run target (whole-genome, reads only — assemblies are never a caller input) ----------
-READS_N  ?= simulation/reads/normal/hifi.fastq
-READS_T  ?= simulation/reads/wgs/hifi.fastq
+READS_N  ?= simulation/reads/normal/hifi.svb
+READS_T  ?= simulation/reads/wgs/hifi.svb
 MINMULT  ?= 1
 THREADS  ?= 16
 run: svp

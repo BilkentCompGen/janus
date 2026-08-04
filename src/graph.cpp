@@ -3,8 +3,6 @@
 #endif
 #include "graph.h"
 // extract is declared in svp.h (provided by src/extract.cpp over biolcp).
-#include "posmap.h"       // SVP_POSAWARE: reference position map (sig -> loci), consumer
-#include "placement.h"    // SVP_POSAWARE: lookup-based read placement (no DP alignment)
 
 #include <sys/stat.h>
 #include <sys/resource.h>
@@ -13,10 +11,11 @@
 #include <sched.h>
 #include <dirent.h>
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <memory>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -122,59 +121,6 @@ void rc_into(const std::string& s, std::string& rc_buf) {
 struct EdgeHash { uint64_t operator()(const SEdge& e) const { return e.first * 0x9e3779b97f4a7c15ULL + e.second; } };
 using EdgeMap = ankerl::unordered_dense::map<SEdge, std::pair<uint32_t, uint32_t>, EdgeHash>;
 
-// Pass 2: walk each read's surviving cores and COUNT edge traversals per colour. No byte-fill (payload
-// dropped) -- only the sig identifies a node now. An adjacency (prev,cur) is counted once per
-// occurrence, into the caller's per-colour slot (col 0 = normal -> .first, col 1 = tumor -> .second),
-// for every consecutive pair where BOTH cores survived the mm gate (are in idx).
-//
-// Identical parse to pass 1 -- both strands, every kept core -- so the counted adjacencies match the
-// node set.
-// Repeat-run capture (SVP_SPLIT_REPEATS). A read physically threads  A -> X.. -> B  through a collapsed
-// repeat run X. That pairing of the in-flank A to the out-flank B exists ONLY here, in the read: once the
-// graph is built the repeat node has N in-flanks and N out-flanks and which goes with which is gone. So the
-// thread is recorded now, and the X-cut (tools/trace.cpp apply_xcut) splits the run per (in,out) pair later.
-void process_read_edges(std::string& s, int level, int margin, int col,
-                        const ankerl::unordered_dense::map<uint64_t, uint32_t>& idx,
-                        EdgeMap& emap, std::string& rc_buf, uint64_t& cpu_ext,
-                        const uint8_t* is_repeat, std::vector<std::array<uint32_t, 3>>* trip) {
-    for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
-    const uint64_t len = s.size();
-    if (len < (uint64_t)(2 * margin + 4)) return;
-    std::vector<int> keep; std::vector<Span> eff;
-
-    auto chain = [&](const Parse& p) {
-        spans_of(p, keep, eff);
-        uint64_t prev = 0; bool have = false;
-        // repeat-run state: the node id of the last non-repeat core seen (the in-flank), and the run itself
-        uint32_t in_flank = UINT32_MAX, run_mid = UINT32_MAX; bool in_run = false;
-        for (const Span& e : eff) {
-            auto it = idx.find(e.sig);
-            if (it == idx.end()) {                                         // core died at the mm gate -> chain breaks
-                if (in_run && trip) { trip->push_back({run_mid, in_flank, UINT32_MAX}); in_run = false; }
-                have = false; in_flank = UINT32_MAX; continue;
-            }
-            const uint32_t id = it->second;
-            if (have && prev != e.sig) { auto& c = emap[SEdge(prev, e.sig)]; (col == 0 ? c.first : c.second)++; }
-            prev = e.sig; have = true;
-            if (is_repeat) {
-                if (is_repeat[id]) {
-                    if (!in_run) { in_run = true; run_mid = id; }          // run opens; anchor it at its first core
-                } else {
-                    if (in_run) { if (trip) trip->push_back({run_mid, in_flank, id}); in_run = false; }  // A -> X.. -> B
-                    in_flank = id;
-                }
-            }
-        }
-        if (in_run && trip) trip->push_back({run_mid, in_flank, UINT32_MAX});   // read ended inside the run
-    };
-
-    Parse p = parse_strand(s.data(), len, level, margin, keep, cpu_ext);
-    chain(p);
-    rc_into(s, rc_buf);
-    p = parse_strand(rc_buf.data(), len, level, margin, keep, cpu_ext);
-    chain(p);
-}
-
 static bool is_gz(const std::string& p) { return p.size() >= 3 && p.compare(p.size() - 3, 3, ".gz") == 0; }
 
 // A sample input is a directory of FASTQ/.svb shards (read in parallel) or a single file.
@@ -269,9 +215,88 @@ static bool svb_next(FILE* f, std::string& seq) {
 // The exact map reports what was actually seen. A node at ncov=25/tcov=2 came back as tcov=0 before.
 using SigNodeMap = ankerl::unordered_dense::map<uint64_t, std::pair<uint32_t, uint32_t>>;
 
+// ---- SVP_CASCADE: an admission gate in front of the exact maps ------------------------------
+// The paragraph above holds for HiFi and stops holding for ONT. Measured on the COLO829 R10 pair:
+// 96.5% of core emissions are DISTINCT (HiFi: 4.1%), because a 217 bp core survives a 0.6%/base
+// error rate only 27% of the time. At 248.5 Gbp that is 5.02 G emissions -> ~3.8 G distinct sigs,
+// and the two maps at their measured 29.6 and 39.0 bytes per entry want ~295 GB. The box has 157.
+//
+// Every one of those bytes is spent on cores that the mm floor discards at the end. So put a
+// cascade of Bloom filters in front and only let a sig into the exact map once it has been seen
+// min_mult times. Bloom has no false negatives, so nothing real is refused; the false positives it
+// does admit are counted EXACTLY in pass 2 and then dropped by the same exact mm gate as before.
+// The graph that comes out is therefore identical to the single-pass one -- verified on `hard`.
+//
+// This is not the old cascade. That one WAS the counter, which is why it reported a colour's count
+// as 0 when that colour stayed under the floor; here it only decides who gets counted.
+namespace casc {
+
+// A blocked Bloom filter: all k bits of an item live in one 64-byte line, so an insert costs one
+// cache miss instead of k. At 5 G inserts that is the whole difference.
+struct BBloom {
+    uint64_t* w = nullptr;
+    uint64_t nblk = 0;
+    static constexpr int K = 6;                     // 6 x 9 bits of position fits in one mixed word
+    void init(uint64_t bits) {
+        nblk = std::max<uint64_t>(1, bits >> 9);
+        w = (uint64_t*)std::calloc(nblk * 8, 8);
+        if (!w) { std::fprintf(stderr, "[FATAL] cascade: cannot allocate %.2f GB\n", nblk * 64 / 1e9); std::abort(); }
+    }
+    void release() { std::free(w); w = nullptr; nblk = 0; }
+    uint64_t bytes() const { return nblk * 64; }
+    static inline uint64_t mix(uint64_t x) {
+        x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33; return x;
+    }
+    // Sets the item's k bits and reports whether they were ALL already set (i.e. probably seen before).
+    inline bool test_and_set(uint64_t h) {
+        uint64_t* b = w + (((h >> 32) % nblk) << 3);
+        uint64_t g = mix(h);
+        bool all = true;
+        for (int i = 0; i < K; i++) {
+            const unsigned p = (unsigned)(g & 511); g >>= 9;
+            const uint64_t m = 1ull << (p & 63);
+            all &= (__atomic_fetch_or(&b[p >> 6], m, __ATOMIC_RELAXED) & m) != 0;
+        }
+        return all;
+    }
+};
+
+constexpr int NSH = 64;                              // same sig-sharding as the node/edge globals
+using SigSet = ankerl::unordered_dense::set<uint64_t>;
+
+// min_mult-1 filters in series, then the exact set: filter i holds "seen at least i+1 times".
+struct Gate {
+    std::vector<BBloom> bf;
+    SigSet adm[NSH];
+    std::mutex mtx[NSH];
+    // min_mult-2 filters, never fewer than one: admission at min_mult-1 sights, one short of the
+    // floor. That slack is deliberate. Two threads can hit the same sig between one filter's load
+    // and its store and both read it as unseen, which costs that sig a level; with the slack, any
+    // core the exact gate would keep still gets in. Admitting a bit early is free -- pass 2 counts
+    // it exactly and the mm gate throws it out -- whereas admitting late loses a real node.
+    void init(int min_mult, uint64_t bits) {
+        bf.resize(std::max(1, min_mult - 2));
+        for (size_t i = 0; i < bf.size(); i++) bf[i].init(std::max<uint64_t>(1u << 26, bits >> (3 * i)));
+    }
+    void drop_filters() { for (auto& f : bf) f.release(); bf.clear(); }
+    inline bool offer(uint64_t sig) {                // true => this sight admits the sig
+        for (auto& f : bf) if (!f.test_and_set(sig)) return false;
+        return true;
+    }
+    inline bool admitted(uint64_t sig) const { return adm[sig & (NSH - 1)].contains(sig); }
+    uint64_t size() const { uint64_t n = 0; for (int i = 0; i < NSH; i++) n += adm[i].size(); return n; }
+    uint64_t filter_bytes() const { uint64_t n = 0; for (const auto& f : bf) n += f.bytes(); return n; }
+};
+
+}  // namespace casc
+
 // One read -> node counts AND raw consecutive adjacencies, both strands, in a single walk.
+// `gate` non-null => pass 2 of the cascade: only admitted cores are counted, and the chain BREAKS at
+// a non-admitted one rather than bridging over it -- which is exactly what "an edge is kept iff both
+// endpoints survive" does in the single-pass path.
 void process_read_single(std::string& s, int level, int margin, int col,
-                         SigNodeMap& nmap, EdgeMap& emap, std::string& rc_buf, uint64_t& cpu_ext, uint64_t& ncores) {
+                         SigNodeMap& nmap, EdgeMap& emap, std::string& rc_buf, uint64_t& cpu_ext, uint64_t& ncores,
+                         const casc::Gate* gate = nullptr) {
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
@@ -281,6 +306,7 @@ void process_read_single(std::string& s, int level, int margin, int col,
         uint64_t prev = 0; bool have = false;
         ncores += eff.size();
         for (const Span& e : eff) {
+            if (gate && !gate->admitted(e.sig)) { have = false; continue; }
             auto& c = nmap[e.sig]; (col == 0 ? c.first : c.second)++;
             // Every consecutive pair, survivor or not -- the mm gate is applied after the pass.
             if (have && prev != e.sig) { auto& x = emap[SEdge(prev, e.sig)]; (col == 0 ? x.first : x.second)++; }
@@ -294,14 +320,38 @@ void process_read_single(std::string& s, int level, int margin, int col,
     chain(p);
 }
 
+// Cascade pass 1: the same walk with no maps at all -- every core is offered to the filters, and the
+// sights that clear them go into a thread-local set for merging into the gate's shards.
+void process_read_admit(std::string& s, int level, int margin, casc::Gate& g,
+                        casc::SigSet& la, std::string& rc_buf, uint64_t& cpu_ext, uint64_t& ncores) {
+    for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
+    const uint64_t len = s.size();
+    if (len < (uint64_t)(2 * margin + 4)) return;
+    std::vector<int> keep; std::vector<Span> eff;
+    auto chain = [&](const Parse& p) {
+        spans_of(p, keep, eff);
+        ncores += eff.size();
+        for (const Span& e : eff) if (g.offer(e.sig)) la.insert(e.sig);
+    };
+    Parse p = parse_strand(s.data(), len, level, margin, keep, cpu_ext);
+    chain(p);
+    rc_into(s, rc_buf);
+    p = parse_strand(rc_buf.data(), len, level, margin, keep, cpu_ext);
+    chain(p);
+}
+
 struct SCEdge { uint64_t a, b; uint32_t n, t; };   // sig-pair adjacency + per-colour counts (before node-id resolve)
 
 // The single pass itself: readers stream both samples, workers accumulate exact local node/edge maps
 // and periodically merge them into 64 sig-sharded globals. Same reader/worker/queue shape as the
 // bloom pool, so the only variable being changed is what the workers accumulate INTO.
+//
+// `gate` + `admit=true` runs this same machinery as the cascade's pass 1: filters instead of maps,
+// gate->adm as the only output, out_nodes/out_edges left untouched. `gate` + `admit=false` is pass 2.
 void run_pool_single(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
                      std::vector<SigCount>& out_nodes, std::vector<SCEdge>& out_edges,
-                     uint64_t& reads_n, uint64_t& reads_t) {
+                     uint64_t& reads_n, uint64_t& reads_t,
+                     casc::Gate* gate = nullptr, bool admit = false) {
     constexpr int NSHARD = 64;
     SigNodeMap gnode[NSHARD]; EdgeMap gedge[NSHARD];
     std::mutex nmtx[NSHARD], emtx[NSHARD];
@@ -365,9 +415,20 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
     auto worker = [&]() {
         std::string rc_buf; rc_buf.reserve(1u << 16);
         SigNodeMap ln; EdgeMap le; ln.reserve(1u << 20); le.reserve(1u << 20);
+        casc::SigSet la;
         uint64_t ext = 0, emis = 0;
         const char* fe = std::getenv("SVP_FLUSH");   // test hook: force mid-run merges at smoke scale
         const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 22);
+        auto flush_adm = [&]() {
+            std::vector<std::vector<uint64_t>> ba(casc::NSH);
+            for (uint64_t s : la) ba[s & (casc::NSH - 1)].push_back(s);
+            for (int sh = 0; sh < casc::NSH; sh++) {
+                if (ba[sh].empty()) continue;
+                std::lock_guard<std::mutex> lk(gate->mtx[sh]);
+                for (uint64_t s : ba[sh]) gate->adm[sh].insert(s);
+            }
+            la.clear();
+        };
         auto flush = [&]() {
             std::vector<std::vector<std::pair<uint64_t, std::pair<uint32_t, uint32_t>>>> bn(NSHARD);
             for (const auto& kv : ln) bn[kv.first & (NSHARD - 1)].push_back(kv);
@@ -395,10 +456,15 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
                 b = std::move(q.front()); q.pop(); cv_full.notify_one();
             }
             const int c = b.col & 1;
-            for (std::string& s : b.seqs) process_read_single(s, level, margin, c, ln, le, rc_buf, ext, emis);
+            if (admit) {
+                for (std::string& s : b.seqs) process_read_admit(s, level, margin, *gate, la, rc_buf, ext, emis);
+                if (la.size() >= FLUSH) flush_adm();
+                continue;
+            }
+            for (std::string& s : b.seqs) process_read_single(s, level, margin, c, ln, le, rc_buf, ext, emis, gate);
             if (ln.size() >= FLUSH || le.size() >= FLUSH) flush();
         }
-        flush();
+        admit ? flush_adm() : flush();
         emissions += emis;
     };
 
@@ -407,6 +473,15 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
       for (int i = 0; i < nw; i++) th.emplace_back(worker);
       for (auto& t : th) t.join(); }
     reads_n = rn; reads_t = rt;
+
+    if (admit) {
+        const uint64_t na = gate->size();
+        std::fprintf(stderr, "[casc] pass1 emissions=%.3f M -> admitted=%.3f M (%.2f%% of emissions); "
+                             "filters %.2f GB + admit set ~%.2f GB\n",
+                     emissions.load() / 1e6, na / 1e6, emissions.load() ? 100.0 * na / emissions.load() : 0.0,
+                     gate->filter_bytes() / 1e9, na * 21.0 / 1e9);
+        return;
+    }
 
     // ---- the mm gate, applied once, on exact counts ----
     uint64_t distinct = 0, kept = 0;
@@ -442,292 +517,7 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
                  eraw / 1e6, out_edges.size() / 1e6, eraw ? 100.0 * out_edges.size() / eraw : 0.0);
 }
 
-// Single-pass driver. Writes the SAME graph.bin v3 layout, so every downstream stage and script reads
 
-// Pass-2 pool: re-LCP the same shards and COUNT per-colour edge traversals between surviving cores.
-// No byte-fill, no payload -- a node is identified only by its sig now. Each worker accumulates a
-// local (prev,cur)->(n,t) map, periodically merged into 64 sig-sharded global maps (one mutex each);
-// after the join the shards are flattened into `out` (sig-pair edges + counts). Node-id resolution
-// and the on-disk CEdge conversion happen in the caller.
-void edge_count_pool(const std::vector<Shard>& shards, int level, int margin, int threads,
-                     const ankerl::unordered_dense::map<uint64_t, uint32_t>& idx,
-                     std::vector<SCEdge>& out,
-                     const uint8_t* is_repeat = nullptr,
-                     std::vector<std::array<uint32_t, 3>>* all_trip = nullptr, std::mutex* tmtx = nullptr) {
-    constexpr int NSHARD = 64;
-    EdgeMap gmap[NSHARD]; std::mutex gmtx[NSHARD];
-    const int nshards = (int)shards.size();
-    const int nrd = nshards;                                       // one reader per file
-    const char* nwe = std::getenv("SVP_FILL_NW");
-    const int nw  = nwe ? std::max(1, std::atoi(nwe)) : std::max(1, threads - nrd);
-    std::atomic<size_t> next{0}, done{0};
-    std::atomic<int> readers_left{nrd};
-    std::atomic<uint64_t> cpu_rd_ns{0}, cpu_w_ns{0}, cpu_ext_ns{0};
-    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
-    std::queue<Batch> q;
-    constexpr size_t Q_CAP = 256, BATCH = 64;
-    constexpr unsigned BLOCK = 1u << 20;
-    auto reader = [&]() {
-        const uint64_t cpu0 = thr_ns();
-        std::vector<char> buf(BLOCK);
-        std::vector<std::string> batch; batch.reserve(BATCH);
-        std::string carry; int col_local = 0; uint32_t cur_shard = 0; uint64_t shard_reads = 0;
-        auto flush = [&]() {
-            if (batch.empty()) return;
-            const uint32_t r0 = (uint32_t)(shard_reads - batch.size());
-            std::unique_lock<std::mutex> lk(qmtx);
-            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
-            q.push(Batch{std::move(batch), col_local, cur_shard, r0}); cv_empty.notify_one();
-            batch.clear(); batch.reserve(BATCH);
-        };
-        size_t si; std::string svseq;
-        while ((si = next.fetch_add(1)) < shards.size()) {
-            col_local = shards[si].col; cur_shard = (uint32_t)si; shard_reads = 0;
-            const bool svb = is_svb(shards[si].path);
-            FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
-            if (svb) {
-                while (svb_next(f, svseq)) {
-                    shard_reads++; batch.emplace_back(std::move(svseq));
-                    if (batch.size() >= BATCH) flush();
-                }
-                std::fclose(f);
-            } else {
-            int line_no = 0; carry.clear();
-            int got;
-            while ((got = (int)std::fread(buf.data(), 1, BLOCK, f)) > 0) {
-                const char* base = buf.data(); const char* end = base + got; const char* start = base;
-                for (const char* p = base; p < end; p++) if (*p == '\n') {
-                    const size_t n = (size_t)(p - start);
-                    if (line_no == 1) {
-                        if (carry.empty()) batch.emplace_back(start, n);
-                        else { carry.append(start, n); batch.push_back(std::move(carry)); carry.clear(); }
-                        shard_reads++;
-                        if (batch.size() >= BATCH) flush();
-                    } else if (!carry.empty()) carry.clear();
-                    line_no = (line_no + 1) & 3; start = p + 1;
-                }
-                if (start < end && line_no == 1) carry.append(start, end - start);
-            }
-            std::fclose(f);
-            }
-            flush();                                 // shard boundary: keep batches single-shard
-            std::fprintf(stderr, "[edge] shard %zu/%d done (col=%d)\n", (size_t)done.fetch_add(1) + 1, nshards, col_local);
-        }
-        flush();
-        if (readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(qmtx); cv_empty.notify_all(); }
-        cpu_rd_ns += thr_ns() - cpu0;
-    };
-    auto worker = [&]() {
-        const uint64_t wcpu0 = thr_ns();
-        uint64_t local_ext = 0;
-        std::string rc_buf; rc_buf.reserve(1u << 16);
-        EdgeMap local; local.reserve(1u << 20);
-        const char* fe = std::getenv("SVP_FLUSH");   // test hook: force mid-run merges at smoke scale
-        const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 22);                                     // merge local -> shards past ~4M distinct edges
-        auto flush = [&]() {
-            std::vector<std::vector<std::pair<SEdge, std::pair<uint32_t, uint32_t>>>> by(NSHARD);
-            for (const auto& kv : local) by[EdgeHash{}(kv.first) & (NSHARD - 1)].push_back(kv);
-            for (int sh = 0; sh < NSHARD; sh++) {
-                if (by[sh].empty()) continue;
-                std::lock_guard<std::mutex> lk(gmtx[sh]);
-                for (const auto& kv : by[sh]) { auto& c = gmap[sh][kv.first]; c.first += kv.second.first; c.second += kv.second.second; }
-            }
-            local.clear();
-        };
-        std::vector<std::array<uint32_t, 3>> local_trip;
-        while (true) {
-            Batch b;
-            {
-                std::unique_lock<std::mutex> lk(qmtx);
-                cv_empty.wait(lk, [&]{ return !q.empty() || readers_left.load() == 0; });
-                if (q.empty()) break;
-                b = std::move(q.front()); q.pop(); cv_full.notify_one();
-            }
-            const int c = b.col & 1;
-            for (std::string& s : b.seqs) process_read_edges(s, level, margin, c, idx, local, rc_buf, local_ext, is_repeat, is_repeat ? &local_trip : nullptr);
-            if (local.size() >= FLUSH) flush();
-        }
-        flush();
-        if (is_repeat && all_trip && tmtx && !local_trip.empty()) {
-            std::lock_guard<std::mutex> lk(*tmtx);
-            all_trip->insert(all_trip->end(), local_trip.begin(), local_trip.end());
-        }
-        cpu_w_ns += thr_ns() - wcpu0; cpu_ext_ns += local_ext;
-    };
-    std::vector<std::thread> rds, wks;
-    for (int i = 0; i < nrd; i++) rds.emplace_back(reader);
-    for (int i = 0; i < nw;  i++) wks.emplace_back(worker);
-    for (auto& t : rds) t.join();
-    for (auto& t : wks) t.join();
-    size_t tot = 0; for (int sh = 0; sh < NSHARD; sh++) tot += gmap[sh].size();
-    out.clear(); out.reserve(tot);
-    for (int sh = 0; sh < NSHARD; sh++) for (const auto& kv : gmap[sh]) out.push_back({kv.first.first, kv.first.second, kv.second.first, kv.second.second});
-    std::fprintf(stderr, "[edge] pool CPU-sec (on-CPU): reader-parse=%.1f | worker-LCP extract=%.1f | worker-total=%.1f | distinct edges=%zu\n",
-                 cpu_rd_ns.load() / 1e9, cpu_ext_ns.load() / 1e9, cpu_w_ns.load() / 1e9, tot);
-}
-
-// ============================================================================================
-// SVP_POSAWARE: node identity is (sig, locus). Pass 1 (the bloom count above) is UNCHANGED and its
-// survivor sigs are the survival gate. Placement runs ONCE here in pass 2 -- pass 1 never places, so
-// there is no pass1/pass2 placement-consistency requirement; determinism holds within this pass alone.
-// A repeat sig that pass 1 kept is split here into one node per reference copy the reads actually
-// landed on; the read-order edge between two distant-locus nodes is the SV junction.
-// ============================================================================================
-struct SL { uint64_t sig, locus; };
-inline bool operator==(const SL& a, const SL& b) { return a.sig == b.sig && a.locus == b.locus; }
-struct SLHash { uint64_t operator()(const SL& k) const { return k.sig * 0x9e3779b97f4a7c15ULL + k.locus; } };
-struct SLP { SL a, b; };
-inline bool operator==(const SLP& x, const SLP& y) { return x.a == y.a && x.b == y.b; }
-struct SLPHash { uint64_t operator()(const SLP& k) const {
-    uint64_t h = k.a.sig * 0x9e3779b97f4a7c15ULL + k.a.locus;
-    return (h ^ (k.b.sig * 0x100000001b3ULL)) + k.b.locus; } };
-using NodeMap = ankerl::unordered_dense::map<SL, std::pair<uint32_t, uint32_t>, SLHash>;
-using PairMap = ankerl::unordered_dense::map<SLP, std::pair<uint32_t, uint32_t>, SLPHash>;
-struct PANode { uint64_t sig, locus; uint32_t n, t; };
-struct PAEdge { uint64_t sa, la, sb, lb; uint32_t n, t; };
-
-// One read -> place cores against the posmap, count per-(sig,locus) node occurrences and per-colour
-// (sig,locus)->(sig,locus) edge traversals between surviving cores. Same parse as pass 1: both strands,
-// raw cores.
-void process_read_edges_pa(std::string& s, int level, int margin, int col,
-                           const ankerl::unordered_dense::map<uint64_t, uint32_t>& surv,
-                           const posmap::Map& pm, NodeMap& nmap, PairMap& emap,
-                           std::string& rc_buf, uint64_t& cpu_ext) {
-    for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
-    const uint64_t len = s.size();
-    if (len < (uint64_t)(2 * margin + 4)) return;
-    std::vector<int> keep; std::vector<Span> eff; std::vector<uint64_t> locus;
-    auto go = [&](const Parse& p) {
-        spans_of(p, keep, eff);
-        place(eff, pm, locus);
-        bool have = false; SL prev{0, 0};
-        for (size_t i = 0; i < eff.size(); i++) {
-            if (surv.find(eff[i].sig) == surv.end()) { have = false; continue; }   // survival gate (sig cleared mm in pass 1)
-            const SL cur{eff[i].sig, locus[i]};
-            { auto& c = nmap[cur]; (col == 0 ? c.first : c.second)++; }
-            if (have && !(prev == cur)) { auto& c = emap[SLP{prev, cur}]; (col == 0 ? c.first : c.second)++; }
-            prev = cur; have = true;
-        }
-    };
-    Parse p = parse_strand(s.data(), len, level, margin, keep, cpu_ext);
-    go(p);
-    rc_into(s, rc_buf);
-    p = parse_strand(rc_buf.data(), len, level, margin, keep, cpu_ext);
-    go(p);
-}
-
-// Pass-2 pool for posaware: same reader/worker skeleton as edge_count_pool, but each worker accumulates
-// (sig,locus) node counts AND (sig,locus)-pair edge counts, flushed into 64 sharded global maps.
-void edge_count_pool_pa(const std::vector<Shard>& shards, int level, int margin, int threads,
-                        const ankerl::unordered_dense::map<uint64_t, uint32_t>& surv, const posmap::Map& pm,
-                        std::vector<PANode>& out_nodes, std::vector<PAEdge>& out_edges) {
-    constexpr int NSHARD = 64;
-    NodeMap gnode[NSHARD]; std::mutex gnmtx[NSHARD];
-    PairMap gedge[NSHARD]; std::mutex gemtx[NSHARD];
-    const int nshards = (int)shards.size();
-    const int nrd = nshards;
-    const char* nwe = std::getenv("SVP_FILL_NW");
-    const int nw  = nwe ? std::max(1, std::atoi(nwe)) : std::max(1, threads - nrd);
-    std::atomic<size_t> next{0}, done{0};
-    std::atomic<int> readers_left{nrd};
-    std::atomic<uint64_t> cpu_rd_ns{0}, cpu_w_ns{0}, cpu_ext_ns{0};
-    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
-    std::queue<Batch> q;
-    constexpr size_t Q_CAP = 256, BATCH = 64;
-    constexpr unsigned BLOCK = 1u << 20;
-    auto reader = [&]() {
-        const uint64_t cpu0 = thr_ns();
-        std::vector<char> buf(BLOCK);
-        std::vector<std::string> batch; batch.reserve(BATCH);
-        std::string carry; int col_local = 0; uint32_t cur_shard = 0; uint64_t shard_reads = 0;
-        auto flush = [&]() {
-            if (batch.empty()) return;
-            const uint32_t r0 = (uint32_t)(shard_reads - batch.size());
-            std::unique_lock<std::mutex> lk(qmtx);
-            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
-            q.push(Batch{std::move(batch), col_local, cur_shard, r0}); cv_empty.notify_one();
-            batch.clear(); batch.reserve(BATCH);
-        };
-        size_t si; std::string svseq;
-        while ((si = next.fetch_add(1)) < shards.size()) {
-            col_local = shards[si].col; cur_shard = (uint32_t)si; shard_reads = 0;
-            const bool svb = is_svb(shards[si].path);
-            FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
-            if (svb) {
-                while (svb_next(f, svseq)) { shard_reads++; batch.emplace_back(std::move(svseq)); if (batch.size() >= BATCH) flush(); }
-                std::fclose(f);
-            } else {
-                int line_no = 0; carry.clear(); int got;
-                while ((got = (int)std::fread(buf.data(), 1, BLOCK, f)) > 0) {
-                    const char* base = buf.data(); const char* end = base + got; const char* start = base;
-                    for (const char* p = base; p < end; p++) if (*p == '\n') {
-                        const size_t n = (size_t)(p - start);
-                        if (line_no == 1) {
-                            if (carry.empty()) batch.emplace_back(start, n);
-                            else { carry.append(start, n); batch.push_back(std::move(carry)); carry.clear(); }
-                            shard_reads++;
-                            if (batch.size() >= BATCH) flush();
-                        } else if (!carry.empty()) carry.clear();
-                        line_no = (line_no + 1) & 3; start = p + 1;
-                    }
-                    if (start < end && line_no == 1) carry.append(start, end - start);
-                }
-                std::fclose(f);
-            }
-            flush();
-            std::fprintf(stderr, "[edge-pa] shard %zu/%d done (col=%d)\n", (size_t)done.fetch_add(1) + 1, nshards, col_local);
-        }
-        flush();
-        if (readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(qmtx); cv_empty.notify_all(); }
-        cpu_rd_ns += thr_ns() - cpu0;
-    };
-    auto worker = [&]() {
-        const uint64_t wcpu0 = thr_ns();
-        uint64_t local_ext = 0;
-        std::string rc_buf; rc_buf.reserve(1u << 16);
-        NodeMap lnode; lnode.reserve(1u << 20);
-        PairMap ledge; ledge.reserve(1u << 20);
-        const char* fe = std::getenv("SVP_FLUSH");   // test hook: force mid-run merges at smoke scale
-        const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 22);
-        auto flush = [&]() {
-            { std::vector<std::vector<std::pair<SL, std::pair<uint32_t, uint32_t>>>> by(NSHARD);
-              for (const auto& kv : lnode) by[SLHash{}(kv.first) & (NSHARD - 1)].push_back(kv);
-              for (int sh = 0; sh < NSHARD; sh++) { if (by[sh].empty()) continue; std::lock_guard<std::mutex> lk(gnmtx[sh]);
-                  for (const auto& kv : by[sh]) { auto& c = gnode[sh][kv.first]; c.first += kv.second.first; c.second += kv.second.second; } }
-              lnode.clear(); }
-            { std::vector<std::vector<std::pair<SLP, std::pair<uint32_t, uint32_t>>>> by(NSHARD);
-              for (const auto& kv : ledge) by[SLPHash{}(kv.first) & (NSHARD - 1)].push_back(kv);
-              for (int sh = 0; sh < NSHARD; sh++) { if (by[sh].empty()) continue; std::lock_guard<std::mutex> lk(gemtx[sh]);
-                  for (const auto& kv : by[sh]) { auto& c = gedge[sh][kv.first]; c.first += kv.second.first; c.second += kv.second.second; } }
-              ledge.clear(); }
-        };
-        while (true) {
-            Batch b;
-            { std::unique_lock<std::mutex> lk(qmtx);
-              cv_empty.wait(lk, [&]{ return !q.empty() || readers_left.load() == 0; });
-              if (q.empty()) break;
-              b = std::move(q.front()); q.pop(); cv_full.notify_one(); }
-            const int c = b.col & 1;
-            for (std::string& s : b.seqs) process_read_edges_pa(s, level, margin, c, surv, pm, lnode, ledge, rc_buf, local_ext);
-            if (lnode.size() + ledge.size() >= FLUSH) flush();
-        }
-        flush();
-        cpu_w_ns += thr_ns() - wcpu0; cpu_ext_ns += local_ext;
-    };
-    std::vector<std::thread> rds, wks;
-    for (int i = 0; i < nrd; i++) rds.emplace_back(reader);
-    for (int i = 0; i < nw;  i++) wks.emplace_back(worker);
-    for (auto& t : rds) t.join();
-    for (auto& t : wks) t.join();
-    size_t tn = 0, te = 0;
-    for (int sh = 0; sh < NSHARD; sh++) { tn += gnode[sh].size(); te += gedge[sh].size(); }
-    out_nodes.clear(); out_nodes.reserve(tn);
-    out_edges.clear(); out_edges.reserve(te);
-    for (int sh = 0; sh < NSHARD; sh++) for (const auto& kv : gnode[sh]) out_nodes.push_back({kv.first.sig, kv.first.locus, kv.second.first, kv.second.second});
-    for (int sh = 0; sh < NSHARD; sh++) for (const auto& kv : gedge[sh]) out_edges.push_back({kv.first.a.sig, kv.first.a.locus, kv.first.b.sig, kv.first.b.locus, kv.second.first, kv.second.second});
-    std::fprintf(stderr, "[edge-pa] pool CPU-sec: reader=%.1f | worker=%.1f | distinct nodes=%zu edges=%zu\n",
-                 cpu_rd_ns.load() / 1e9, cpu_w_ns.load() / 1e9, tn, te);
-}
 
 }  // namespace
 
@@ -759,22 +549,41 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     const Snap P0 = snap();
 
     // ---- the build: ONE pass over the reads, exact maps, nodes and edges together ----
+    // SVP_CASCADE puts an admission pass in front of it (see casc:: above). Sizing the filter needs
+    // an item count before a single core has been parsed, and the input bytes give it: a FASTQ record
+    // costs 2.04 bytes per base (measured on the ONT pair), each strand emits one core per `stride`
+    // bases, and on a high-error read almost every emission is distinct -- so distinct ~ emissions.
+    // 16 bits each is where a blocked filter's false-positive rate is a few parts in a thousand, and
+    // a false positive costs nothing but an entry that pass 2 counts and the mm gate then discards.
+    // Stride is level-dependent: 97.7 bases at L5, and each level down multiplies emissions by ~2.35
+    // (measured 116.2 / 273.4 / 641.4 M for L5 / L4 / L3 over the same 5.75 Gbp of ONT reads).
+    // SVP_CASCADE_GB caps the filter for a box with less headroom -- a smaller filter only means more
+    // false admissions, never a lost node.
     std::vector<SigCount> nodes; std::vector<SCEdge> sedges; uint64_t nr_n = 0, nr_t = 0;
-    run_pool_single(shards_all, level, margin, threads, min_mult, nodes, sedges, nr_n, nr_t);
+    std::unique_ptr<casc::Gate> gate;
+    if (std::getenv("SVP_CASCADE")) {
+        double bases = 0;
+        for (const auto& s : shards_all) {
+            struct stat st;
+            if (::stat(s.path.c_str(), &st)) continue;
+            bases += st.st_size * (is_svb(s.path) ? 4.0 : 1 / 2.04);   // .svb packs 4 bases a byte
+        }
+        const double stride = 97.7 / std::pow(2.35, 5 - level);
+        uint64_t bits = std::max<uint64_t>(1u << 28, (uint64_t)(16.0 * 2.0 * bases / stride));
+        if (const char* cg = std::getenv("SVP_CASCADE_GB")) bits = std::min(bits, (uint64_t)(std::atof(cg) * 8e9));
+        gate = std::make_unique<casc::Gate>();
+        gate->init(min_mult, bits);
+        std::fprintf(stderr, "[casc] on: %d filter(s), %.2f GB, over %.1f Gbp of reads; admits at >=%d sights (mm=%d)\n",
+                     (int)gate->bf.size(), gate->filter_bytes() / 1e9, bases / 1e9, std::max(1, min_mult - 2) + 1, min_mult);
+        uint64_t d0 = 0, d1 = 0;
+        run_pool_single(shards_all, level, margin, threads, min_mult, nodes, sedges, d0, d1, gate.get(), true);
+        gate->drop_filters();                       // the filters have done their job; pass 2 only reads the set
+    }
+    run_pool_single(shards_all, level, margin, threads, min_mult, nodes, sedges, nr_n, nr_t, gate.get(), false);
     const uint64_t K = nodes.size();
     const Snap P1 = snap();
     tic.mark("pool_both");
     std::fprintf(stderr, "[graph]   survivors=%lu\n", (unsigned long)K);
-
-    // ---- SVP_COUNT_ONLY: dump (sig,n,t) for every observed core and STOP (analysis mode; skips the
-    // memory-heavy fill). counts.bin = u64 K + SigCount[K]. Lets us study what any mm-floor would drop. ----
-    if (std::getenv("SVP_COUNT_ONLY")) {
-        FILE* fc = xopen(dir + "/counts.bin.tmp", "wb");
-        uint64_t Kw = K; wr(fc, &Kw, 8); wr(fc, nodes.data(), K * sizeof(SigCount));
-        atomic_close(fc, dir + "/counts.bin.tmp", dir + "/counts.bin");
-        std::fprintf(stderr, "[graph] COUNT_ONLY: wrote %lu (sig,n,t) -> %s/counts.bin (skipped fill)\n", (unsigned long)K, dir.c_str());
-        return;
-    }
 
     // ---- id map + node sigs (node id = sig-sorted index; the sig IS the stored node identity now,
     // colour is derived from ncov/tcov on demand and no longer materialised) ----
@@ -787,106 +596,6 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     }
     std::vector<SigCount>().swap(nodes);
     const Snap P2 = snap();
-
-    // ---- SVP_POSAWARE: (sig,locus) node model. Place cores against the posmap in pass 2, key nodes by
-    // (sig,locus), write graph.bin (byte-sig identity PRESERVED -> eval_sig/refine stay valid) + a
-    // locus.bin sidecar (u64 K, u64 locus[K]). Wholly separate from the sig-only path below; unset =>
-    // that path runs byte-for-byte as before. `idx` (sig->id, above) is the survival gate. ----
-    if (std::getenv("SVP_POSAWARE")) {
-        const char* pmp = std::getenv("SVP_POSMAP");
-        posmap::Map pm;
-        if (!pm.open(pmp ? pmp : "outputs/svp/refpos_l5_all.bin")) {
-            std::fprintf(stderr, "[FATAL] posaware: cannot open posmap (set SVP_POSMAP)\n"); std::abort();
-        }
-        std::vector<PANode> pn; std::vector<PAEdge> pe;
-        edge_count_pool_pa(shards_all, level, margin, threads, idx, pm, pn, pe);
-        pm.close();
-        std::fprintf(stderr, "[posaware] observed %zu (sig,locus) nodes, %zu (sig,locus) edges\n", pn.size(), pe.size());
-
-        const char* cme = std::getenv("SVP_POSAWARE_COPYMIN");
-        const uint32_t copymin = cme ? (uint32_t)std::atoi(cme) : 1;   // per-copy read floor (default keep all observed)
-        std::sort(pn.begin(), pn.end(), [](const PANode& a, const PANode& b){ return a.sig != b.sig ? a.sig < b.sig : a.locus < b.locus; });
-        std::vector<uint64_t> psig, ploc; std::vector<uint32_t> pncov, ptcov;
-        ankerl::unordered_dense::map<SL, uint32_t, SLHash> nid; nid.reserve(pn.size());
-        for (const PANode& x : pn) {
-            if (x.n + x.t < copymin) continue;
-            nid.emplace(SL{x.sig, x.locus}, (uint32_t)psig.size());
-            psig.push_back(x.sig); ploc.push_back(x.locus); pncov.push_back(x.n); ptcov.push_back(x.t);
-        }
-        std::vector<PANode>().swap(pn);
-        const uint64_t Kp = psig.size();
-        std::vector<CEdge> ce; ce.reserve(pe.size());
-        for (const PAEdge& e : pe) {
-            auto a = nid.find(SL{e.sa, e.la}), b = nid.find(SL{e.sb, e.lb});
-            if (a != nid.end() && b != nid.end() && a->second != b->second) ce.push_back({a->second, b->second, e.n, e.t});
-        }
-        std::vector<PAEdge>().swap(pe);
-        std::sort(ce.begin(), ce.end(), [](const CEdge& x, const CEdge& y){ return x.src != y.src ? x.src < y.src : x.dst < y.dst; });
-
-        const std::string gp = dir + "/graph.bin";
-        FILE* fg = xopen(gp + ".tmp", "wb");
-        uint64_t Kw = Kp; wr(fg, &Kw, 8);
-        wr(fg, psig.data(), Kp * 8); wr(fg, pncov.data(), Kp * 4); wr(fg, ptcov.data(), Kp * 4);
-        uint64_t E = ce.size(); wr(fg, &E, 8); wr(fg, ce.data(), E * sizeof(CEdge));
-        atomic_close(fg, gp + ".tmp", gp);
-        const std::string lp = dir + "/locus.bin";
-        FILE* flx = xopen(lp + ".tmp", "wb");
-        wr(flx, &Kw, 8); wr(flx, ploc.data(), Kp * 8);
-        atomic_close(flx, lp + ".tmp", lp);
-
-        uint64_t nnov = 0, nunr = 0;
-        for (uint64_t i = 0; i < Kp; i++) { if (ploc[i] == posmap::NOVEL) nnov++; else if (ploc[i] == posmap::UNRESOLVED) nunr++; }
-        const double kd = (double)(Kp ? Kp : 1);
-        std::fprintf(stderr, "[posaware] nodes=%lu  placed=%lu (%.1f%%)  novel=%lu (%.1f%%)  unresolved-repeat=%lu (%.1f%%)  copymin=%u  edges=%lu -> %s/graph.bin + locus.bin\n",
-                     (unsigned long)Kp, (unsigned long)(Kp - nnov - nunr), 100.0 * (Kp - nnov - nunr) / kd,
-                     (unsigned long)nnov, 100.0 * nnov / kd, (unsigned long)nunr, 100.0 * nunr / kd,
-                     copymin, (unsigned long)E, dir.c_str());
-        return;
-    }
-
-    // ---- repeat-resolution capture (opt-in SVP_SPLIT_REPEATS) ------------------------------------
-    // A collapsed repeat run keeps its nodes, and the read's in->run->out thread is recorded alongside;
-    // tools/trace.cpp apply_xcut then splits the run into one copy per (in,out) pair, which removes the
-    // tangle WITHOUT removing the sequence. A repeat is flagged by COVERAGE -- a run collapsed from C
-    // loci carries ~C x the single-copy depth -- so no reference list is involved.
-    const bool split_rep = std::getenv("SVP_SPLIT_REPEATS");
-    std::vector<uint8_t> is_repeat;
-    std::vector<std::array<uint32_t, 3>> triples; std::mutex tmtx;
-    if (split_rep) {
-        std::vector<uint32_t> zn, zt;
-        for (uint64_t i = 0; i < K; i++) { if (ncov[i]) zn.push_back(ncov[i]); if (tcov[i]) zt.push_back(tcov[i]); }
-        auto med = [](std::vector<uint32_t>& v) -> uint32_t { if (v.empty()) return 0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
-        const uint32_t dn = med(zn), dt = med(zt);
-        const char* rme = std::getenv("SVP_REPEAT_MULT");
-        const double rmult = rme ? std::atof(rme) : 1.5;        // flag = coverage >= rmult x median single-copy depth
-        const uint32_t tn = (uint32_t)(rmult * dn), tt = (uint32_t)(rmult * dt);
-        is_repeat.assign(K, 0); uint64_t nf = 0;
-        for (uint64_t i = 0; i < K; i++) if ((dn && ncov[i] >= tn) || (dt && tcov[i] >= tt)) { is_repeat[i] = 1; nf++; }
-        std::fprintf(stderr, "[split] candidate-repeat nodes: %lu/%lu (%.2f%%) | single-copy depth n=%u t=%u; flag >= %.2fx -> ncov>=%u or tcov>=%u (SVP_REPEAT_MULT)\n",
-                     (unsigned long)nf, (unsigned long)K, 100.0 * nf / (double)K, dn, dt, rmult, tn, tt);
-    }
-
-    // The edges already came out of the single pass. SVP_SPLIT_REPEATS needs something the pass could
-    // not know yet -- which nodes are repeats, a function of the FINAL counts -- so when it is on, and
-    // only then, the reads are walked a second time purely to record in->run->out threads.
-    if (split_rep) {
-        std::vector<SCEdge> discard;
-        edge_count_pool(shards_all, level, margin, threads, idx, discard, is_repeat.data(), &triples, &tmtx);
-    }
-    const Snap P3 = snap();
-    tic.mark("edge_count");
-    if (split_rep) {
-        ankerl::unordered_dense::map<uint64_t, ankerl::unordered_dense::map<uint64_t, uint32_t>> agg;
-        for (const auto& t : triples) agg[t[0]][((uint64_t)t[1] << 32) | t[2]]++;
-        std::vector<RepTriple> recs;
-        for (const auto& m : agg) for (const auto& p : m.second) recs.push_back({(uint32_t)m.first, (uint32_t)(p.first >> 32), (uint32_t)p.first, p.second});
-        FILE* ft = xopen(dir + "/threads.bin.tmp", "wb");
-        uint64_t nr = recs.size(); wr(ft, &nr, 8); wr(ft, recs.data(), nr * sizeof(RepTriple));
-        atomic_close(ft, dir + "/threads.bin.tmp", dir + "/threads.bin");
-        std::fprintf(stderr, "[split] %lu raw in->run->out threads -> %lu distinct triples over %lu runs -> threads.bin\n",
-                     (unsigned long)triples.size(), (unsigned long)nr, (unsigned long)agg.size());
-        std::vector<std::array<uint32_t, 3>>().swap(triples);
-    }
 
     // ---- resolve sig-pair edges -> node-id CEdge with counts (sig<->id is a bijection => distinct) ----
     std::vector<CEdge> ce; ce.reserve(sedges.size());
@@ -926,8 +635,7 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     std::fprintf(stderr, "[eff] %-16s %9s  %9s  %6s\n", "phase", "wall_s", "CPU_s", "eff");
     row("count(pool_both)", P0, P1);
     row("sig+idx",          P1, P2);
-    row("edge_count",       P2, P3);
-    row("resolve_edges",    P3, P4);
+    row("resolve_edges",    P2, P4);
     row("write",            P4, P5);
     row("TOTAL",            P0, P5);
     std::fprintf(stderr, "=====================================================================\n");
