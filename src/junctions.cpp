@@ -18,6 +18,11 @@
 // A record is named <read>_<n> so that the caller downstream still counts one supporting READ per
 // record, while a read that carries two different junctions cannot inflate either one's support.
 //
+// `drop.sigs` beside the graph -- written by `svp bubbles` -- lists somatic cores to exclude before
+// chunks are built: a core whose bubble has two arms of equal length that agree minimizer-for-
+// minimizer is an SNV or a sub-SV edit, not a junction, and carving it out here means no contig is
+// ever emitted for it. Absent file, no filter.
+//
 // `min_vaf` drops a chunk whose tumour support is too thin a fraction of the local depth. The
 // denominator cannot come from the somatic subgraph -- a somatic core has ncov == 0 by definition, so
 // tcov/(ncov+tcov) is identically 1 -- it comes from the germline cores the chunk hangs off, whose
@@ -27,6 +32,7 @@
 #include "junctions.h"
 
 #include "svp.h"
+#include "unordered_dense.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -58,6 +64,20 @@ uint32_t findp(std::vector<uint32_t>& p, uint32_t x) {
     return x;
 }
 
+// `svp bubbles` output, if that stage has run: the somatic cores it identified as sub-SV edits
+ankerl::unordered_dense::set<uint64_t> load_drop(const std::string& graph) {
+    ankerl::unordered_dense::set<uint64_t> d;
+    const size_t cut = graph.find_last_of('/');
+    const std::string p = (cut == std::string::npos ? std::string(".") : graph.substr(0, cut)) + "/drop.sigs";
+    FILE* f = std::fopen(p.c_str(), "r");
+    if (!f) { std::fprintf(stderr, "[jcontigs] %s yok - bubble filtresi uygulanmiyor\n", p.c_str()); return d; }
+    unsigned long long v;
+    while (std::fscanf(f, "%llu", &v) == 1) d.insert((uint64_t)v);
+    std::fclose(f);
+    std::fprintf(stderr, "[jcontigs] %s: %zu cekirdek atlanacak\n", p.c_str(), d.size());
+    return d;
+}
+
 Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double min_vaf) {
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
     if (std::fread(&K, 8, 1, f) != 1) die("read K");
@@ -71,8 +91,14 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
     if (std::fread(ed.data(), 4, E * 4, f) != E * 4) die("read edges");
     std::fclose(f);
 
+    const auto drop = load_drop(path);
     std::vector<uint8_t> som(K, 0);
-    for (uint64_t i = 0; i < K; i++) som[i] = (nc[i] == 0 && tc[i] > 0);
+    uint64_t ndrop = 0;
+    for (uint64_t i = 0; i < K; i++) {
+        som[i] = (nc[i] == 0 && tc[i] > 0);
+        if (som[i] && drop.contains(sig[i])) { som[i] = 0; ndrop++; }
+    }
+    if (ndrop) std::fprintf(stderr, "[jcontigs] %llu somatik cekirdek SVP_DROP_SIGS ile elendi\n", (unsigned long long)ndrop);
     std::vector<uint32_t> par(K);
     for (uint64_t i = 0; i < K; i++) par[i] = (uint32_t)i;
     for (uint64_t e = 0; e < E; e++) {
