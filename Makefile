@@ -3,7 +3,8 @@ CXX      := g++
 # whole-genome reference). MUST match the flag the static lib is built with (below).
 CXXFLAGS := -std=c++17 -O3 -march=native -flto=auto -DLARGE_GENOME -Wall -Wextra -Wpedantic -MMD
 INC      := -Ilib/lcptools -Isrc
-LDFLAGS  := -Llib/lcptools -llcptools -lm
+# -lhts: `svp call` reads the aligned contig BAM (system htslib, headers in /usr/include/htslib).
+LDFLAGS  := -Llib/lcptools -llcptools -lm -lhts
 # mold linker if installed (faster links); default linker otherwise. -flto link uses CXXFLAGS.
 LDFLAGS  += $(shell command -v mold >/dev/null 2>&1 && echo -fuse-ld=mold)
 

@@ -3,7 +3,9 @@
 // the contigs are handed to an aligner, outside this binary.
 //
 //   svp graph     <normal> <tumour> <dir>      reads           -> dir/graph.bin
+//   svp bubbles   <graph.bin> <normal> <tumour> graph + reads  -> dir/drop.sigs (sub-SV cores)
 //   svp junctions <graph.bin> <reads> <out.fa> graph + reads   -> junction contigs
+//   svp call      <ctg.bam> <out.vcf>          aligned contigs -> breakpoints
 //   svp pack      <out.svb>                    FASTQ (stdin)   -> 2-bit .svb
 //   svp dump      <in.svb>                     .svb            -> FASTQ (stdout)
 //   svp refine    <dir>                        graph.bin     -> refined.bin (topology EC)
@@ -11,6 +13,8 @@
 //
 // `graph` and `junctions` are the two halves of calling; `pack`/`dump` are the read format both of
 // them consume, kept here rather than as separate binaries so there is exactly one thing to build.
+#include "bubbles.h"
+#include "call.h"
 #include "graph.h"
 #include "junctions.h"
 #include "refinement.h"
@@ -32,6 +36,8 @@ static void usage() {
         "usage:\n"
         "  svp graph     <normal> <tumour> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
         "  svp junctions <graph.bin> <reads.fastq> <out.fa> [threads] [pad_cores] [per_chunk] [min_flank] [min_vaf]\n"
+        "  svp bubbles   <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]\n"
+        "  svp call      <ctg.bam> <out.vcf> [min_mapq=10] [min_aln=1000] [min_sv=50] [cluster=50] [min_supp=3]\n"
         "  svp pack      <out.svb> < reads.fastq\n"
         "  svp dump      <in.svb> > reads.fastq\n"
         "  svp refine    <dir>                                  (graph.bin -> refined.bin)\n"
@@ -45,6 +51,8 @@ int main(int argc, char** argv) {
     // These take their arguments positionally, with no --flags to strip, so they are dispatched
     // before the graph option parser runs. junctions needs the LCP alphabet; pack/dump do not.
     if (cmd == "junctions") { LCP_INIT(); return cmd_junctions(argc - 1, argv + 1); }
+    if (cmd == "bubbles")   { LCP_INIT(); return cmd_bubbles(argc - 1, argv + 1); }
+    if (cmd == "call")      return cmd_call(argc - 1, argv + 1);
     if (cmd == "pack")      return cmd_pack(argc - 1, argv + 1);
     if (cmd == "dump")      return cmd_dump(argc - 1, argv + 1);
 
