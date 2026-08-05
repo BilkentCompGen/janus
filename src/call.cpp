@@ -58,24 +58,72 @@ struct Stats {
     uint64_t seg = 0, split = 0, cigar_del = 0, cigar_ins = 0;
 };
 
+double qident(const uint8_t* s, int32_t a, int32_t b, int32_t len) {
+    int m = 0;
+    for (int32_t i = 0; i < len; i++) m += bam_seqi(s, a + i) == bam_seqi(s, b + i);
+    return (double)m / len;
+}
+
+// A short tandem duplication does not reach the aligner as a split: minimap2 writes the second copy
+// as an insertion and the event silently becomes an INS. The copy it duplicates is right there in the
+// contig, on one side or the other of the inserted bases, and those flanking bases are aligned -- so
+// they ARE the reference sequence at that locus. Comparing the two needs no reference of our own.
+// Which side matches says which copy the aligner kept, and that fixes the duplicated interval.
+bool tandem(const bam1_t* b, int32_t qp, int len, hts_pos_t rp, int32_t tid, uint32_t q,
+            std::vector<Jn>& jn) {
+    const uint8_t* sq = bam_get_seq(b);
+    const double aft = qp + 2 * len <= b->core.l_qseq ? qident(sq, qp, qp + len, len) : 0;
+    const double bef = qp - len >= 0 ? qident(sq, qp, qp - len, len) : 0;
+    if (std::max(aft, bef) < 0.85) return false;
+    if (aft >= bef) jn.push_back({tid, tid, rp + 1, rp + 1 + len, -1, 1, q});
+    else            jn.push_back({tid, tid, rp - len + 1, rp + 1, -1, 1, q});
+    return true;
+}
+
+// An inversion shorter than the contig does not split-align either: the aligner walks straight
+// through it and pays for the inverted bases with a dense run of tiny indels. Measured on `hard`, a
+// 194 bp inversion produced the same ~15-operation shred in every contig carrying it, and not one
+// operation of it reached the 50 bp floor. A reference window that shredded is a breakpoint pair
+// whatever the aligner called the pieces; the type is read from the directions like any other.
+void shred(const std::vector<hts_pos_t>& ops, int32_t tid, uint32_t q, int min_sv, int nmin,
+           hts_pos_t win, std::vector<Jn>& jn) {
+    for (size_t i = 0; i < ops.size();) {
+        size_t j = i;
+        while (j + 1 < ops.size() && ops[j + 1] - ops[i] <= win) j++;
+        if ((int)(j - i + 1) >= nmin && ops[j] - ops[i] >= min_sv) {
+            jn.push_back({tid, tid, ops[i], ops[j], 1, 1, q});
+            i = j + 1;
+        } else {
+            i++;
+        }
+    }
+}
+
 // One CIGAR walk: the segment's query offsets and reference end, plus every indel big enough to be
 // an SV on its own. Leading/trailing clips are query positions the aligner did not place, and they
 // are what makes two segments of the same contig orderable.
-void walk(const bam1_t* b, uint32_t q, int min_sv, Seg& s, std::vector<Jn>& jn, std::vector<Ins>& ins) {
+void walk(const bam1_t* b, uint32_t q, int min_sv, Seg& s, std::vector<Jn>& jn, std::vector<Ins>& ins,
+          int nmin, hts_pos_t win) {
     const uint32_t* cg = bam_get_cigar(b);
     hts_pos_t rp = b->core.pos;
-    int32_t lead = 0, qaln = 0, qtot = 0;
+    int32_t lead = 0, qaln = 0, qtot = 0, qp = 0;
+    std::vector<hts_pos_t> small;
     for (uint32_t i = 0; i < b->core.n_cigar; i++) {
         const int op = bam_cigar_op(cg[i]), len = (int)bam_cigar_oplen(cg[i]);
         const int t = bam_cigar_type(op);
         const bool clip = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP);
+        const bool indel = (op == BAM_CDEL || op == BAM_CINS);
         if (op == BAM_CDEL && len >= min_sv) jn.push_back({s.tid, s.tid, rp, rp + len, 1, -1, q});
-        if (op == BAM_CINS && len >= min_sv) ins.push_back({s.tid, rp, len, q});
+        if (op == BAM_CINS && len >= min_sv && !tandem(b, qp, len, rp, s.tid, q, jn))
+            ins.push_back({s.tid, rp, len, q});
+        if (indel && len < min_sv && len >= 2) small.push_back(rp);
         if (clip && qaln == 0) lead += len;
         qtot += (clip || (t & 1)) ? len : 0;
         qaln += (!clip && (t & 1)) ? len : 0;
+        qp += (t & 1) ? len : 0;
         rp += (t & 2) ? len : 0;
     }
+    shred(small, s.tid, q, min_sv, nmin, win, jn);
     s.re = rp;
     s.qs = b->core.flag & BAM_FREVERSE ? qtot - lead - qaln : lead;
     s.qe = s.qs + qaln;
@@ -104,7 +152,7 @@ bool keep(const bam1_t* b, int min_mapq, hts_pos_t min_aln, Stats& st) {
 // Read the BAM once. Coordinate order scatters a contig's alignments, so segments are bucketed per
 // contig name and chained only after the file is done.
 void collect(const char* bam, int min_mapq, hts_pos_t min_aln, int min_sv, std::vector<Jn>& jn,
-             std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st) {
+             std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin, hts_pos_t win) {
     samFile* fp = sam_open(bam, "r");
     if (!fp) die("open bam");
     *hdr = sam_hdr_read(fp);
@@ -119,7 +167,7 @@ void collect(const char* bam, int min_mapq, hts_pos_t min_aln, int min_sv, std::
         if (it == qid.end()) { it = qid.emplace(nm, (uint32_t)byq.size()).first; byq.emplace_back(); }
         Seg s{it->second, b->core.tid, b->core.pos, 0, 0, 0, (uint8_t)((b->core.flag & BAM_FREVERSE) != 0)};
         const size_t before = jn.size();
-        walk(b, it->second, min_sv, s, jn, ins);
+        walk(b, it->second, min_sv, s, jn, ins, nmin, win);
         st.cigar_del += jn.size() - before;
         byq[it->second].push_back(s);
         st.seg++;
@@ -232,7 +280,7 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
 int cmd_call(int argc, char** argv) {
     if (argc < 3) {
         std::fprintf(stderr, "usage: svp call <ctg.bam> <out.vcf> [min_mapq=10] [min_aln=1000] "
-                             "[min_sv=50] [cluster=50] [min_supp=3]\n");
+                             "[min_sv=50] [cluster=50] [min_supp=3] [shred_n=6] [shred_win=300]\n");
         return 2;
     }
     const int min_mapq = argc > 3 ? std::atoi(argv[3]) : 10;
@@ -240,9 +288,11 @@ int cmd_call(int argc, char** argv) {
     const int min_sv = argc > 5 ? std::atoi(argv[5]) : 50;
     const hts_pos_t tol = argc > 6 ? std::atoll(argv[6]) : 50;
     const uint32_t min_supp = argc > 7 ? (uint32_t)std::atoi(argv[7]) : 3;
+    const int shred_n = argc > 8 ? std::atoi(argv[8]) : 6;
+    const hts_pos_t shred_win = argc > 9 ? std::atoll(argv[9]) : 300;
 
     std::vector<Jn> jn; std::vector<Ins> ins; sam_hdr_t* hdr = nullptr; Stats st;
-    collect(argv[1], min_mapq, min_aln, min_sv, jn, ins, &hdr, st);
+    collect(argv[1], min_mapq, min_aln, min_sv, jn, ins, &hdr, st, shred_n, shred_win);
     // A same-contig junction shorter than the SV floor is a local alignment artefact, not an event.
     jn.erase(std::remove_if(jn.begin(), jn.end(), [&](const Jn& j) {
         return j.c1 == j.c2 && j.p2 - j.p1 < min_sv; }), jn.end());
