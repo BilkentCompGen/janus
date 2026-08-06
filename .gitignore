@@ -11,7 +11,11 @@ build
 /svp
 /svp.*
 /colo829
-/hifi          # 369 GB of .svb read data, not source
+# Real HiFi pairs: 445 GB of reads, graphs and the CASTLE archive. The shell that fetches and runs
+# them IS source, so it stays. (A trailing comment on the pattern line does not work -- git reads it
+# as part of the pattern, which is why this directory was untracked rather than ignored.)
+/hifi/*
+!/hifi/*.sh
 
 # experiment/throwaway analysis (not part of the tracked implementation)
 tools/*
