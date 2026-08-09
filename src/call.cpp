@@ -54,7 +54,7 @@ struct Jn {
 struct Ins { int32_t c; hts_pos_t p; int32_t len; uint32_t q; };
 
 struct Stats {
-    uint64_t rec = 0, unmapped = 0, secondary = 0, lowq = 0, shortaln = 0;
+    uint64_t rec = 0, unmapped = 0, secondary = 0, lowq = 0, shortaln = 0, highmm = 0, germ = 0;
     uint64_t seg = 0, split = 0, cigar_del = 0, cigar_ins = 0;
 };
 
@@ -140,19 +140,100 @@ Jn chain(const Seg& a, const Seg& b) {
     return j;
 }
 
-bool keep(const bam1_t* b, int min_mapq, hts_pos_t min_aln, Stats& st) {
+// An alignment carrying far more mismatch than the reads can contain is not this locus. Measured on
+// hcc1954 real HiFi (read error 0.018%): the alignments that carry a TRUE call sit at 0.08% mismatch
+// across their germline anchors, the ones that carry a FALSE call at 8.35%, and 89% of the false ones
+// are above 1%. The cause is that 47% of those contigs have no match anywhere in hg38 better than 2%
+// -- the copy they came from is missing from the reference or is one of a dozen -- and MAPQ cannot
+// warn about it, because with a single candidate the aligner is confident and simply wrong.
+// SUBSTITUTIONS only. NM counts inserted and deleted bases as well, so using it raw would score a
+// contig that carries a real 400 bp deletion at 8% and throw away exactly the events we are looking
+// for -- measured: it took the simulation from 542/600 junctions to 310. Subtracting the indel bases
+// leaves the quantity that actually says "this is not the locus I came from".
+double mm_rate(const bam1_t* b) {
+    const uint8_t* nm = bam_aux_get(b, "NM");
+    if (!nm) return 0;
+    const uint32_t* cg = bam_get_cigar(b);
+    int64_t aln = 0, indel = 0;
+    for (uint32_t i = 0; i < b->core.n_cigar; i++) {
+        const int op = bam_cigar_op(cg[i]), len = (int)bam_cigar_oplen(cg[i]);
+        if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) aln += len;
+        else if (op == BAM_CINS || op == BAM_CDEL) indel += len;
+    }
+    const int64_t sub = (int64_t)bam_aux2i(nm) - indel;
+    return aln > 0 && sub > 0 ? (double)sub / (double)aln : 0;
+}
+
+bool keep(const bam1_t* b, int min_mapq, hts_pos_t min_aln, double max_mm, Stats& st) {
     st.rec++;
     if (b->core.flag & (BAM_FUNMAP | BAM_FQCFAIL | BAM_FDUP)) { st.unmapped++; return false; }
     if (b->core.flag & BAM_FSECONDARY) { st.secondary++; return false; }
     if (b->core.qual < min_mapq) { st.lowq++; return false; }
     if (bam_endpos(b) - b->core.pos < min_aln) { st.shortaln++; return false; }
+    if (max_mm > 0 && mm_rate(b) > max_mm) { st.highmm++; return false; }
     return true;
+}
+
+// ---- the normal, read at the reference locus ----
+//
+// The graph decides somatic BEFORE alignment, by exact core sequence, and in a repeat that is not the
+// same question as somatic. Measured on hcc1954: of the calls this caller gets wrong in the 50-1000 bp
+// band, 93.1% have an indel of the same size sitting in the NORMAL reads at the same locus (against
+// 2.9% of the calls it gets right, size-matched), at a normal allele fraction of 0.75. They are
+// germline. The tumour and normal reads simply do not spell that locus with the same 217 bp core --
+// different stutter, a different paralogous copy sampled -- so ncov == 0 is true of the STRING while
+// the VARIANT is shared. Nothing before alignment can see that; this can.
+struct Normal {
+    samFile* fp = nullptr;
+    hts_idx_t* idx = nullptr;
+    sam_hdr_t* hdr = nullptr;
+    bam1_t* b = nullptr;
+    bool on() const { return fp != nullptr; }
+};
+
+Normal open_normal(const char* path) {
+    Normal n;
+    if (!path || !std::strcmp(path, "-")) return n;
+    n.fp = sam_open(path, "r");
+    if (!n.fp) die("open normal bam");
+    n.hdr = sam_hdr_read(n.fp);
+    n.idx = sam_index_load(n.fp, path);
+    if (!n.hdr || !n.idx) die("normal bam needs an index");
+    n.b = bam_init1();
+    return n;
+}
+
+// Same event in the normal, or a locus the normal cannot place either: both mean not somatic.
+bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_pos_t win) {
+    if (!n.on()) return false;
+    const int tid = sam_hdr_name2tid(n.hdr, chrom);
+    if (tid < 0) return false;
+    hts_itr_t* it = sam_itr_queryi(n.idx, tid, (int)std::max<hts_pos_t>(0, pos - win), (int)(pos + win));
+    if (!it) return false;
+    int seen = 0, dirty = 0; bool same = false;
+    while (sam_itr_next(n.fp, it, n.b) >= 0) {
+        if (n.b->core.flag & (BAM_FUNMAP | BAM_FSECONDARY)) continue;
+        if (n.b->core.qual < 10) continue;
+        seen++;
+        dirty += mm_rate(n.b) > 0.02;
+        const uint32_t* cg = bam_get_cigar(n.b);
+        hts_pos_t rp = n.b->core.pos;
+        for (uint32_t i = 0; i < n.b->core.n_cigar && !same; i++) {
+            const int op = bam_cigar_op(cg[i]); const hts_pos_t L = bam_cigar_oplen(cg[i]);
+            if ((op == BAM_CINS || op == BAM_CDEL) && len > 0 &&
+                L * 2 >= len && L <= len * 2 && std::llabs(rp - pos) <= win) same = true;
+            if (op == BAM_CMATCH || op == BAM_CDEL || op == BAM_CREF_SKIP ||
+                op == BAM_CEQUAL || op == BAM_CDIFF) rp += L;
+        }
+    }
+    hts_itr_destroy(it);
+    return same || (seen >= 4 && dirty * 2 >= seen);
 }
 
 // Read the BAM once. Coordinate order scatters a contig's alignments, so segments are bucketed per
 // contig name and chained only after the file is done.
 void collect(const char* bam, int min_mapq, hts_pos_t min_aln, int min_sv, std::vector<Jn>& jn,
-             std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin, hts_pos_t win) {
+             std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin, hts_pos_t win, double max_mm) {
     samFile* fp = sam_open(bam, "r");
     if (!fp) die("open bam");
     *hdr = sam_hdr_read(fp);
@@ -161,7 +242,7 @@ void collect(const char* bam, int min_mapq, hts_pos_t min_aln, int min_sv, std::
     ankerl::unordered_dense::map<std::string, uint32_t> qid;
     std::vector<std::vector<Seg>> byq;
     while (sam_read1(fp, *hdr, b) >= 0) {
-        if (!keep(b, min_mapq, min_aln, st)) continue;
+        if (!keep(b, min_mapq, min_aln, max_mm, st)) continue;
         const char* nm = bam_get_qname(b);
         auto it = qid.find(nm);
         if (it == qid.end()) { it = qid.emplace(nm, (uint32_t)byq.size()).first; byq.emplace_back(); }
@@ -278,36 +359,52 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
 }  // namespace
 
 int cmd_call(int argc, char** argv) {
-    if (argc < 3) {
-        std::fprintf(stderr, "usage: svp call <ctg.bam> <out.vcf> [min_mapq=10] [min_aln=1000] "
-                             "[min_sv=50] [cluster=50] [min_supp=3] [shred_n=6] [shred_win=300]\n");
+    if (argc < 4) {
+        std::fprintf(stderr, "usage: svp call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=1000] "
+                             "[min_sv=50] [cluster=50] [min_supp=3] [shred_n=6] [shred_win=300] [max_mm=0.01]\n");
         return 2;
     }
-    const int min_mapq = argc > 3 ? std::atoi(argv[3]) : 10;
-    const hts_pos_t min_aln = argc > 4 ? std::atoll(argv[4]) : 1000;
-    const int min_sv = argc > 5 ? std::atoi(argv[5]) : 50;
-    const hts_pos_t tol = argc > 6 ? std::atoll(argv[6]) : 50;
-    const uint32_t min_supp = argc > 7 ? (uint32_t)std::atoi(argv[7]) : 3;
-    const int shred_n = argc > 8 ? std::atoi(argv[8]) : 6;
-    const hts_pos_t shred_win = argc > 9 ? std::atoll(argv[9]) : 300;
+    const int min_mapq   = argc >  4 ? std::atoi(argv[4])  : 10;
+    const hts_pos_t min_aln = argc > 5 ? std::atoll(argv[5]) : 1000;
+    const int min_sv     = argc >  6 ? std::atoi(argv[6])  : 50;
+    const hts_pos_t tol  = argc >  7 ? std::atoll(argv[7]) : 50;
+    const uint32_t min_supp = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 3;
+    const int shred_n    = argc >  9 ? std::atoi(argv[9])  : 6;
+    const hts_pos_t shred_win = argc > 10 ? std::atoll(argv[10]) : 300;
+    const double max_mm  = argc > 11 ? std::atof(argv[11]) : 0.01;
 
     std::vector<Jn> jn; std::vector<Ins> ins; sam_hdr_t* hdr = nullptr; Stats st;
-    collect(argv[1], min_mapq, min_aln, min_sv, jn, ins, &hdr, st, shred_n, shred_win);
+    collect(argv[1], min_mapq, min_aln, min_sv, jn, ins, &hdr, st, shred_n, shred_win, max_mm);
     // A same-contig junction shorter than the SV floor is a local alignment artefact, not an event.
     jn.erase(std::remove_if(jn.begin(), jn.end(), [&](const Jn& j) {
         return j.c1 == j.c2 && j.p2 - j.p1 < min_sv; }), jn.end());
-    const std::vector<Cl> cl = cluster(jn, tol, min_supp);
-    const std::vector<ClIns> ci = cluster_ins(ins, tol, min_supp);
-    write_vcf(argv[2], hdr, cl, ci);
+    std::vector<Cl> cl = cluster(jn, tol, min_supp);
+    std::vector<ClIns> ci = cluster_ins(ins, tol, min_supp);
 
-    std::fprintf(stderr, "[call] kayit %llu | atlanan: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu\n",
+    // The normal, at the reference locus: the one question the graph could not ask.
+    Normal nrm = open_normal(argv[2]);
+    if (nrm.on()) {
+        const size_t before_j = cl.size(), before_i = ci.size();
+        cl.erase(std::remove_if(cl.begin(), cl.end(), [&](const Cl& c) {
+            return c.j.c1 == c.j.c2 &&
+                   germline(nrm, sam_hdr_tid2name(hdr, c.j.c1), c.p1, c.p2 - c.p1, tol * 10); }), cl.end());
+        ci.erase(std::remove_if(ci.begin(), ci.end(), [&](const ClIns& c) {
+            return germline(nrm, sam_hdr_tid2name(hdr, c.v.c), c.v.p, c.len, tol * 10); }), ci.end());
+        st.germ = (before_j - cl.size()) + (before_i - ci.size());
+        std::fprintf(stderr, "[call] normalde de bulundugu icin elenen: %llu (%zu junction + %zu insertion kaldi)\n",
+                     (unsigned long long)st.germ, cl.size(), ci.size());
+    }
+    write_vcf(argv[3], hdr, cl, ci);
+
+    std::fprintf(stderr, "[call] kayit %llu | atlanan: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu, mismatch>%.0f%% %llu\n",
                  (unsigned long long)st.rec, (unsigned long long)st.unmapped, (unsigned long long)st.secondary,
-                 min_mapq, (unsigned long long)st.lowq, (long long)min_aln, (unsigned long long)st.shortaln);
+                 min_mapq, (unsigned long long)st.lowq, (long long)min_aln, (unsigned long long)st.shortaln,
+                 100*max_mm, (unsigned long long)st.highmm);
     std::fprintf(stderr, "[call] segment %llu -> split %llu + CIGAR DEL %llu | INS %llu\n",
                  (unsigned long long)st.seg, (unsigned long long)st.split,
                  (unsigned long long)st.cigar_del, (unsigned long long)st.cigar_ins);
     std::fprintf(stderr, "[call] aday %zu junction + %zu insertion -> supp>=%u: %zu + %zu -> %s\n",
-                 jn.size(), ins.size(), min_supp, cl.size(), ci.size(), argv[2]);
+                 jn.size(), ins.size(), min_supp, cl.size(), ci.size(), argv[3]);
     sam_hdr_destroy(hdr);
     return 0;
 }
