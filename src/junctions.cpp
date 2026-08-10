@@ -53,9 +53,21 @@ constexpr size_t BATCH = 2000;
 [[noreturn]] void die(const char* m) { std::fprintf(stderr, "[jcontigs] FATAL: %s\n", m); std::exit(1); }
 
 // ---- somatic subgraph -> chunks ----
+//
+// A chunk is normally a connected component of SOMATIC cores. But a rearrangement is an adjacency
+// change, and an adjacency can be tumour-only while both of its ends are germline: the LCP parse can
+// put a core boundary at the fusion point, or the core straddling it can fall under the min-mult
+// floor, and then the junction leaves no somatic core at all -- only an edge that the normal never
+// traverses. Measured on hcc1954's graph: 282,455 such edges exist and `build_chunks` reads none of
+// them. Most are noise (tcov 1), so a candidate must carry the same support a call needs and its two
+// ends must not be wired into a repeat tangle.
+using PairKey = std::pair<uint64_t, uint64_t>;
+struct PairHash { uint64_t operator()(const PairKey& e) const { return e.first * 0x9e3779b97f4a7c15ULL + e.second; } };
+
 struct Chunks {
     std::vector<uint64_t> sig;             // sorted somatic signatures
     std::vector<uint32_t> chunk;           // parallel: which component each belongs to
+    ankerl::unordered_dense::map<PairKey, uint32_t, PairHash> pairs;   // tumour-only germline adjacency
     size_t n = 0;                          // number of components
 };
 
@@ -78,7 +90,8 @@ ankerl::unordered_dense::set<uint64_t> load_drop(const std::string& graph) {
     return d;
 }
 
-Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double min_vaf) {
+Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double min_vaf,
+                    uint32_t edge_tcov, uint32_t edge_deg) {
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
     if (std::fread(&K, 8, 1, f) != 1) die("read K");
     std::vector<uint64_t> sig(K); std::vector<uint32_t> nc(K), tc(K);
@@ -154,6 +167,25 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
     }
     nsom = c.sig.size();
     c.n = nk;
+
+    // Tumour-only adjacencies between two germline cores, each its own chunk. Degree is over both
+    // directions because a tangle is a tangle whichever way it is entered.
+    if (edge_tcov) {
+        std::vector<uint32_t> deg(K, 0);
+        for (uint64_t e = 0; e < E; e++) { deg[ed[e * 4]]++; deg[ed[e * 4 + 1]]++; }
+        uint64_t nedge = 0;
+        for (uint64_t e = 0; e < E; e++) {
+            const uint32_t a = ed[e * 4], b = ed[e * 4 + 1], en = ed[e * 4 + 2], et = ed[e * 4 + 3];
+            // germline by COUNT, not by som[] -- a core the bubble stage dropped is still tumour-only
+            if (en != 0 || et < edge_tcov || nc[a] == 0 || nc[b] == 0) continue;
+            if (deg[a] > edge_deg || deg[b] > edge_deg) continue;
+            c.pairs.emplace(PairKey(sig[a], sig[b]), (uint32_t)(c.n + nedge));
+            nedge++;
+        }
+        c.n += nedge;
+        std::fprintf(stderr, "[jcontigs] tumor-ozel germline adjacency (tcov>=%u, derece<=%u): %llu chunk\n",
+                     edge_tcov, edge_deg, (unsigned long long)nedge);
+    }
     // sig[] came out of graph.bin already sorted, so the parallel arrays are sorted with it
     return c;
 }
@@ -184,17 +216,20 @@ bool next_read(FILE* f, char*& buf, size_t& cap, Read& r) {
 
 int cmd_junctions(int argc, char** argv) {
     if (argc < 4) { std::fprintf(stderr, "usage: svp junctions <graph_v3.bin> <reads.fastq> <out.fa> "
-                                 "[threads=16] [pad_cores=10] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"); return 2; }
+                                 "[threads=16] [pad_cores=10] [per_chunk=5] [min_flank=300] [min_vaf=0] "
+                                 "[edge_tcov=0] [edge_deg=4]\n"); return 2; }
     const std::string gpath = argv[1], rpath = argv[2], opath = argv[3];
     const int NT = argc > 4 ? std::atoi(argv[4]) : 16;
     const int PAD = argc > 5 ? std::atoi(argv[5]) : 10;
     const uint32_t PER = argc > 6 ? (uint32_t)std::atoi(argv[6]) : 5;
     const int64_t MINF = argc > 7 ? std::atoll(argv[7]) : 300;
     const double MINVAF = argc > 8 ? std::atof(argv[8]) : 0.0;
+    const uint32_t ETCOV = argc > 9 ? (uint32_t)std::atoi(argv[9]) : 0;   // 0 = off until measured
+    const uint32_t EDEG = argc > 10 ? (uint32_t)std::atoi(argv[10]) : 4;
     if (const char* lv = std::getenv("SVP_LEVEL")) LEVEL = std::atoi(lv);
 
     uint64_t K = 0; size_t nsom = 0;
-    const Chunks C = build_chunks(gpath, K, nsom, MINVAF);
+    const Chunks C = build_chunks(gpath, K, nsom, MINVAF, ETCOV, EDEG);
     std::fprintf(stderr, "[jcontigs] %s: %llu nodes, %zu somatic -> %zu chunks; pad=%d cores, "
                  "<=%u reads/chunk, min flank %lld bp, min VAF %.2f, level=%d, %d threads\n",
                  gpath.c_str(), (unsigned long long)K, nsom, C.n, PAD, PER, (long long)MINF, MINVAF, LEVEL, NT);
@@ -237,6 +272,15 @@ int cmd_junctions(int argc, char** argv) {
                     if (st[i] < (uint64_t)MARGIN || en_[i] + MARGIN > r.seq.size()) continue;
                     ci.push_back(i); cc.push_back(chunk_of(C, sg[i]));
                 }
+                // An edge-seeded chunk has no somatic core to be found by signature: what identifies
+                // it is that this read puts two germline cores next to each other, and the normal
+                // never does. Two consecutive cores ARE that adjacency, so the pair is the lookup.
+                if (!C.pairs.empty())
+                    for (size_t k = 0; k + 1 < ci.size(); k++) {
+                        if (cc[k] >= 0 || cc[k + 1] >= 0) continue;
+                        const auto it = C.pairs.find(PairKey(sg[ci[k]], sg[ci[k + 1]]));
+                        if (it != C.pairs.end()) cc[k] = cc[k + 1] = (int32_t)it->second;
+                    }
                 int w = 0;
                 for (size_t a = 0; a < ci.size();) {
                     if (cc[a] < 0) { a++; continue; }
