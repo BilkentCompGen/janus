@@ -7,7 +7,7 @@ fixed it. F1 against the paper's own truth, from that state to this one:
 | | hcc1954 | h2009 | hcc1937 | h1437 |
 |---|---|---|---|---|
 | 2026-08-06 | 0.337 | 0.173 | 0.263 | 0.063 |
-| now | **0.874** | 0.854 | 0.762 | 0.759 |
+| now | **0.872** | 0.854 | 0.762 | 0.759 |
 | Severus, published | 0.871 | 0.903 | 0.826 | 0.810 |
 
 svp passes Severus on hcc1954 and does not on the other three. Everything below is in the code
@@ -89,13 +89,29 @@ pad cannot cost a contig — the window is clamped to the read's own cores and `
 flank ACHIEVED. Measured at 15, 25, 50 and 75: 50 dominates 25 at every support level (same
 precision, +0.009 recall) and 75 gives back what it gains.
 
-**6. A normal deep enough to answer the question.** The germline check asks the normal reads at the
-reference locus, and it was being asked at 11×. Thinning that very same BAM: 3× leaves 290 false
-calls, 5.5× leaves 172, 11× leaves 136 — a curve that has not flattened. At 44× hcc1954 leaves 116,
-and F1 goes from 0.867 to **0.874**. `svp run` aligns the WHOLE normal, so the shortcut is not
-available to take by accident any more. It is the single largest precision lever found, and it is
-worth most where the precision gap is widest, which is what the four samples show: +0.016 precision
-on hcc1954, +0.017 on hcc1937, +0.024 on h2009, +0.050 on h1437.
+**6. A normal deep enough to answer the question, and only where the question is asked.** The
+germline check asks the normal reads at the reference locus, and it was being asked at 11×. Thinning
+that very same BAM: 3× leaves 290 false calls, 5.5× leaves 172, 11× leaves 136 — a curve that has not
+flattened. At 44× hcc1954 leaves 116 and F1 goes from 0.867 to **0.874**. It is the largest precision
+lever found, and it is worth most where the precision gap is widest: +0.016 precision on hcc1954,
++0.017 on hcc1937, +0.024 on h2009, +0.050 on h1437.
+
+Aligning the whole normal to get it would make the aligner the dominant cost of a caller whose
+premise is that the graph replaces alignment — two hours against about forty minutes for everything
+else. It is also unnecessary. The question is only ever asked at the candidate loci, and the graph
+can say which normal reads cover those without a reference: they share LCP cores with the germline
+ANCHORS of the contig each candidate came from. `svp pick` does that in one pass. Measured on
+hcc1954, against the 8.35M-read whole-normal arm:
+
+| normal | reads | alignment | precision | recall | F1 |
+|---|---|---|---|---|---|
+| whole | 8.35M | ~2 h | 0.891 | 0.858 | 0.874 |
+| picked, `min_shared` 1 | 405,604 (3.58%) | ~4 min | 0.887 | 0.858 | 0.872 |
+| picked, `min_shared` 5 | 176,912 (1.56%) | ~4 min | 0.887 | 0.858 | 0.872 |
+
+1 and 5 give the identical call set — TP 949, FP 121 — so the tighter cut is free. A read that really
+covers the locus shares dozens of cores; a single shared core is what a repetitive anchor collects
+from everywhere.
 
 **7. `min_supp` 3 → 4.** Not a mechanism, a point on the precision/recall curve — but the point is
 chosen from four samples rather than one: 3 is worse than 4 on every one of them, and 5 wins on
@@ -106,8 +122,9 @@ the side svp is behind on for three of the four.
 
     svp run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir>
 
-One command, six stages, each skipped when its output is already there: graph → bubbles → junctions
-→ minimap2 on the contigs → minimap2 on the whole normal → call. Every stage takes .svb or
+One command, eight stages, each skipped when its output is already there: graph → bubbles →
+junctions → minimap2 on the contigs → `call` with no normal → `pick` → minimap2 on the picked normal
+reads → `call`. Every stage takes .svb or
 uncompressed FASTQ directly, so nothing has to convert between them; the only outside programs are
 minimap2 and samtools, which svp is not. Every default it passes is the one measured below — the
 configuration is in `src/`, not in a wrapper script, which is why the ones this work was measured
@@ -121,8 +138,8 @@ pad 50, `min_aln` 0, `shred_rep` 0.40, `anchor_rep` 0.50, `normal_dirty` 0.25, `
 | sample | | precision | recall | F1 |
 |---|---|---|---|---|
 | **hcc1954** | 2026-08-06 | 0.218 | 0.736 | 0.337 |
-| | supp≥4 | **0.891** | **0.858** | **0.874** |
-| | supp≥6 | 0.909 | 0.826 | 0.866 |
+| | supp≥4 | **0.887** | **0.858** | **0.872** |
+| | supp≥5 | 0.895 | 0.847 | 0.870 |
 | | Severus (published) | 0.921 | 0.826 | 0.871 |
 | **h2009** | 2026-08-06 | 0.096 | 0.871 | 0.173 |
 | | supp≥4 | 0.828 | 0.857 | 0.842 |
@@ -137,8 +154,10 @@ pad 50, `min_aln` 0, `shred_rep` 0.40, `anchor_rep` 0.50, `normal_dirty` 0.25, `
 | | supp≥6 | **0.806** | 0.715 | 0.758 |
 | | Severus | 0.782 | 0.842 | 0.810 |
 
-**svp is ahead of the published Severus output on hcc1954 and behind on the other three.** On
-hcc1954 it is ahead on F1 by 0.003 and on recall by 0.032, behind on precision by 0.030; the same
+**svp is level with the published Severus output on hcc1954 and behind on the other three.** On
+hcc1954 it is ahead on recall by 0.032 and behind on precision by 0.034, for an F1 0.001 short;
+with the whole normal aligned instead of the picked 1.56% it is 0.891/0.858/0.874, ahead by 0.003 --
+that difference is what the pick costs and it is not worth two hours; the same
 call set scored against the 2-support ensemble is 0.924 / 0.710 / 0.803 against Severus's
 0.967 / 0.679 / 0.798, ahead on recall and F1 there too. On hcc1937 and h1437 svp passes Severus on
 PRECISION at supp≥6 (0.872 against 0.859, 0.806 against 0.782) but gives up too much recall to get
@@ -176,6 +195,16 @@ Written down because each cost real time and each would otherwise be tried again
   calls in total. **Chunk diversity of the supporting contigs**: median 4 against 2, a 1.6×
   enrichment and not enough. **The mismatch gate** re-swept after everything else: F1 is flat from
   0.01 to 0.03, so it stays at the precision end.
+- **Asking the germline question against the CONTIG instead of the reference.** The contig IS the
+  locus -- [anchor | somatic run | anchor] -- so a normal read that carries the event aligns through
+  the run and one that does not stops at the junction, and the index is the candidate contigs alone
+  (17 MB against hg38's 3.1 GB). Implemented and measured: 0.832/0.844 against 0.887/0.858 for the
+  same picked reads against hg38. Spanning had to be qualified as spanning WITHOUT a large indel --
+  a normal read lacking the contig's deletion still aligns straight across it, the aligner just pays
+  with an insertion -- and that fixed recall (0.781 -> 0.844) without closing the precision gap. What
+  it has no answer for is the reference-space check's second clause, "the normal cannot place this
+  locus either", which is what catches the repeat loci. Code in
+  /home/yuio/trash/20260810-contig-germline.
 - **A third pass over the reads to genotype each call.** Not built. `per_chunk` 10 already showed
   that doubling the contigs behind a support count does not sharpen it, and the normal side of such
   a pass is blind to exactly the germline leak that matters — if the tumour spells the locus

@@ -8,6 +8,7 @@
 //   svp bubbles   <graph.bin> <normal> <tumour> graph + reads  -> dir/drop.sigs (sub-SV cores)
 //   svp junctions <graph.bin> <reads> <out.fa> graph + reads   -> junction contigs
 //   svp call      <ctg.bam> <normal.bam|-> <out.vcf> aligned contigs -> breakpoints
+//   svp pick      <ctg.fa> <calls.vcf> <normal> <out.fq> the normal reads worth aligning
 //   svp pack      <out.svb>                    FASTQ (stdin)   -> 2-bit .svb
 //   svp dump      <in.svb>                     .svb            -> FASTQ (stdout)
 //   svp refine    <dir>                        graph.bin     -> refined.bin (topology EC)
@@ -20,6 +21,7 @@
 #include "call.h"
 #include "graph.h"
 #include "junctions.h"
+#include "pick.h"
 #include "refinement.h"
 #include "svb.h"
 
@@ -43,6 +45,7 @@ static void usage() {
         "  svp junctions <graph.bin> <reads> <out.fa> [threads] [pad_cores] [per_chunk] [min_flank] [min_vaf] [edge_tcov] [edge_deg]\n"
         "  svp bubbles   <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20] [loose_swap=1]\n"
         "  svp call      <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=4]\n"
+        "  svp pick      <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads] [min_shared]\n"
         "  svp pack      <out.svb> < reads.fastq\n"
         "  svp dump      <in.svb> > reads.fastq\n"
         "  svp refine    <dir>                                  (graph.bin -> refined.bin)\n");
@@ -50,17 +53,24 @@ static void usage() {
 
 // ---- `run`: the pipeline ---------------------------------------------------------------------
 //
-// Six stages, each skipped when its output is already there, so a kill and a restart pick up where
-// this left off. Two of them are the aligner and samtools; the rest is svp.
+// Each stage is skipped when its output is already there, so a kill and a restart pick up where this
+// left off. Two of them are the aligner and samtools; the rest is svp.
 //
-//   graph.bin   the 2-colour core graph, from both samples' reads
-//   drop.sigs   the somatic cores that are sub-SV edits and must never become a contig
-//   ctg.fa      one junction contig per somatic chunk per read, 50 cores of anchor each side
-//   ctg.bam     those contigs against the reference
-//   normal.bam  the WHOLE normal against the reference -- `call` asks it whether a locus is
-//               germline, and thinning that BAM is measurably the most expensive shortcut
-//               available: 3x leaves 290 false calls on hcc1954, 5.5x 172, 11x 136, 44x 116
-//   calls.vcf   the breakpoints
+//   graph.bin        the 2-colour core graph, from both samples' reads
+//   drop.sigs        the somatic cores that are sub-SV edits and must never become a contig
+//   ctg.fa           one junction contig per somatic chunk per read, 50 cores of anchor each side
+//   ctg.bam          those contigs against the reference
+//   candidates.vcf   `call` with no normal: the loci the germline question will be asked about
+//   normal_at_       the normal reads sharing cores with those candidates' germline anchors --
+//     candidates       1.56% of the sample on hcc1954
+//   normal.bam       ONLY those, against the reference
+//   calls.vcf        `call` again, now able to ask the normal at each locus
+//
+// The normal is not aligned whole. That decision is worth 1168 false calls on hcc1954 and needs full
+// depth to make (3x leaves 290 false calls, 5.5x 172, 11x 136, 44x 116) -- but it is only ever asked
+// at the candidate loci, and the graph can say which normal reads cover those. Measured: 177k picked
+// reads give 0.887/0.858 against 0.891/0.858 for the whole 8.35M-read normal, in four minutes of
+// alignment instead of two hours.
 
 static int sh(const std::string& cmd) {
     std::fprintf(stderr, "[run] $ %s\n", cmd.c_str());
@@ -99,6 +109,7 @@ static int run_pipeline(const std::string& normal, const std::string& tumour, co
     const std::string self = self_path();
     const std::string graph = dir + "/graph.bin", drop = dir + "/drop.sigs", ctg = dir + "/ctg.fa";
     const std::string cbam = dir + "/ctg.bam", nbam = dir + "/normal.bam", vcf = dir + "/calls.vcf";
+    const std::string cand = dir + "/candidates.vcf", nfq = dir + "/normal_at_candidates.fastq";
     const std::string T = std::to_string(threads);
 
     if (exists(graph)) std::fprintf(stderr, "[run] atlandi graph: %s var\n", graph.c_str());
@@ -124,9 +135,25 @@ static int run_pipeline(const std::string& normal, const std::string& tumour, co
         if (sh("samtools index -@ " + T + " '" + cbam + "'")) return 1;
     }
 
+    // The germline check needs the normal AT the candidate loci and nowhere else, so the candidates
+    // are made first, without it, and they are what says which normal reads to align.
+    if (exists(cand)) std::fprintf(stderr, "[run] atlandi aday call: %s var\n", cand.c_str());
+    else {
+        std::vector<std::string> a{"call", cbam, "-", cand};
+        std::vector<char*> v; for (auto& s : a) v.push_back(&s[0]);
+        if (int rc = cmd_call((int)v.size(), v.data())) return rc;
+    }
+
+    if (exists(nfq)) std::fprintf(stderr, "[run] atlandi pick: %s var\n", nfq.c_str());
+    else {
+        std::vector<std::string> a{"pick", ctg, cand, normal, nfq, T};
+        std::vector<char*> v; for (auto& s : a) v.push_back(&s[0]);
+        if (int rc = cmd_pick((int)v.size(), v.data())) return rc;
+    }
+
     if (exists(nbam)) std::fprintf(stderr, "[run] atlandi normal align: %s var\n", nbam.c_str());
     else {
-        if (sh(align(normal, ref, nbam, dir + "/stn", threads, self))) return 1;
+        if (sh(align(nfq, ref, nbam, dir + "/stn", threads, self))) return 1;
         if (sh("samtools index -@ " + T + " '" + nbam + "'")) return 1;
     }
 
@@ -149,6 +176,7 @@ int main(int argc, char** argv) {
     if (cmd == "junctions") { LCP_INIT(); return cmd_junctions(argc - 1, argv + 1); }
     if (cmd == "bubbles")   { LCP_INIT(); return cmd_bubbles(argc - 1, argv + 1); }
     if (cmd == "call")      return cmd_call(argc - 1, argv + 1);
+    if (cmd == "pick")      { LCP_INIT(); return cmd_pick(argc - 1, argv + 1); }
     if (cmd == "pack")      return cmd_pack(argc - 1, argv + 1);
     if (cmd == "dump")      return cmd_dump(argc - 1, argv + 1);
 
