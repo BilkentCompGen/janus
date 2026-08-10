@@ -198,29 +198,19 @@ int32_t chunk_of(const Chunks& c, uint64_t s) {
 
 // ---- reads ----
 struct Read { std::string name, seq; };
-
-bool next_read(FILE* f, char*& buf, size_t& cap, Read& r) {
-    ssize_t n = getline(&buf, &cap, f); if (n <= 0) return false;
-    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
-    const char* sp = (const char*)std::memchr(buf + 1, ' ', (size_t)n - 1);
-    r.name.assign(buf + 1, sp ? (size_t)(sp - buf - 1) : (size_t)n - 1);
-    n = getline(&buf, &cap, f); if (n <= 0) return false;
-    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
-    r.seq.assign(buf, (size_t)n);
-    for (char& c : r.seq) if (c >= 'a' && c <= 'z') c -= 32;
-    if (getline(&buf, &cap, f) <= 0) return false;
-    if (getline(&buf, &cap, f) <= 0) return false;
-    return true;
-}
 }  // namespace
 
 int cmd_junctions(int argc, char** argv) {
     if (argc < 4) { std::fprintf(stderr, "usage: svp junctions <graph_v3.bin> <reads.fastq> <out.fa> "
-                                 "[threads=16] [pad_cores=10] [per_chunk=5] [min_flank=300] [min_vaf=0] "
+                                 "[threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0] "
                                  "[edge_tcov=0] [edge_deg=4]\n"); return 2; }
     const std::string gpath = argv[1], rpath = argv[2], opath = argv[3];
     const int NT = argc > 4 ? std::atoi(argv[4]) : 16;
-    const int PAD = argc > 5 ? std::atoi(argv[5]) : 10;
+    // 50 cores of anchor each side, not 10: half of what hcc1954 missed was a placement failure and
+    // not a detection one, and a bigger pad cannot cost a contig -- the window is clamped to the
+    // read's own cores and min_flank tests the flank ACHIEVED. Measured at 15/25/50/75; 50 dominates
+    // 25 at every support level and 75 gives back what it gains.
+    const int PAD = argc > 5 ? std::atoi(argv[5]) : 50;
     const uint32_t PER = argc > 6 ? (uint32_t)std::atoi(argv[6]) : 5;
     const int64_t MINF = argc > 7 ? std::atoll(argv[7]) : 300;
     const double MINVAF = argc > 8 ? std::atof(argv[8]) : 0.0;
@@ -240,11 +230,10 @@ int cmd_junctions(int argc, char** argv) {
     std::vector<std::atomic<uint8_t>> touched(C.n); // a read carried it, whatever the flanks were
     for (auto& t : touched) t.store(0);
 
-    FILE* in = std::fopen(rpath.c_str(), "r"); if (!in) die("open reads");
+    Reads in = reads_open(rpath);
     FILE* out = std::fopen((opath + ".tmp").c_str(), "w"); if (!out) die("open out");
     std::mutex in_mu, out_mu;
     std::atomic<uint64_t> seen{0}, emitted{0}, emit_bp{0}, seen_bp{0}, short_flank{0};
-    char* shared = nullptr; size_t cap = 0;
     bool eof = false;
 
     auto worker = [&]() {
@@ -256,7 +245,7 @@ int cmd_junctions(int argc, char** argv) {
                 std::lock_guard<std::mutex> lk(in_mu);
                 if (eof) return;
                 Read r;
-                while (batch.size() < BATCH && next_read(in, shared, cap, r)) batch.push_back(r);
+                while (batch.size() < BATCH && reads_next(in, r.seq, &r.name)) batch.push_back(r);
                 if (batch.size() < BATCH) eof = true;
             }
             if (batch.empty()) return;
@@ -329,8 +318,7 @@ int cmd_junctions(int argc, char** argv) {
     std::vector<std::thread> th;
     for (int i = 0; i < NT; i++) th.emplace_back(worker);
     for (auto& t : th) t.join();
-    std::free(shared);
-    std::fclose(in); std::fclose(out);
+    reads_close(in); std::fclose(out);
     if (std::rename((opath + ".tmp").c_str(), opath.c_str())) die("rename");
 
     size_t got = 0, seen_ch = 0;

@@ -199,6 +199,49 @@ static bool svb_next(FILE* f, std::string& seq) {
     return true;
 }
 
+}  // namespace   (the reader below is svp.h's, and the rest of this file is not)
+
+// ---- the shared reads input (svp.h) ---------------------------------------------------------
+// The same two readers above, behind one interface, so bubbles and junctions can take a .svb
+// directly instead of being handed a FASTQ stream by a shell.
+Reads reads_open(const std::string& path) {
+    Reads r;
+    r.svb = is_svb(path);
+    r.f = r.svb ? open_svb(path) : open_fastq(path);
+    return r;
+}
+
+bool reads_next(Reads& r, std::string& seq, std::string* name) {
+    if (r.svb) {
+        if (!svb_next(r.f, seq)) return false;
+        if (name) { char b[32]; std::snprintf(b, sizeof b, "r%llu", (unsigned long long)r.idx); *name = b; }
+        r.idx++;
+        return true;
+    }
+    static thread_local char* buf = nullptr;                 // one line buffer per calling thread
+    static thread_local size_t cap = 0;
+    ssize_t n = getline(&buf, &cap, r.f);
+    if (n <= 0) return false;
+    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
+    if (name) {
+        const char* sp = (const char*)std::memchr(buf + 1, ' ', n > 0 ? (size_t)n - 1 : 0);
+        name->assign(buf + 1, sp ? (size_t)(sp - buf - 1) : (size_t)(n > 0 ? n - 1 : 0));
+    }
+    n = getline(&buf, &cap, r.f);
+    if (n <= 0) return false;
+    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
+    seq.assign(buf, (size_t)n);
+    for (char& c : seq) if (c >= 'a' && c <= 'z') c -= 32;
+    if (getline(&buf, &cap, r.f) <= 0) return false;         // '+'
+    if (getline(&buf, &cap, r.f) <= 0) return false;         // quality, discarded
+    r.idx++;
+    return true;
+}
+
+void reads_close(Reads& r) { if (r.f) std::fclose(r.f); r.f = nullptr; }
+
+namespace {
+
 // ---- the build: ONE pass over the reads, exact maps -----------------------------------------
 // This was two passes with a bloom cascade in front: the cascade knew a signature's MULTIPLICITY but
 // not its NEIGHBOURS, so the reads had to be walked again once survivors were known. An exact map

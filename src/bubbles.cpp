@@ -93,31 +93,20 @@ void hpc_local(const char* s, int len, std::string& out) {
     for (int i = 0; i < len; i++) if (i == 0 || s[i] != s[i - 1]) out.push_back(s[i]);
 }
 
-bool next_read(FILE* f, char*& buf, size_t& cap, std::string& seq) {
-    ssize_t n = getline(&buf, &cap, f); if (n <= 0) return false;
-    n = getline(&buf, &cap, f); if (n <= 0) return false;
-    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
-    seq.assign(buf, (size_t)n);
-    for (char& c : seq) if (c >= 'a' && c <= 'z') c -= 32;
-    if (getline(&buf, &cap, f) <= 0) return false;
-    if (getline(&buf, &cap, f) <= 0) return false;
-    return true;
-}
-
 using MinMap = ankerl::unordered_dense::map<uint64_t, std::vector<uint64_t>>;
 
 // One pass over one sample's reads: the first read covering a wanted core gives that core its
 // minimizers. Which read it was does not matter -- the core is the same sequence in all of them.
 void collect(const std::string& path, const ankerl::unordered_dense::set<uint64_t>& want, int NT,
              MinMap& out, int k, int w, const char* tag) {
-    FILE* in = std::fopen(path.c_str(), "r"); if (!in) die("open reads");
-    std::mutex in_mu, out_mu; char* buf = nullptr; size_t cap = 0; std::string shared;
+    Reads in = reads_open(path);
+    std::mutex in_mu, out_mu; std::string shared;
     std::atomic<uint64_t> nread{0};
     auto worker = [&]() {
         std::string seq, hs; std::vector<uint64_t> mins;
         for (;;) {
             { std::lock_guard<std::mutex> lk(in_mu);
-              if (!next_read(in, buf, cap, shared)) return;
+              if (!reads_next(in, shared, nullptr)) return;
               seq = shared; }
             nread++;
             int n; const uint64_t *st, *en, *sg;
@@ -136,7 +125,7 @@ void collect(const std::string& path, const ankerl::unordered_dense::set<uint64_
     std::vector<std::thread> th;
     for (int i = 0; i < NT; i++) th.emplace_back(worker);
     for (auto& t : th) t.join();
-    std::fclose(in); std::free(buf);
+    reads_close(in);
     std::fprintf(stderr, "[bubbles] %s: %llu okuma -> %zu/%zu cekirdek kapsandi\n",
                  tag, (unsigned long long)nread.load(), out.size(), want.size());
 }
