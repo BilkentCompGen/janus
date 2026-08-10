@@ -69,8 +69,8 @@ static void usage() {
 // The normal is not aligned whole. That decision is worth 1168 false calls on hcc1954 and needs full
 // depth to make (3x leaves 290 false calls, 5.5x 172, 11x 136, 44x 116) -- but it is only ever asked
 // at the candidate loci, and the graph can say which normal reads cover those. Measured: 177k picked
-// reads give 0.887/0.858 against 0.891/0.858 for the whole 8.35M-read normal, in four minutes of
-// alignment instead of two hours.
+// reads give 0.887/0.858 against 0.891/0.858 for the whole 8.35M-read normal, in fourteen minutes
+// of alignment instead of two hours.
 
 static int sh(const std::string& cmd) {
     std::fprintf(stderr, "[run] $ %s\n", cmd.c_str());

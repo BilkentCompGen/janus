@@ -106,8 +106,8 @@ hcc1954, against the 8.35M-read whole-normal arm:
 | normal | reads | alignment | precision | recall | F1 |
 |---|---|---|---|---|---|
 | whole | 8.35M | ~2 h | 0.891 | 0.858 | 0.874 |
-| picked, `min_shared` 1 | 405,604 (3.58%) | ~4 min | 0.887 | 0.858 | 0.872 |
-| picked, `min_shared` 5 | 176,912 (1.56%) | ~4 min | 0.887 | 0.858 | 0.872 |
+| picked, `min_shared` 1 | 405,604 (3.58%) | ~14 min | 0.887 | 0.858 | 0.872 |
+| picked, `min_shared` 5 | 176,912 (1.56%) | ~14 min | 0.887 | 0.858 | 0.872 |
 
 1 and 5 give the identical call set — TP 949, FP 121 — so the tighter cut is free. A read that really
 covers the locus shares dozens of cores; a single shared core is what a repetitive anchor collects
@@ -124,7 +124,8 @@ the side svp is behind on for three of the four.
 
 One command, eight stages, each skipped when its output is already there: graph → bubbles →
 junctions → minimap2 on the contigs → `call` with no normal → `pick` → minimap2 on the picked normal
-reads → `call`. Every stage takes .svb or
+reads → `call`. Verified end to end on hcc1954: the one command reproduces the 0.887 / 0.858 / 0.872
+that the stages run by hand produce, record for record. Every stage takes .svb or
 uncompressed FASTQ directly, so nothing has to convert between them; the only outside programs are
 minimap2 and samtools, which svp is not. Every default it passes is the one measured below — the
 configuration is in `src/`, not in a wrapper script, which is why the ones this work was measured
@@ -157,7 +158,7 @@ pad 50, `min_aln` 0, `shred_rep` 0.40, `anchor_rep` 0.50, `normal_dirty` 0.25, `
 **svp is level with the published Severus output on hcc1954 and behind on the other three.** On
 hcc1954 it is ahead on recall by 0.032 and behind on precision by 0.034, for an F1 0.001 short;
 with the whole normal aligned instead of the picked 1.56% it is 0.891/0.858/0.874, ahead by 0.003 --
-that difference is what the pick costs and it is not worth two hours; the same
+that difference is what the pick costs, against two hours of alignment instead of fourteen minutes; the same
 call set scored against the 2-support ensemble is 0.924 / 0.710 / 0.803 against Severus's
 0.967 / 0.679 / 0.798, ahead on recall and F1 there too. On hcc1937 and h1437 svp passes Severus on
 PRECISION at supp≥6 (0.872 against 0.859, 0.806 against 0.782) but gives up too much recall to get
