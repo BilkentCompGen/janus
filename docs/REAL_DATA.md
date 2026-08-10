@@ -92,15 +92,26 @@ precision, +0.009 recall) and 75 gives back what it gains.
 **6. A normal deep enough to answer the question.** The germline check asks the normal reads at the
 reference locus, and it was being asked at 11×. Thinning that very same BAM: 3× leaves 290 false
 calls, 5.5× leaves 172, 11× leaves 136 — a curve that has not flattened. At 44× hcc1954 leaves 116,
-and F1 goes from 0.867 to **0.874**. `hifi/deep_normal.sh` aligns the rest of the normal and merges
-it in. This is a pipeline input, not a code change, and it is the single largest precision lever
-found. It is worth most where the precision gap is widest, which is what the four samples show:
-+0.016 precision on hcc1954, +0.017 on hcc1937, +0.024 on h2009, +0.050 on h1437.
+and F1 goes from 0.867 to **0.874**. `svp run` aligns the WHOLE normal, so the shortcut is not
+available to take by accident any more. It is the single largest precision lever found, and it is
+worth most where the precision gap is widest, which is what the four samples show: +0.016 precision
+on hcc1954, +0.017 on hcc1937, +0.024 on h2009, +0.050 on h1437.
 
 **7. `min_supp` 3 → 4.** Not a mechanism, a point on the precision/recall curve — but the point is
 chosen from four samples rather than one: 3 is worse than 4 on every one of them, and 5 wins on
 h2009 and h1437 by about as much as 4 wins on hcc1937 and hcc1954. The tie goes to recall, which is
 the side svp is behind on for three of the four.
+
+## Running it
+
+    svp run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir>
+
+One command, six stages, each skipped when its output is already there: graph → bubbles → junctions
+→ minimap2 on the contigs → minimap2 on the whole normal → call. Every stage takes .svb or
+uncompressed FASTQ directly, so nothing has to convert between them; the only outside programs are
+minimap2 and samtools, which svp is not. Every default it passes is the one measured below — the
+configuration is in `src/`, not in a wrapper script, which is why the ones this work was measured
+with are gone rather than kept as the way to reproduce it.
 
 ## Where svp stands
 

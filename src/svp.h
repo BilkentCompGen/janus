@@ -24,6 +24,20 @@ struct SigCount { uint64_t sig; uint32_t n, t; };
 // per-colour traversal counts (ncov = #normal reads crossing the adjacency, tcov = #tumor reads).
 struct CEdge { uint32_t src, dst, ncov, tcov; };
 
+// One reads input, FASTQ or .svb, walked sequentially. Defined in graph.cpp, which already had the
+// .svb reader, so that every stage that walks the reads uses the SAME one -- bubbles and junctions
+// used to take FASTQ only, which is the entire reason the pipeline needed a shell to hand them
+// `<(svp dump ...)`. A .svb record has no name, so one is synthesised from its index; that name only
+// ever has to be unique per read, which is what `svp call` counts support with.
+struct Reads {
+    FILE* f = nullptr;
+    bool svb = false;
+    uint64_t idx = 0;
+};
+Reads reads_open(const std::string& path);
+bool reads_next(Reads& r, std::string& seq, std::string* name);
+void reads_close(Reads& r);
+
 // Fail-fast checkpoint IO helpers. Defined in graph.cpp; refinement reads graph.bin back through rd().
 FILE* xopen(const std::string& p, const char* m);
 void  wr(FILE* f, const void* p, size_t n);
