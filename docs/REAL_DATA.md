@@ -2,9 +2,16 @@
 
 Two sittings. **2026-08-05/06** established that the simulation numbers do not survive contact with
 real data and that nothing tried then was worth keeping. **2026-08-10** found what was wrong and
-fixed it: hcc1954 went from F1 0.337 to **0.874**, past the Severus output the paper published for
-that sample (0.871), with recall ahead by 0.032 and precision behind by 0.030. The other three
-improved by 0.06–0.20 F1 and remain behind. Everything below is in the code unless it says otherwise.
+fixed it. F1 against the paper's own truth, from that state to this one:
+
+| | hcc1954 | h2009 | hcc1937 | h1437 |
+|---|---|---|---|---|
+| 2026-08-06 | 0.337 | 0.173 | 0.263 | 0.063 |
+| now | **0.874** | 0.854 | 0.762 | 0.759 |
+| Severus, published | 0.871 | 0.903 | 0.826 | 0.810 |
+
+svp passes Severus on hcc1954 and does not on the other three. Everything below is in the code
+unless it says otherwise.
 
 ## The data
 
@@ -87,36 +94,48 @@ reference locus, and it was being asked at 11×. Thinning that very same BAM: 3�
 calls, 5.5× leaves 172, 11× leaves 136 — a curve that has not flattened. At 44× hcc1954 leaves 116,
 and F1 goes from 0.867 to **0.874**. `hifi/deep_normal.sh` aligns the rest of the normal and merges
 it in. This is a pipeline input, not a code change, and it is the single largest precision lever
-found.
+found. It is worth most where the precision gap is widest, which is what the four samples show:
++0.016 precision on hcc1954, +0.017 on hcc1937, +0.024 on h2009, +0.050 on h1437.
+
+**7. `min_supp` 3 → 4.** Not a mechanism, a point on the precision/recall curve — but the point is
+chosen from four samples rather than one: 3 is worse than 4 on every one of them, and 5 wins on
+h2009 and h1437 by about as much as 4 wins on hcc1937 and hcc1954. The tie goes to recall, which is
+the side svp is behind on for three of the four.
 
 ## Where svp stands
 
-pad 50, `min_aln` 0, `shred_rep` 0.40, `anchor_rep` 0.50, `normal_dirty` 0.25, `max_mm` 0.01, against
-`minda_4_2`. `min_supp` is a dial on the same curve and is reported rather than chosen: 3 is the
-recall end, 6 the precision end.
+pad 50, `min_aln` 0, `shred_rep` 0.40, `anchor_rep` 0.50, `normal_dirty` 0.25, `max_mm` 0.01,
+`min_supp` 4, every sample called against a normal deepened to 33–44×, against `minda_4_2`.
 
 | sample | | precision | recall | F1 |
 |---|---|---|---|---|
 | **hcc1954** | 2026-08-06 | 0.218 | 0.736 | 0.337 |
-| | supp≥4, normal 44× | **0.891** | **0.858** | **0.874** |
-| | supp≥6, normal 44× | 0.909 | 0.826 | 0.866 |
+| | supp≥4 | **0.891** | **0.858** | **0.874** |
+| | supp≥6 | 0.909 | 0.826 | 0.866 |
 | | Severus (published) | 0.921 | 0.826 | 0.871 |
-| **hcc1937** | 2026-08-06 | 0.165 | 0.651 | 0.263 |
-| | supp≥4, normal 11× | 0.829 | 0.696 | 0.756 |
-| | Severus | 0.859 | 0.795 | 0.826 |
 | **h2009** | 2026-08-06 | 0.096 | 0.871 | 0.173 |
-| | supp≥5, normal 11× | 0.850 | 0.841 | 0.846 |
+| | supp≥4 | 0.828 | 0.857 | 0.842 |
+| | supp≥5 | 0.868 | 0.841 | 0.854 |
 | | Severus | 0.913 | 0.894 | 0.903 |
+| **hcc1937** | 2026-08-06 | 0.165 | 0.651 | 0.263 |
+| | supp≥4 | 0.846 | 0.694 | 0.762 |
+| | supp≥6 | **0.872** | 0.613 | 0.720 |
+| | Severus | 0.859 | 0.795 | 0.826 |
 | **h1437** | 2026-08-06 | 0.033 | 0.701 | 0.063 |
-| | supp≥6, normal 11× | 0.768 | 0.719 | 0.743 |
+| | supp≥5 | 0.749 | 0.769 | 0.759 |
+| | supp≥6 | **0.806** | 0.715 | 0.758 |
 | | Severus | 0.782 | 0.842 | 0.810 |
 
-On hcc1954 the same call set scored against the 2-support ensemble is 0.924 / 0.710 / 0.803 against
-Severus's 0.967 / 0.679 / 0.798 — ahead on recall and F1 there too. The other three samples have no
-looser ensemble in the archive, so only the 4-support number exists for them.
+**svp is ahead of the published Severus output on hcc1954 and behind on the other three.** On
+hcc1954 it is ahead on F1 by 0.003 and on recall by 0.032, behind on precision by 0.030; the same
+call set scored against the 2-support ensemble is 0.924 / 0.710 / 0.803 against Severus's
+0.967 / 0.679 / 0.798, ahead on recall and F1 there too. On hcc1937 and h1437 svp passes Severus on
+PRECISION at supp≥6 (0.872 against 0.859, 0.806 against 0.782) but gives up too much recall to get
+there. h2009 is behind on both at every setting. The other three samples have no looser ensemble in
+the archive, so only the 4-support number exists for them.
 
-Simulation, unchanged code path: `hard` gives 526/600 junctions at 98.0% precision at supp≥3, and
-100.0% at supp≥5. Severus on the same contig BAM gets 83.9% / 93.9%.
+Simulation, same code path: `hard` gives 526/600 junctions at 98.0% precision at supp≥3 and 100.0%
+at supp≥5, against Severus's 83.9% / 93.9% on the same contig BAM.
 
 ## Measured and rejected
 

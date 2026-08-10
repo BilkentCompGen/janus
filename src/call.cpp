@@ -433,7 +433,7 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
 int cmd_call(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: svp call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] "
-                             "[min_sv=50] [cluster=50] [min_supp=3] [shred_n=6] [shred_win=300] [max_mm=0.01] "
+                             "[min_sv=50] [cluster=50] [min_supp=4] [shred_n=6] [shred_win=300] [max_mm=0.01] "
                              "[shred_rep=0.40] [anchor_rep=0.50] [normal_dirty=0.25]\n");
         return 2;
     }
@@ -441,7 +441,11 @@ int cmd_call(int argc, char** argv) {
     const hts_pos_t min_aln = argc > 5 ? std::atoll(argv[5]) : 0;
     const int min_sv     = argc >  6 ? std::atoi(argv[6])  : 50;
     const hts_pos_t tol  = argc >  7 ? std::atoll(argv[7]) : 50;
-    const uint32_t min_supp = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 3;
+    // 4, measured across all four pairs with a deep normal: it is the best or within 0.005 of the
+    // best F1 on each, and 3 is worse on every one of them. 5 wins on h2009 and h1437 by about as
+    // much as 4 wins on hcc1937 and hcc1954, so the tie is broken towards recall -- that is the side
+    // svp is behind on for three of the four.
+    const uint32_t min_supp = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 4;
     const int shred_n    = argc >  9 ? std::atoi(argv[9])  : 6;
     const hts_pos_t shred_win = argc > 10 ? std::atoll(argv[10]) : 300;
     const double max_mm  = argc > 11 ? std::atof(argv[11]) : 0.01;

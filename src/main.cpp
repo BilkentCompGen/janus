@@ -37,7 +37,7 @@ static void usage() {
         "  svp graph     <normal> <tumour> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
         "  svp junctions <graph.bin> <reads.fastq> <out.fa> [threads] [pad_cores] [per_chunk] [min_flank] [min_vaf] [edge_tcov] [edge_deg]\n"
         "  svp bubbles   <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]\n"
-        "  svp call      <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=3]\n"
+        "  svp call      <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=4]\n"
         "  svp pack      <out.svb> < reads.fastq\n"
         "  svp dump      <in.svb> > reads.fastq\n"
         "  svp refine    <dir>                                  (graph.bin -> refined.bin)\n"
