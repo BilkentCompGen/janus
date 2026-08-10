@@ -17,7 +17,7 @@
 // flanks, which are sequence the normal has too, as opposed to the somatic middle, which it does not
 // -- parse them into cores, and emit every normal read sharing at least `min_shared` of them. What
 // comes out is 1.56% of the normal on hcc1954, and it answers the question as well as the whole
-// sample does: 0.887/0.858 against 0.891/0.858, four minutes of alignment against two hours.
+// sample does: 0.887/0.858 against 0.891/0.858, fourteen minutes of alignment against two hours.
 #include "pick.h"
 
 #include "svp.h"
