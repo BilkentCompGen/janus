@@ -296,7 +296,7 @@ bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_po
 // contig name and chained only after the file is done.
 void collect(const char* bam, int min_mapq, hts_pos_t min_aln, int min_sv, std::vector<Jn>& jn,
              std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin, hts_pos_t win, double max_mm,
-             double max_rep) {
+             double max_rep, std::vector<std::string>& qname) {
     samFile* fp = sam_open(bam, "r");
     if (!fp) die("open bam");
     *hdr = sam_hdr_read(fp);
@@ -308,7 +308,9 @@ void collect(const char* bam, int min_mapq, hts_pos_t min_aln, int min_sv, std::
         if (!keep(b, min_mapq, min_aln, max_mm, st)) continue;
         const char* nm = bam_get_qname(b);
         auto it = qid.find(nm);
-        if (it == qid.end()) { it = qid.emplace(nm, (uint32_t)byq.size()).first; byq.emplace_back(); }
+        if (it == qid.end()) {
+            it = qid.emplace(nm, (uint32_t)byq.size()).first; byq.emplace_back(); qname.emplace_back(nm);
+        }
         Seg s{it->second, b->core.tid, b->core.pos, 0, 0, 0,
               (uint8_t)((b->core.flag & BAM_FREVERSE) != 0), 1.0, 1.0};
         const size_t before = jn.size();
@@ -394,7 +396,8 @@ std::string bnd_alt(const Cl& c, sam_hdr_t* h) {
     return c.j.d1 > 0 ? "N" + br : br + "N";
 }
 
-void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const std::vector<ClIns>& ci) {
+void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const std::vector<ClIns>& ci,
+               const std::vector<std::string>& qname) {
     FILE* f = std::fopen(path, "w");
     if (!f) die("open out.vcf");
     std::fprintf(f, "##fileformat=VCFv4.2\n##source=svp call\n");
@@ -407,6 +410,7 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
                     "##INFO=<ID=SUPP,Number=1,Type=Integer,Description=\"Supporting contigs\">\n"
                     "##INFO=<ID=REP,Number=1,Type=Float,Description=\"Tandem-repeat fraction of the anchor\">\n"
                     "##INFO=<ID=SPREAD,Number=1,Type=Integer,Description=\"bp between the furthest apart supporting breakpoints\">\n"
+                    "##INFO=<ID=CTG,Number=1,Type=String,Description=\"One junction contig supporting this call; `svp pick` reads the normal at ITS anchors\">\n"
                     "##ALT=<ID=DEL,Description=\"Deletion\">\n##ALT=<ID=DUP,Description=\"Duplication\">\n"
                     "##ALT=<ID=INV,Description=\"Inversion\">\n"
                     "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tt\n");
@@ -418,13 +422,13 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
                      c.p1, t, n++, alt.c_str(), t);
         if (c.j.c1 == c.j.c2)
             std::fprintf(f, "SVLEN=%" PRIhts_pos ";END=%" PRIhts_pos ";", c.p2 - c.p1, c.p2);
-        std::fprintf(f, "STRANDS=%c%c;SUPP=%u;REP=%.3f;SPREAD=%" PRIhts_pos "\tGT:DV\t0/1:%u\n",
+        std::fprintf(f, "STRANDS=%c%c;SUPP=%u;REP=%.3f;SPREAD=%" PRIhts_pos ";CTG=%s\tGT:DV\t0/1:%u\n",
                      c.j.d1 > 0 ? '+' : '-', c.j.d2 > 0 ? '+' : '-', c.supp, c.rep,
-                     std::max(c.sp1, c.sp2), c.supp);
+                     std::max(c.sp1, c.sp2), qname[c.j.q].c_str(), c.supp);
     }
     for (const ClIns& c : ci)
-        std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_INS%d\tN\t<INS>\t.\tPASS\tSVTYPE=INS;SVLEN=%d;SUPP=%u\tGT:DV\t0/1:%u\n",
-                     sam_hdr_tid2name(h, c.v.c), c.v.p, n++, c.len, c.supp, c.supp);
+        std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_INS%d\tN\t<INS>\t.\tPASS\tSVTYPE=INS;SVLEN=%d;SUPP=%u;CTG=%s\tGT:DV\t0/1:%u\n",
+                     sam_hdr_tid2name(h, c.v.c), c.v.p, n++, c.len, c.supp, qname[c.v.q].c_str(), c.supp);
     std::fclose(f);
 }
 
@@ -457,7 +461,8 @@ int cmd_call(int argc, char** argv) {
     const double dirty_f   = argc > 14 ? std::atof(argv[14]) : 0.25;
 
     std::vector<Jn> jn; std::vector<Ins> ins; sam_hdr_t* hdr = nullptr; Stats st;
-    collect(argv[1], min_mapq, min_aln, min_sv, jn, ins, &hdr, st, shred_n, shred_win, max_mm, shred_rep);
+    std::vector<std::string> qname;
+    collect(argv[1], min_mapq, min_aln, min_sv, jn, ins, &hdr, st, shred_n, shred_win, max_mm, shred_rep, qname);
     // A same-contig junction shorter than the SV floor is a local alignment artefact, not an event.
     jn.erase(std::remove_if(jn.begin(), jn.end(), [&](const Jn& j) {
         return j.c1 == j.c2 && j.p2 - j.p1 < min_sv; }), jn.end());
@@ -492,7 +497,7 @@ int cmd_call(int argc, char** argv) {
         std::fprintf(stderr, "[call] normalde de bulundugu icin elenen: %llu (%zu junction + %zu insertion kaldi)\n",
                      (unsigned long long)st.germ, cl.size(), ci.size());
     }
-    write_vcf(argv[3], hdr, cl, ci);
+    write_vcf(argv[3], hdr, cl, ci, qname);
 
     std::fprintf(stderr, "[call] kayit %llu | atlanan: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu, mismatch>%.0f%% %llu\n",
                  (unsigned long long)st.rec, (unsigned long long)st.unmapped, (unsigned long long)st.secondary,
