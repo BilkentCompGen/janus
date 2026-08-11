@@ -1,4 +1,4 @@
-// svp junctions <graph.bin> <reads> <out.fa> [threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]
+// snape junctions <graph.bin> <reads> <out.fa> [threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]
 //
 // Junction contigs instead of whole reads: only the sequence around each somatic run, and only from
 // as many reads as the breakpoint caller actually needs.
@@ -18,7 +18,7 @@
 // A record is named <read>_<n> so that the caller downstream still counts one supporting READ per
 // record, while a read that carries two different junctions cannot inflate either one's support.
 //
-// `drop.sigs` beside the graph -- written by `svp bubbles` -- lists somatic cores to exclude before
+// `drop.sigs` beside the graph -- written by `snape bubbles` -- lists somatic cores to exclude before
 // chunks are built: a core whose bubble has two arms of equal length that agree minimizer-for-
 // minimizer is an SNV or a sub-SV edit, not a junction, and carving it out here means no contig is
 // ever emitted for it. Absent file, no filter.
@@ -31,7 +31,7 @@
 // low-coverage region nor to a repeat whose counts are inflated.
 #include "junctions.h"
 
-#include "svp.h"
+#include "snape.h"
 #include "unordered_dense.h"
 #include <algorithm>
 #include <atomic>
@@ -46,7 +46,7 @@
 #include <vector>
 
 namespace {
-int LEVEL = 5;                             // runtime, from SVP_LEVEL; echoed in the banner
+int LEVEL = 5;                             // runtime, from SNAPE_LEVEL; echoed in the banner
 constexpr int MARGIN = 10;                 // MUST match the graph build
 constexpr size_t BATCH = 2000;
 
@@ -64,7 +64,7 @@ uint32_t findp(std::vector<uint32_t>& p, uint32_t x) {
     return x;
 }
 
-// `svp bubbles` output, if that stage has run: the somatic cores it identified as sub-SV edits
+// `snape bubbles` output, if that stage has run: the somatic cores it identified as sub-SV edits
 ankerl::unordered_dense::set<uint64_t> load_drop(const std::string& graph) {
     ankerl::unordered_dense::set<uint64_t> d;
     const size_t cut = graph.find_last_of('/');
@@ -98,7 +98,7 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
         som[i] = (nc[i] == 0 && tc[i] > 0);
         if (som[i] && drop.contains(sig[i])) { som[i] = 0; ndrop++; }
     }
-    if (ndrop) std::fprintf(stderr, "[jcontigs] %llu somatik cekirdek SVP_DROP_SIGS ile elendi\n", (unsigned long long)ndrop);
+    if (ndrop) std::fprintf(stderr, "[jcontigs] %llu somatik cekirdek drop.sigs ile elendi\n", (unsigned long long)ndrop);
     std::vector<uint32_t> par(K);
     for (uint64_t i = 0; i < K; i++) par[i] = (uint32_t)i;
     for (uint64_t e = 0; e < E; e++) {
@@ -169,7 +169,7 @@ struct Read { std::string name, seq; };
 }  // namespace
 
 int cmd_junctions(int argc, char** argv) {
-    if (argc < 4) { std::fprintf(stderr, "usage: svp junctions <graph.bin> <reads> <out.fa> "
+    if (argc < 4) { std::fprintf(stderr, "usage: snape junctions <graph.bin> <reads> <out.fa> "
                                  "[threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"); return 2; }
     const std::string gpath = argv[1], rpath = argv[2], opath = argv[3];
     const int NT = argc > 4 ? std::atoi(argv[4]) : 16;
@@ -181,7 +181,7 @@ int cmd_junctions(int argc, char** argv) {
     const uint32_t PER = argc > 6 ? (uint32_t)std::atoi(argv[6]) : 5;
     const int64_t MINF = argc > 7 ? std::atoll(argv[7]) : 300;
     const double MINVAF = argc > 8 ? std::atof(argv[8]) : 0.0;
-    if (const char* lv = std::getenv("SVP_LEVEL")) LEVEL = std::atoi(lv);
+    if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
 
     uint64_t K = 0; size_t nsom = 0;
     const Chunks C = build_chunks(gpath, K, nsom, MINVAF);

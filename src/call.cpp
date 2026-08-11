@@ -1,6 +1,6 @@
-// svp call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=4]
+// snape call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5]
 //
-// Breakpoints from the aligned junction contigs -- the stage after minimap2, in svp instead of
+// Breakpoints from the aligned junction contigs -- the stage after minimap2, in snape instead of
 // Severus. It is the part of Severus that was doing work on this input and nothing else: a MAPQ and
 // aligned-length gate, split alignments chained in QUERY order, CIGAR indels at or above the SV
 // floor, clustering, and a support floor. What Severus carries besides that is idle here by
@@ -13,7 +13,7 @@
 // so the caller never needs to know what an SV is in order to type one.
 //
 // Support counts DISTINCT contig names, so a contig that reaches the same junction twice (once
-// through its CIGAR, once through a split) still supports it once, and `svp junctions` naming its
+// through its CIGAR, once through a split) still supports it once, and `snape junctions` naming its
 // records <read>_<n> keeps that equal to one supporting READ.
 //
 // Positions are 1-based from the moment a junction is built (a 0-based exclusive reference end is
@@ -397,7 +397,7 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
                const std::vector<std::string>& qname) {
     FILE* f = std::fopen(path, "w");
     if (!f) die("open out.vcf");
-    std::fprintf(f, "##fileformat=VCFv4.2\n##source=svp call\n");
+    std::fprintf(f, "##fileformat=VCFv4.2\n##source=snape call\n");
     for (int i = 0; i < sam_hdr_nref(h); i++)
         std::fprintf(f, "##contig=<ID=%s,length=%" PRIhts_pos ">\n", sam_hdr_tid2name(h, i), sam_hdr_tid2len(h, i));
     std::fprintf(f, "##INFO=<ID=SVTYPE,Number=1,Type=String,Description=\"Type\">\n"
@@ -406,7 +406,7 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
                     "##INFO=<ID=STRANDS,Number=1,Type=String,Description=\"Direction each side leaves the reference\">\n"
                     "##INFO=<ID=SUPP,Number=1,Type=Integer,Description=\"Supporting contigs\">\n"
                     "##INFO=<ID=REP,Number=1,Type=Float,Description=\"Tandem-repeat fraction of the anchor\">\n"
-                    "##INFO=<ID=CTG,Number=1,Type=String,Description=\"One junction contig supporting this call; `svp pick` reads the normal at ITS anchors\">\n"
+                    "##INFO=<ID=CTG,Number=1,Type=String,Description=\"One junction contig supporting this call; `snape pick` reads the normal at ITS anchors\">\n"
                     "##ALT=<ID=DEL,Description=\"Deletion\">\n##ALT=<ID=DUP,Description=\"Duplication\">\n"
                     "##ALT=<ID=INV,Description=\"Inversion\">\n"
                     "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tt\n");
@@ -432,8 +432,8 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
 
 int cmd_call(int argc, char** argv) {
     if (argc < 4) {
-        std::fprintf(stderr, "usage: svp call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] "
-                             "[min_sv=50] [cluster=50] [min_supp=4] [shred_n=6] [shred_win=300] [max_mm=0.01] "
+        std::fprintf(stderr, "usage: snape call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] "
+                             "[min_sv=50] [cluster=50] [min_supp=5] [shred_n=6] [shred_win=300] [max_mm=0.01] "
                              "[shred_rep=0.40] [anchor_rep=0.50] [normal_dirty=0.25]\n");
         return 2;
     }
@@ -441,11 +441,11 @@ int cmd_call(int argc, char** argv) {
     const hts_pos_t min_aln = argc > 5 ? std::atoll(argv[5]) : 0;
     const int min_sv     = argc >  6 ? std::atoi(argv[6])  : 50;
     const hts_pos_t tol  = argc >  7 ? std::atoll(argv[7]) : 50;
-    // 4, measured across all four pairs with a deep normal: it is the best or within 0.005 of the
-    // best F1 on each, and 3 is worse on every one of them. 5 wins on h2009 and h1437 by about as
-    // much as 4 wins on hcc1937 and hcc1954, so the tie is broken towards recall -- that is the side
-    // svp is behind on for three of the four.
-    const uint32_t min_supp = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 4;
+    // 5, swept on all four pairs through the whole shipped pipeline (F1): 3 is worse than 4
+    // everywhere, and between 4 and 5 the split is two pairs each -- but 4 wins hcc1954 by 0.002 and
+    // hcc1937 by 0.003 while 5 wins h2009 by 0.014 and h1437 by 0.028, so 5 has the better mean
+    // (0.808 against 0.799). 6 gives back more recall than it buys.
+    const uint32_t min_supp = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 5;
     const int shred_n    = argc >  9 ? std::atoi(argv[9])  : 6;
     const hts_pos_t shred_win = argc > 10 ? std::atoll(argv[10]) : 300;
     const double max_mm  = argc > 11 ? std::atof(argv[11]) : 0.01;

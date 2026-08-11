@@ -4,13 +4,13 @@ _Project-specific guidance. Global behavioural rules + cross-project map: `/home
 
 ---
 
-`svp` — a somatic SV caller that makes the somatic decision **before** alignment. Normal and tumour
+`snape` — a somatic SV caller that makes the somatic decision **before** alignment. Normal and tumour
 HiFi reads go into one 2-colour LCP-core graph; a core the tumour carries and the normal never does
 is somatic by construction, with no reference and no assembly involved. Those cores are cut out of
 the reads that carry them as junction contigs, and only the contigs (plus the ~1.5% of normal reads
 that answer the germline question) are ever aligned. C++17, one binary, one Makefile, no CI.
 
-    ./svp run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir> --threads 16
+    ./snape run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir> --threads 16
 
 ## Hard rules
 
@@ -30,6 +30,9 @@ that answer the germline question) are ever aligned. C++17, one binary, one Make
     docs/           PIPELINE (stages) · RESULTS (every measurement) · FOUNDATIONS (LCP facts) · CODE_STYLE
     scripts/        measurement only: the simulation read generator, the junction-level sim scorer,
                     the HiFi error profiler. Nothing here is part of calling.
+    paper/          main.tex, the method paper (LNCS). Build it with the texlive image:
+                    docker run --rm --user $(id -u):$(id -g) -v "$PWD":/work -w /work davp-latex \
+                        -c "pdflatex -interaction=nonstopmode main.tex"   (twice, for references)
     hifi/           get.sh fetches the CASTLE pairs; the reads/truth it writes are untracked
     lib/            third-party, built in place (lcptools `biolcp` is the only build dependency)
     simulation/     insilicoSV configs + generated truth/reads (untracked)

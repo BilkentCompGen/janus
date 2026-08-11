@@ -13,7 +13,7 @@ comparison is symmetric. F1 against that truth, from the first real-data sitting
 | now | **0.872** | 0.854 | 0.762 | 0.759 |
 | Severus, published | 0.871 | 0.903 | 0.826 | 0.810 |
 
-svp passes Severus on hcc1954 and does not on the other three. Everything below is in the code
+snape passes Severus on hcc1954 and does not on the other three. Everything below is in the code
 unless it says otherwise.
 
 ## The data
@@ -39,19 +39,19 @@ unprefixed `cmd:` line Minda writes into its own output removed, because pandas 
 
 **The comparison is not symmetric, and the size of that is measured.** Severus is one of the callers
 whose output built the ensemble, so a Severus call is in the truth partly for reasons that have
-nothing to do with being right. The archive also ships looser ensembles for hcc1954. Scoring one and
-the same svp call set against each:
+nothing to do with being right. The archive also ships two looser ensembles for hcc1954, and the
+shipped call set and Severus's published one score against all three like this:
 
-| truth | records | svp FP | svp precision |
+| truth | records | snape P/R/F1 | Severus P/R/F1 |
 |---|---|---|---|
-| minda_4_2 (what the paper reports against) | 1106 | 200 | 0.827 |
-| minda_3_2 | 1168 | 172 | 0.851 |
-| minda_2_1 | 1413 | 136 | 0.882 |
+| minda_4_2 (what the paper reports against) | 1106 | 0.895 / 0.847 / 0.870 | 0.921 / 0.826 / 0.871 |
+| minda_3_2 | 1168 | 0.917 / 0.822 / **0.867** | 0.938 / 0.796 / 0.861 |
+| minda_2_1 | 1413 | 0.940 / 0.696 / **0.800** | 0.967 / 0.679 / 0.798 |
 
-64 of the 200 "false" calls are events some looser consensus contains. Of the 287 records that
-separate the 2-support ensemble from the 4-support one, 247 have two or more distinct tools behind
-them and 40 are one tool counted twice (severus on two technologies). That is an upper bound on how
-much of our false-positive count is a truth gap, not a measurement of it.
+47 of the 110 calls the 4-support ensemble counts false are events the 2-support one contains. Of
+the 287 records that separate the two, 247 have two or more distinct tools behind them and 40 are
+one tool counted twice (severus on two technologies). snape is ahead on F1 on both wider ensembles —
+which is where the truth depends least on Severus's own output.
 
 ## What is in the code, and what each is worth
 
@@ -103,14 +103,19 @@ Aligning the whole normal to get it would make the aligner the dominant cost of 
 premise is that the graph replaces alignment — two hours against about forty minutes for everything
 else. It is also unnecessary. The question is only ever asked at the candidate loci, and the graph
 can say which normal reads cover those without a reference: they share LCP cores with the germline
-ANCHORS of the contig each candidate came from. `svp pick` does that in one pass. Measured on
-hcc1954, against the 8.35M-read whole-normal arm:
+ANCHORS of the contig each candidate came from. `snape pick` does that in one pass. Measured on
+hcc1954, against the whole-normal arm:
 
 | normal | reads | alignment | precision | recall | F1 |
 |---|---|---|---|---|---|
-| whole | 8.35M | ~2 h | 0.891 | 0.858 | 0.874 |
-| picked, `min_shared` 1 | 405,604 (3.58%) | 858 s | 0.887 | 0.858 | 0.872 |
-| picked, `min_shared` 5 | 176,912 (1.56%) | 858 s | 0.887 | 0.858 | 0.872 |
+| whole | 11.34M | ~2 h | 0.891 | 0.858 | 0.874 |
+| picked, `min_shared` 1 | 405,604 (3.58%) | — | 0.887 | 0.858 | 0.872 |
+| picked, `min_shared` 5 | 176,912 (1.56%) | 11:25 | 0.887 | 0.858 | 0.872 |
+
+The selection itself is one pass over the normal reads: 1,735 candidate contigs give 119,338 anchor
+cores, and the pass takes 4:59. What the whole check is worth, at the shipped floor: the contigs
+alone produce 1,601 calls at **0.587 / 0.849**, and asking the normal at each of their loci removes
+554 — 552 false, 2 true — for **0.895 / 0.847**.
 
 1 and 5 give the identical call set — TP 949, FP 121 — so the tighter cut is free. A read that really
 covers the locus shares dozens of cores; a single shared core is what a repetitive anchor collects
@@ -120,7 +125,7 @@ measured against their deepened normal aligned whole.
 **7. `min_supp` 3 → 4.** Not a mechanism, a point on the precision/recall curve — but the point is
 chosen from four samples rather than one: 3 is worse than 4 on every one of them, and 5 wins on
 h2009 and h1437 by about as much as 4 wins on hcc1937 and hcc1954. The tie goes to recall, which is
-the side svp is behind on for three of the four.
+the side snape is behind on for three of the four.
 
 **8. Homopolymer compression before hashing.** Checked on the reads themselves rather than assumed,
 and not on the simulation: `scripts/hifi_error_profile.py` compares hcc1954's normal reads to each
@@ -131,60 +136,95 @@ Substitution errors, the control, show no enrichment at all (1.0–1.1×). 80% o
 run ≥ 2, so compressing runs before hashing neutralises about two thirds of everything that could
 change a core's identity.
 
-## Where svp stands
+## Where snape stands
 
-pad 50, `min_aln` 0, `shred_rep` 0.40, `anchor_rep` 0.50, `normal_dirty` 0.25, `max_mm` 0.01,
-`min_supp` 4, every sample called against a normal deepened to 33–44×, against `minda_4_2`.
+Every row below is one run of the whole pipeline at its shipped defaults — pad 50, `min_aln` 0,
+`shred_rep` 0.40, `anchor_rep` 0.50, `normal_dirty` 0.25, `max_mm` 0.01, `min_supp` 4, and the
+germline question asked against the normal reads `pick` selected. Nothing is tuned per pair.
 
-| sample | | precision | recall | F1 |
-|---|---|---|---|---|
-| **hcc1954** | 2026-08-06 | 0.218 | 0.736 | 0.337 |
-| | supp≥4 | **0.887** | **0.858** | **0.872** |
-| | supp≥5 | 0.895 | 0.847 | 0.870 |
-| | Severus (published) | 0.921 | 0.826 | 0.871 |
-| **h2009** | 2026-08-06 | 0.096 | 0.871 | 0.173 |
-| | supp≥4 | 0.828 | 0.857 | 0.842 |
-| | supp≥5 | 0.868 | 0.841 | 0.854 |
-| | Severus | 0.913 | 0.894 | 0.903 |
-| **hcc1937** | 2026-08-06 | 0.165 | 0.651 | 0.263 |
-| | supp≥4 | 0.846 | 0.694 | 0.762 |
-| | supp≥6 | **0.872** | 0.613 | 0.720 |
-| | Severus | 0.859 | 0.795 | 0.826 |
-| **h1437** | 2026-08-06 | 0.033 | 0.701 | 0.063 |
-| | supp≥5 | 0.749 | 0.769 | 0.759 |
-| | supp≥6 | **0.806** | 0.715 | 0.758 |
-| | Severus | 0.782 | 0.842 | 0.810 |
+| pair | picked normal | precision | recall | F1 | Severus (published) |
+|---|---|---|---|---|---|
+| hcc1954 | 176,912 (1.56%) | 0.895 | 0.847 | **0.870** | 0.921 / 0.826 / 0.871 |
+| h2009 | 318,542 (2.18%) | 0.863 | 0.841 | 0.852 | 0.913 / 0.894 / 0.903 |
+| hcc1937 | 104,739 (0.97%) | 0.854 | 0.683 | 0.759 | 0.859 / 0.795 / 0.826 |
+| h1437 | 182,922 (1.46%) | 0.728 | 0.774 | 0.750 | 0.782 / 0.842 / 0.810 |
 
-**svp is level with the published Severus output on hcc1954 and behind on the other three.** On
-hcc1954 it is ahead on recall by 0.032 and behind on precision by 0.034, for an F1 0.001 short; with
-the whole normal aligned instead of the picked 1.56% it is 0.891/0.858/0.874, ahead by 0.003 — that
-difference is what the pick costs, against two hours of alignment instead of fourteen minutes. The
-same call set scored against the 2-support ensemble is 0.924/0.710/0.803 against Severus's
-0.967/0.679/0.798, ahead on recall and F1 there too. On hcc1937 and h1437 svp passes Severus on
-PRECISION at supp≥6 (0.872 against 0.859, 0.806 against 0.782) but gives up too much recall to get
-there. h2009 is behind on both at every setting. The other three samples have no looser ensemble in
-the archive, so only the 4-support number exists for them.
+For reference, the same four pairs on 2026-08-06 were 0.337 / 0.173 / 0.263 / 0.063 F1.
 
-The whole of `svp run` was verified end to end on hcc1954: the one command reproduces the
-0.887/0.858/0.872 that the stages run by hand produce, record for record.
+**snape lands 0.001 of F1 short of the published Severus output on hcc1954 and behind on the other
+three.** On hcc1954 it is ahead on recall by 0.021 for 0.026 of precision; against the two looser
+ensembles the same call set is ahead on F1 (table earlier).
 
-## Simulation
+What the `pick` costs, against the same call made with the whole deepened normal aligned (measured
+at a floor of 4): hcc1954 0.891 → 0.887 precision, h2009 0.828 → 0.820, hcc1937 0.846 → 0.843,
+recall unchanged in all three.
+That is the price of aligning 1–2% of the normal instead of all of it, and it buys back an hour and
+three quarters per pair.
 
-The development loop, and the regression check for everything above. `insilicoSV` writes a tumour
-genome and its truth from `simulation/ref.fasta`; Badread simulates HiFi reads from both
-(`scripts/sim_reads_badread.sh`, `scripts/gen_badread_reads_wg.sh`). `hard` is a whole-genome ~30×
-pair, hypermutated: ~118k SNVs, ~6.6k small indels, ~600 SVs, `min_intersv_dist=1` so small variants
-pepper the junctions.
+The support floor is the one knob with a per-sample optimum, swept on this same arm (F1):
 
-Scoring is **junction-level**, against the simulator's own `adjacencies.bed` — the pairs of
-reference loci the tumour puts next to each other and the normal does not — so a deletion counts one
-junction and an inversion two, and a caller that splits an event into its real pieces is not
-punished for it:
+| supp | hcc1954 | h2009 | hcc1937 | h1437 | mean |
+|---|---|---|---|---|---|
+| ≥3 | 0.784 | 0.698 | 0.641 | 0.476 | 0.650 |
+| ≥4 | **0.872** | 0.838 | **0.762** | 0.722 | 0.799 |
+| **≥5 (shipped)** | 0.870 | **0.852** | 0.759 | **0.750** | **0.808** |
+| ≥6 | 0.865 | 0.835 | 0.719 | 0.748 | 0.792 |
 
-    scripts/severus_bp_eval.py <calls.vcf> <truth.vcf> <adjacencies.bed> [tolerance=100]
+3 is worse than 4 on every pair. Between 4 and 5 the split is two pairs each, but the margins are
+not: 4 wins hcc1954 by 0.002 and hcc1937 by 0.003, while 5 wins h2009 by 0.014 and h1437 by 0.028,
+so **5 is shipped** — chosen on the mean over four pairs, not on hcc1954, where a floor of 4 would
+read 0.872 and put us past Severus. The candidate pass that feeds `pick` runs at 4, one below the
+reporting floor: a locus too many there costs alignment, never precision.
 
-At the shipped defaults `hard` gives **526/600 junctions at 98.0% precision** at supp≥3 and 100.0%
-at supp≥5, against Severus's 83.9% / 93.9% on the same contig BAM.
+Simulation, whole pipeline at the shipped defaults: `hard` gives **526/600 junctions and 70/78
+insertions at 99.7% precision** — 2 of 593 calls do not match a truth junction. Per type: DEL 91.0%,
+INV 92.3%, INS 89.7%, DUP 76.9%.
+
+## What it costs, and what the other arm costs
+
+Per stage on hcc1954, 16 threads pinned, at the shipped defaults, and against the alignment-first
+arm on the same machine (2026-08-11):
+
+| arm | stage | wall | peak RSS |
+|---|---|---|---|
+| **snape** | `graph` (both read sets, 391 Gbp) | 13:36 | 41.2 GB |
+| | `bubbles` | 09:43 | 5.7 GB |
+| | `junctions` | 02:53 | 2.9 GB |
+| | minimap2 + sort, 202,882 contigs / 1.87 Gbp | 04:04 | 18.8 GB |
+| | `call` (candidates, floor 4) | 00:02 | 0.03 GB |
+| | `pick` | 04:59 | 0.03 GB |
+| | minimap2 + sort, 176,912 normal reads | 11:25 | 20.5 GB |
+| | `call` | 00:05 | 0.03 GB |
+| | **total** | **46:47** | **41.2 GB** |
+| **alignment-first** | minimap2 + sort + index, 196 Gbp tumour | 2:02:57 | 20.4 GB |
+| | minimap2 + sort + index, 195 Gbp normal | 1:54:23 | 19.9 GB |
+| | Severus 1.7, both BAMs, 16 threads | 09:47 | 13.2 GB |
+| | **total** | **4:07:07** | **20.4 GB** |
+
+**5.3× less wall time, at twice the peak memory**, and 1.1 GB of alignments left on disk against
+93 GB. Severus itself is not the cost — it runs in 9:47; the 3:57 of alignment in front of it is.
+Both arms were fed from the same `.svb`, so neither paid for gzip; reading the original `.gz` would
+have made the alignment arm slower still.
+
+Severus on those BAMs (1.7, unphased, its own VNTR bed) scores **0.912 / 0.819 / 0.863**, against
+the 0.921 / 0.826 / 0.871 of its published calls — the input path is not what separates the two
+callers.
+
+**None of these callers reads base qualities.** Severus computes its "read quality" from the
+alignment (NM tag, CIGAR mismatch rate, MAPQ, aligned length), and `query_qualities` never appears
+in its source; pbsv and sawfish document no base-quality option at all; minimap2 scores from
+sequence only. That is why the `.svb` path — 2-bit, no qualities, no read names — costs nothing
+here, for us or for them.
+
+## Running it
+
+    snape run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir>
+
+One command, eight stages, each skipped when its output is already there: graph → bubbles →
+junctions → minimap2 on the contigs → `call` with no normal → `pick` → minimap2 on the picked normal
+reads → `call`. Verified end to end on hcc1954. Every stage takes .svb or uncompressed FASTQ
+directly, so nothing has to convert between them; the only outside programs are minimap2 and
+samtools.
 
 ## Measured and rejected
 
@@ -234,7 +274,8 @@ Written down because each cost real time and each would otherwise be tried again
 
 ## What is left
 
-hcc1954's remaining 116 false calls at supp≥4 have a median SVLEN of 384 bp and a median support of
+hcc1954's false calls (the 116 left at a floor of 4, where this was analysed) have a median SVLEN of
+384 bp and a median support of
 7 against 10 for the true calls; half are under 500 bp. No property tested separates them at a ratio
 worth applying. The recall gap on hcc1937 — where 66% of the misses have no contig at either
 breakpoint — is upstream of the caller, in what the graph and `junctions` produce.

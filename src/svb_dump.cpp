@@ -1,5 +1,5 @@
-// svp dump: one .svb file (argv[1]) -> FASTQ on stdout, for round-trip verification/debug.
-// Header + quality are synthetic (svp ignores both); only the sequence is meaningful.
+// snape dump: one .svb file (argv[1]) -> FASTQ on stdout, for round-trip verification/debug.
+// Header + quality are synthetic (snape ignores both); only the sequence is meaningful.
 // Format matches src/graph.cpp open_svb/svb_next and src/svb_pack.cpp.
 #include "svb.h"
 
@@ -10,7 +10,7 @@
 #include <vector>
 
 int cmd_dump(int argc, char** argv) {
-    if (argc < 2) { std::fprintf(stderr, "usage: svp dump in.svb > reads.fastq\n"); return 1; }
+    if (argc < 2) { std::fprintf(stderr, "usage: snape dump in.svb > reads.fastq\n"); return 1; }
     FILE* f = std::fopen(argv[1], "rb");
     if (!f) { std::perror("fopen"); return 1; }
     char hdr[32];

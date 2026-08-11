@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Is homopolymer compression justified on THIS data, or is it folklore?
 
-svp compresses homopolymers before hashing a core, on the stated grounds that long-read indel errors
+snape compresses homopolymers before hashing a core, on the stated grounds that long-read indel errors
 are largely run-length slips. That claim is checkable on the reads themselves.
 
 It cannot be checked against the reference: a germline SNP happens about once per 1000 bp and the

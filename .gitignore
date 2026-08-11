@@ -5,7 +5,7 @@
 __pycache__
 
 # the binary and its objects
-/svp
+/snape
 build
 
 # third-party sources built in place (lcptools, Badread, ...) and generated benchmark data
@@ -19,8 +19,15 @@ outputs
 /hifi/*
 !/hifi/*.sh
 
-# stray LaTeX build -- the paper lives in /home/yuio/paper
-/paper
+# the paper: source is tracked, LaTeX build products are not
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.pdf
+paper/*.toc
+paper/*.bbl
+paper/*.blg
+paper/*.synctex.gz
 
 # claude workspace (contains git worktrees)
 .claude

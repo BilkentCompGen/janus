@@ -1,19 +1,19 @@
-// svp: 2-colour LCP-core graph built FROM READS (normal vs tumour reads), then the somatic material
+// snape: 2-colour LCP-core graph built FROM READS (normal vs tumour reads), then the somatic material
 // carved out of those reads as junction contigs. READS ONLY -- no assembly, and no reference until
 // the contigs are handed to an aligner.
 //
-//   svp run       <normal> <tumour> <ref.fa> <dir>   THE PIPELINE, end to end
+//   snape run       <normal> <tumour> <ref.fa> <dir>   THE PIPELINE, end to end
 //
-//   svp graph     <normal> <tumour> <dir>      reads           -> dir/graph.bin
-//   svp bubbles   <graph.bin> <normal> <tumour> graph + reads  -> dir/drop.sigs (sub-SV cores)
-//   svp junctions <graph.bin> <reads> <out.fa> graph + reads   -> junction contigs
-//   svp call      <ctg.bam> <normal.bam|-> <out.vcf> aligned contigs -> breakpoints
-//   svp pick      <ctg.fa> <calls.vcf> <normal> <out.fq> the normal reads worth aligning
-//   svp pack      <out.svb>                    FASTQ (stdin)   -> 2-bit .svb
-//   svp dump      <in.svb>                     .svb            -> FASTQ (stdout)
+//   snape graph     <normal> <tumour> <dir>      reads           -> dir/graph.bin
+//   snape bubbles   <graph.bin> <normal> <tumour> graph + reads  -> dir/drop.sigs (sub-SV cores)
+//   snape junctions <graph.bin> <reads> <out.fa> graph + reads   -> junction contigs
+//   snape call      <ctg.bam> <normal.bam|-> <out.vcf> aligned contigs -> breakpoints
+//   snape pick      <ctg.fa> <calls.vcf> <normal> <out.fq> the normal reads worth aligning
+//   snape pack      <out.svb>                    FASTQ (stdin)   -> 2-bit .svb
+//   snape dump      <in.svb>                     .svb            -> FASTQ (stdout)
 //
 // Every stage takes .svb or uncompressed FASTQ, so the pipeline needs no shell to convert between
-// them. The only outside programs are the aligner and samtools, which svp is not and does not
+// them. The only outside programs are the aligner and samtools, which snape is not and does not
 // reimplement; `run` invokes them and every default it passes is the one measured in
 // docs/RESULTS.md.
 #include "bubbles.h"
@@ -38,20 +38,20 @@ static bool exists(const std::string& p) { FILE* f = std::fopen(p.c_str(), "rb")
 static void usage() {
     std::fprintf(stderr,
         "usage:\n"
-        "  svp run       <normal> <tumour> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10] [--min-mult 3]\n"
-        "  svp graph     <normal> <tumour> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
-        "  svp junctions <graph.bin> <reads> <out.fa> [threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"
-        "  svp bubbles   <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]\n"
-        "  svp call      <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=4]\n"
-        "  svp pick      <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads=16] [min_shared=5]\n"
-        "  svp pack      <out.svb> < reads.fastq\n"
-        "  svp dump      <in.svb> > reads.fastq\n");
+        "  snape run       <normal> <tumour> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10] [--min-mult 3]\n"
+        "  snape graph     <normal> <tumour> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
+        "  snape junctions <graph.bin> <reads> <out.fa> [threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"
+        "  snape bubbles   <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]\n"
+        "  snape call      <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5]\n"
+        "  snape pick      <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads=16] [min_shared=5]\n"
+        "  snape pack      <out.svb> < reads.fastq\n"
+        "  snape dump      <in.svb> > reads.fastq\n");
 }
 
 // ---- `run`: the pipeline ---------------------------------------------------------------------
 //
 // Each stage is skipped when its output is already there, so a kill and a restart pick up where this
-// left off. Two of them are the aligner and samtools; the rest is svp.
+// left off. Two of them are the aligner and samtools; the rest is snape.
 //
 //   graph.bin        the 2-colour core graph, from both samples' reads
 //   drop.sigs        the somatic cores that are sub-SV edits and must never become a contig
@@ -63,11 +63,11 @@ static void usage() {
 //   normal.bam       ONLY those, against the reference
 //   calls.vcf        `call` again, now able to ask the normal at each locus
 //
-// The normal is not aligned whole. That decision is worth 1168 false calls on hcc1954 and needs full
+// The normal is not aligned whole. That question removes 552 false calls on hcc1954 and needs full
 // depth to make (3x leaves 290 false calls, 5.5x 172, 11x 136, 44x 116) -- but it is only ever asked
 // at the candidate loci, and the graph can say which normal reads cover those. Measured: 177k picked
-// reads give 0.887/0.858 against 0.891/0.858 for the whole 8.35M-read normal, in fourteen minutes
-// of alignment instead of two hours.
+// reads give 0.887/0.858 against 0.891/0.858 for the whole 11.3M-read normal, in eleven and a half
+// minutes of alignment instead of two hours.
 
 static int sh(const std::string& cmd) {
     std::fprintf(stderr, "[run] $ %s\n", cmd.c_str());
@@ -133,10 +133,12 @@ static int run_pipeline(const std::string& normal, const std::string& tumour, co
     }
 
     // The germline check needs the normal AT the candidate loci and nowhere else, so the candidates
-    // are made first, without it, and they are what says which normal reads to align.
+    // are made first, without it, and they are what says which normal reads to align. Their support
+    // floor is ONE BELOW the reporting floor on purpose: a call sitting at the boundary still gets
+    // its normal reads aligned, and a locus too many costs alignment, never precision.
     if (exists(cand)) std::fprintf(stderr, "[run] atlandi aday call: %s var\n", cand.c_str());
     else {
-        std::vector<std::string> a{"call", cbam, "-", cand};
+        std::vector<std::string> a{"call", cbam, "-", cand, "10", "0", "50", "50", "4"};
         std::vector<char*> v; for (auto& s : a) v.push_back(&s[0]);
         if (int rc = cmd_call((int)v.size(), v.data())) return rc;
     }

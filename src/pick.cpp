@@ -1,10 +1,11 @@
-// svp pick <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads=16] [min_shared=5]
+// snape pick <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads=16] [min_shared=5]
 //
 // Which normal reads are worth aligning.
 //
-// `svp call` asks the normal reads at the reference locus whether a call is germline, and that one
-// question is the largest single source of precision in the pipeline: without it hcc1954 leaves 1409
-// false calls instead of 241. But answering it by aligning the WHOLE normal makes the aligner the
+// `snape call` asks the normal reads at the reference locus whether a call is germline, and that one
+// question is the largest single source of precision in the pipeline: hcc1954's contigs alone produce
+// 1601 calls at 0.587/0.849, and asking the normal at each of their loci removes 554 of them -- 552
+// false, 2 true -- for 0.895/0.847. But answering it by aligning the WHOLE normal makes the aligner the
 // dominant cost of a caller whose entire premise is that the graph replaces alignment -- two hours
 // against about forty minutes for every other stage put together.
 //
@@ -17,10 +18,11 @@
 // flanks, which are sequence the normal has too, as opposed to the somatic middle, which it does not
 // -- parse them into cores, and emit every normal read sharing at least `min_shared` of them. What
 // comes out is 1.56% of the normal on hcc1954, and it answers the question as well as the whole
-// sample does: 0.887/0.858 against 0.891/0.858, fourteen minutes of alignment against two hours.
+// sample does: 0.887/0.858 against 0.891/0.858, eleven and a half minutes of alignment against two
+// hours.
 #include "pick.h"
 
-#include "svp.h"
+#include "snape.h"
 #include "unordered_dense.h"
 
 extern "C" {
@@ -39,7 +41,7 @@ extern "C" {
 
 namespace {
 
-int LEVEL = 5;                                 // runtime, from SVP_LEVEL
+int LEVEL = 5;                                 // runtime, from SNAPE_LEVEL
 constexpr int MARGIN = 10;                     // MUST match the graph build
 
 [[noreturn]] void die(const char* m) { std::fprintf(stderr, "[pick] FATAL: %s\n", m); std::exit(1); }
@@ -117,7 +119,7 @@ size_t anchor_cores(const char* fa, const ankerl::unordered_dense::set<std::stri
 
 int cmd_pick(int argc, char** argv) {
     if (argc < 5) {
-        std::fprintf(stderr, "usage: svp pick <ctg.fa> <calls.vcf> <normal reads> <out.fastq> "
+        std::fprintf(stderr, "usage: snape pick <ctg.fa> <calls.vcf> <normal reads> <out.fastq> "
                              "[threads=16] [min_shared=5]\n");
         return 2;
     }
@@ -128,7 +130,7 @@ int cmd_pick(int argc, char** argv) {
     // hcc1954: 1 picks 405,604 reads (3.58%), 5 picks 176,912 (1.56%), and the calls that come out
     // are identical to the record -- TP 949, FP 121 either way.
     const int MINSH = argc > 6 ? std::atoi(argv[6]) : 5;
-    if (const char* lv = std::getenv("SVP_LEVEL")) LEVEL = std::atoi(lv);
+    if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
 
     const auto want = wanted_contigs(vcf.c_str());
     if (want.empty()) { std::fprintf(stderr, "[pick] adayda CTG= yok, secilecek bir sey yok\n"); return 1; }

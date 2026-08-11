@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "$FORMAT" = fastq ] || [ "$FORMAT" = svb ] || { echo "[badread] -f must be fastq|svb" >&2; exit 2; }
-SVB_PACK="$ROOT/svp pack"
+SVB_PACK="$ROOT/snape pack"
 [ "$FORMAT" != svb ] || [ -x "$SVB_PACK" ] || { echo "[badread] svb_pack missing: $SVB_PACK (run 'make')" >&2; exit 2; }
 [ -n "$INPUT" ] && [ -n "$OUTDIR" ] || { echo "[badread] need -i <genome.fa> and -o <out_dir>" >&2; exit 2; }
 [ -f "$INPUT" ] || { echo "[badread] input not found: $INPUT" >&2; exit 2; }
@@ -95,7 +95,7 @@ for i in $(seq 0 $((THREADS-1))); do
   (
     "$SAMTOOLS" faidx "$INPUT" $(cat "$REGIONS") > "$WORK/shard.$i.fa"
     # svb: pack Badread's FASTQ straight to a 2-bit shard (no FASTQ on disk).
-    # fastq: written uncompressed -- svp reads plain FASTQ only. sink chosen by FORMAT.
+    # fastq: written uncompressed -- snape reads plain FASTQ only. sink chosen by FORMAT.
     if [ "$FORMAT" = svb ]; then SINK=("$SVB_PACK" "$OUTDIR/shard.$i.svb"); else SINK=(cat); fi
     "$BADREAD" simulate --reference "$WORK/shard.$i.fa" --quantity "${DEPTH}x" \
       --error_model "$MODEL" --qscore_model "$MODEL" \
@@ -115,7 +115,7 @@ echo "[badread] simulation done in $((SECONDS-t0))s"
 
 GLEN=$(awk '{b+=$2} END{print b}' "$INPUT.fai")
 if [ "$FORMAT" = svb ]; then
-  # shards ARE the output ($OUTDIR/shard.<i>.svb); no concat. svp reads the dir in parallel.
+  # shards ARE the output ($OUTDIR/shard.<i>.svb); no concat. snape reads the dir in parallel.
   rm -f "$WORK"/shard.*.regions
   read -r RN RBP < <(python3 - "$OUTDIR" <<'PY'
 import sys, glob, struct
@@ -130,7 +130,7 @@ PY
   echo "[badread] wrote $(ls "$OUTDIR"/shard.*.svb | wc -l) svb shards to $OUTDIR ($(du -sh "$OUTDIR" | cut -f1))"
   printf 'reads=%s read_bases=%s coverage=%.2fx shards=%s\n' "$RN" "$RBP" "$(awk "BEGIN{printf \"%.2f\",$RBP/$GLEN}")" "$(ls "$OUTDIR"/shard.*.svb | wc -l)" > "$OUTDIR/svb.done"
 else
-  # concatenate shard fastqs -- uncompressed, because svp reads plain FASTQ only
+  # concatenate shard fastqs -- uncompressed, because snape reads plain FASTQ only
   cat "$WORK"/shard.*.fastq > "$OUTDIR/hifi.fastq.tmp"
   mv -f "$OUTDIR/hifi.fastq.tmp" "$OUTDIR/hifi.fastq"
   rm -f "$WORK"/shard.*.fastq "$WORK"/shard.*.regions

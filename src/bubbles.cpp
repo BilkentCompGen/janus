@@ -1,4 +1,4 @@
-// svp bubbles <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]
+// snape bubbles <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]
 //
 // Most of the somatic material in the graph is not a junction. It is SNVs and sub-SV edits, and each
 // one still becomes a chunk, a contig, and a minute of alignment. This stage names those cores before
@@ -27,7 +27,7 @@
 // drops 83% of the somatic cores and 84% of the contigs for 2 junctions of recall.
 #include "bubbles.h"
 
-#include "svp.h"
+#include "snape.h"
 #include "unordered_dense.h"
 
 extern "C" {
@@ -49,7 +49,7 @@ namespace {
 
 [[noreturn]] void die(const char* m) { std::fprintf(stderr, "[bubbles] FATAL: %s\n", m); std::exit(1); }
 
-int LEVEL = 5;                                 // runtime, from SVP_LEVEL
+int LEVEL = 5;                                 // runtime, from SNAPE_LEVEL
 constexpr int MARGIN = 10;                     // MUST match the graph build
 
 inline uint64_t mix64(uint64_t x) {
@@ -241,7 +241,7 @@ std::vector<uint64_t> arm_mins(const Graph& g, const std::vector<uint32_t>& arm,
 
 int cmd_bubbles(int argc, char** argv) {
     if (argc < 4) {
-        std::fprintf(stderr, "usage: svp bubbles <graph.bin> <normal> <tumour> [threads=16] [k=21] "
+        std::fprintf(stderr, "usage: snape bubbles <graph.bin> <normal> <tumour> [threads=16] [k=21] "
                              "[w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]\n");
         return 2;
     }
@@ -252,7 +252,7 @@ int cmd_bubbles(int argc, char** argv) {
     const int MAXLEN = argc > 7 ? std::atoi(argv[7]) : 40;
     const int MAX_DLEN = argc > 8 ? std::atoi(argv[8]) : 12;
     const int MAX_UNM = argc > 9 ? std::atoi(argv[9]) : 20;
-    if (const char* lv = std::getenv("SVP_LEVEL")) LEVEL = std::atoi(lv);
+    if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
 
     const Graph g = load_graph(gpath);
     const std::vector<Bub> bubs = find_bubbles(g, MAXLEN);

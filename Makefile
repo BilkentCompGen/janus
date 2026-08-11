@@ -3,14 +3,14 @@ CXX      := g++
 # whole-genome reference). MUST match the flag the static lib is built with (below).
 CXXFLAGS := -std=c++17 -O3 -march=native -flto=auto -DLARGE_GENOME -Wall -Wextra -Wpedantic -MMD
 INC      := -Ilib/lcptools -Isrc
-# -lhts: `svp call` reads the aligned BAMs (system htslib, headers in /usr/include/htslib).
+# -lhts: `snape call` reads the aligned BAMs (system htslib, headers in /usr/include/htslib).
 LDFLAGS  := -Llib/lcptools -llcptools -lm -lhts
 # mold linker if installed (faster links); default linker otherwise. -flto link uses CXXFLAGS.
 LDFLAGS  += $(shell command -v mold >/dev/null 2>&1 && echo -fuse-ld=mold)
 
 BUILD  := build
 
-# src/ holds the pipeline and nothing else, and all of it links into ONE binary: `svp`.
+# src/ holds the pipeline and nothing else, and all of it links into ONE binary: `snape`.
 # scripts/ is measurement, never part of calling.
 SRC := $(wildcard src/*.cpp)
 OBJ := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRC))
@@ -21,7 +21,7 @@ MINMULT ?= 3
 # box rule: never rm -- move to a timestamped trash dir (resolved once per make run)
 TRASH   := /home/yuio/trash/svp-clean-$(shell date +%Y%m%d-%H%M%S)
 
-svp: $(OBJ)
+snape: $(OBJ)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $^ $(LDFLAGS) -lpthread
 
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
@@ -36,15 +36,15 @@ NORMAL ?=
 TUMOUR ?=
 REF    ?= /home/datasets/references/genomes/hg38/hg38.fa
 DIR    ?= outputs/svp/run
-run: svp
+run: snape
 	@test -n "$(NORMAL)" -a -n "$(TUMOUR)" || { echo "usage: make run NORMAL=<n.svb|fq> TUMOUR=<t.svb|fq> [REF=... DIR=...]"; exit 2; }
 	@mkdir -p $(DIR)
-	taskset -c 0-15 ./svp run $(NORMAL) $(TUMOUR) $(REF) $(DIR) --level $(LEVEL) --min-mult $(MINMULT) --threads $(THREADS)
+	taskset -c 0-15 ./snape run $(NORMAL) $(TUMOUR) $(REF) $(DIR) --level $(LEVEL) --min-mult $(MINMULT) --threads $(THREADS)
 
 install-deps: install-deps-lcptools install-deps-badread
 
 # biolcp branch: DNA-optimised lcptools. Its own Makefile installs to /usr/local (needs
-# root) so we build the static archive in-place here. -DLARGE_GENOME must match svp's
+# root) so we build the static archive in-place here. -DLARGE_GENOME must match snape's
 # CXXFLAGS (64-bit core start/end). -march=native: same box builds + runs.
 install-deps-lcptools:
 	cd lib/lcptools && gcc -O3 -march=native -DLARGE_GENOME -c encoding.c core.c lps.c && ar rcs liblcptools.a encoding.o core.o lps.o
@@ -64,8 +64,8 @@ lib/Badread/venv/bin/badread:
 # clean: build artifacts only (binary + objects). Run outputs are expensive -- a graph.bin is tens of
 # minutes -- so they are NOT swept by a plain `make clean`.
 clean:
-	@mkdir -p $(TRASH) && mv -f $(BUILD) svp $(TRASH)/ 2>/dev/null || true
-	@echo "clean: build/ + svp -> $(TRASH)"
+	@mkdir -p $(TRASH) && mv -f $(BUILD) snape $(TRASH)/ 2>/dev/null || true
+	@echo "clean: build/ + snape -> $(TRASH)"
 
 clean-outputs:
 	@mkdir -p $(TRASH) && mv -f outputs/svp/* $(TRASH)/ 2>/dev/null || true

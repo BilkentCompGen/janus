@@ -1,0 +1,926 @@
+\documentclass[runningheads]{llncs}
+
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{amsmath,amssymb}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,shapes.geometric,decorations.pathreplacing}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage[hidelinks]{hyperref}
+
+% Tool names, set once so a rename is a one-line change.
+\newcommand{\Snape}{\textsc{snape}}
+\newcommand{\Lcptools}{\textsc{Lcptools}}
+\newcommand{\Lcpan}{\textsc{LCPan}}
+\newcommand{\Gencore}{\textsc{GenCore}}
+\newcommand{\Severus}{\textsc{Severus}}
+\newcommand{\Minda}{\textsc{Minda}}
+
+% Colours of the two-coloured graph, used by every figure.
+\definecolor{shared}{RGB}{110,110,110}
+\definecolor{tumouronly}{RGB}{196,60,40}
+\definecolor{normalonly}{RGB}{40,90,170}
+
+\begin{document}
+
+\title{\Snape: Somatic structural variant discovery\\ using Locally Consistent Parsing}
+\titlerunning{Somatic SV discovery using LCP}
+
+\author{Muti Kara \and Akmuhammet Ashyralyyev \and Can Alkan}
+\authorrunning{M. Kara et al.}
+% TODO: Muti Kara's e-mail address; the other two are as published in [7,8].
+\institute{Dept of Computer Engineering, Bilkent University, Ankara 06800, Turkey\\
+\email{akmuhammet@bilkent.edu.tr, calkan@cs.bilkent.edu.tr}}
+
+\maketitle
+
+\begin{abstract}
+Somatic structural variants are called by aligning the tumour and the matched normal read sets to a
+reference genome and reasoning over the resulting alignments, so the aligner decides where every
+read belongs before anything decides which reads are somatic. We present \Snape, a somatic structural
+variant caller that reverses that order. Both read sets are partitioned by Locally Consistent
+Parsing (LCP) into cores and counted into a single two-coloured graph, in which a core carried by
+the tumour reads and by none of the normal reads is somatic by construction, without a reference and
+without an assembly. \Snape{} then cuts each somatic region out of the reads that carry it, as a
+junction contig flanked by germline anchors, and only those contigs are aligned: on four PacBio
+Revio tumour/normal pairs this is 1.5--5.1 Gbp of contigs in place of 185--202 Gbp of tumour reads,
+a 40--124$\times$ reduction. The same core representation selects the normal reads that decide
+whether a candidate is germline, 1.56\% of the normal read set on HCC1954, which answers that
+question as well as the whole set does. On the CASTLE panel, scored with \Minda{} against the
+4-caller ensemble truth, \Snape{} reaches an F1 of 0.870 on HCC1954 against 0.871 for the published
+\Severus{} calls, and 0.750--0.852 on the remaining three pairs; on simulated whole-genome tumours it
+recovers 526 of 600 junctions at 99.7\% precision. HCC1954 is processed end to end, from two read
+sets to a VCF, in 47 minutes on 16 cores, against 4 hours 7 minutes for the same pair through an
+aligner and \Severus{} on the same machine.
+
+\smallskip
+
+\noindent\textbf{Availability:} \Snape{} is available at \url{https://github.com/Muti-Kara/snape}
+
+\keywords{Locally consistent parsing \and somatic structural variation \and cancer genomics \and
+alignment-free methods}
+\end{abstract}
+
+\section{Background}
+
+Structural variants drive cancer genome evolution, and long reads resolve them where short reads
+cannot: a single PacBio HiFi or Oxford Nanopore read spans a breakpoint, its repetitive flanks and
+often the whole event~\cite{severus,savana}. The methods built on this share one design. Both the
+tumour and the matched normal read set are aligned to a reference genome; breakpoints are then read
+off the alignments as split reads and long CIGAR indels, clustered, and finally subtracted between
+the two samples, so that what remains is somatic. \Severus{} does this on a phased breakpoint
+graph~\cite{severus}, \textsc{Savana} with a random forest over alignment features~\cite{savana},
+and \textsc{nanomonsv} by assembling supporting reads around each candidate
+junction~\cite{nanomonsv}.
+
+Two properties follow from that order of operations. First, the alignment of both samples is the
+dominant cost: a 30$\times$ human tumour/normal pair is roughly 200 Gbp of sequence, and the pairs
+used here are 391 Gbp; every base of it is placed against the reference before the first somatic
+decision is taken. Second, the
+aligner decides the coordinates of sequence that a somatic event has, by definition, moved. A
+junction joins two loci that are not adjacent in the reference; a tumour haplotype may carry a copy
+of a sequence that the reference holds once, or holds nowhere.
+
+The somatic question itself does not require a reference. It is a comparison between two read sets:
+which sequence do the tumour reads carry that the normal reads do not? What that comparison needs is
+a way to recognise the same locus in two different reads, and Locally Consistent Parsing (LCP)
+provides exactly that. LCP partitions a string into substrings called \emph{cores} under two
+guarantees~\cite{sv94a,sv94b}: \emph{partition consistency}, so that identical content is partitioned
+identically wherever it occurs, and \emph{labeling consistency}, so that cores over the same
+sequence receive the same label. Applied iteratively with Deterministic Coin Tossing~\cite{dct},
+each level reduces the number of cores by a constant factor of $c \approx 2.34$ while lengthening
+them by the same factor~\cite{lcpan}. \Lcptools{} makes this practical for DNA~\cite{lcpan}, and two
+applications have followed: \Lcpan{} builds variation graphs an order of magnitude faster and with
+an order of magnitude less memory than \textsc{vg}~\cite{lcpan}, and \Gencore{} estimates genomic
+distances between closely related large genomes directly from cores, including from unassembled HiFi
+reads~\cite{gencore}. Unlike sketching, LCP subsamples nothing: every base of the input is covered
+by at least one core, which is what allows two read sets to be compared without deciding in advance
+which parts of them matter.
+
+Here we present \Snape, which uses LCP cores to make the somatic decision before any alignment. Both
+read sets are parsed and counted into a single two-coloured core graph, where colour is the pair of
+per-sample read counts on a core; the somatic material is the set of cores the tumour reads produce
+and the normal reads never do. \Snape{} then carves that material out of the reads that carry it as
+short \emph{junction contigs} --- a somatic run with a germline anchor on each side --- and hands
+only those to an aligner, which places them and nothing else. The germline status of each surviving
+candidate is settled by the normal reads at its locus, and the same core representation names those
+reads: they are the normal reads that share cores with the candidate's own germline anchors, 1.56\%
+of the normal read set. The reference is therefore consulted once, for 1--3\% of the input, and only
+after the somatic decision has been made.
+
+\begin{figure}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=12mm, minimum width=27mm, inner sep=2pt},
+  data/.style={align=center, inner sep=1pt},
+  snum/.style={circle, draw, fill=white, inner sep=0.7pt, font=\small\bfseries},
+  ar/.style={-{Latex[length=2mm]}, semithick},
+  note/.style={align=center, font=\scriptsize, inner sep=1pt}
+]
+% ---------- row 1
+\node[box, fill=black!3] (inp) at (0,0)
+  {\textcolor{normalonly}{normal reads}\\[1pt]\textcolor{tumouronly}{tumour reads}};
+\node[box, right=7mm of inp] (graph) {two-coloured\\core graph};
+\node[box, right=7mm of graph] (bub) {sub-SV edits\\removed};
+\node[box, right=7mm of bub] (ctg) {junction\\contigs};
+\draw[ar] (inp) -- (graph);
+\draw[ar] (graph) -- (bub);
+\draw[ar] (bub) -- (ctg);
+\node[snum] at ([yshift=7mm]graph.north) {1};
+\node[snum] at ([yshift=7mm]bub.north) {2};
+\node[snum] at ([yshift=7mm]ctg.north) {3};
+\node[note, below=1.5mm of graph] {$7.0\times10^{7}$ nodes,\\ $0.5$--$1.5\%$ somatic};
+\node[note, below=1.5mm of bub] {$-49$ to $-64\%$\\ of the somatic cores};
+\node[note, below=1.5mm of ctg] {$40$--$124\times$ less\\ sequence to align};
+
+% ---------- row 2
+\node[box, below=28mm of inp] (aln1) {align contigs,\\call candidates};
+\node[box, right=7mm of aln1] (pick) {normal reads\\at those loci};
+\node[box, right=7mm of pick] (aln2) {align them,\\call again};
+\node[data, right=7mm of aln2] (out) {somatic\\SV calls};
+\draw[ar] (aln1) -- (pick);
+\draw[ar] (pick) -- (aln2);
+\draw[ar] (aln2) -- (out);
+\node[snum] at ([yshift=7mm]aln1.north) {4};
+\node[snum] at ([yshift=7mm]pick.north) {5};
+\node[snum] at ([yshift=7mm]aln2.north) {6};
+\node[note, below=1.5mm of pick] {$1.56\%$ of the\\ normal read set};
+
+% row 1 -> row 2
+\draw[ar] (ctg.south) -- ++(0,-11mm) -| (aln1.north);
+\end{tikzpicture}}
+\caption{\textbf{Overview of the \Snape{} method.} \textbf{(1)} Both read sets are parsed into LCP
+cores and counted into one graph; a core the tumour reads carry and the normal reads never do is
+somatic. \textbf{(2)} Somatic cores whose bubble is a local edit rather than a novel adjacency are
+excluded. \textbf{(3)} Each remaining somatic component is cut out of the reads that carry it as a
+junction contig with a germline anchor on each side. \textbf{(4)} Only those contigs are aligned to
+the reference, and breakpoints are read off their alignments. \textbf{(5)} The candidate calls name
+their contigs; the normal reads sharing cores with those contigs' anchors are aligned in turn, and
+decide which candidates are germline.}
+\label{fig:overview}
+\end{figure}
+
+\section{Results}
+
+We evaluated \Snape{} on four PacBio Revio tumour/normal cell-line pairs from the CASTLE panel and on
+simulated whole-genome tumours. All measurements were made on a 16-core AMD Ryzen 9950X workstation
+with 157 GB of memory, with every stage pinned to the same 16 cores.
+
+\subsection{Data and evaluation}
+
+The four pairs (Table~\ref{tab:data}) are the HiFi arm of the CASTLE panel (Cancer Standards
+Long-read Evaluation), BioProject PRJNA1086849. Each tumour read set is 185--202 Gbp, about
+60--65$\times$ of the human genome, and the matched normals are of the same order. Their truth
+sets are the panel's \texttt{minda\_4\_2} ensembles: a somatic SV enters the truth when at least two
+callers in each of three platform groups, and at least four callers overall, report it. All accuracy
+numbers below come from \Minda~\cite{minda} at the settings the panel uses, a 500 bp breakpoint
+tolerance and a 50 bp size floor, and \Severus{}~\cite{severus} is scored from its published calls
+on the same pairs with the same command, so the comparison is symmetric.
+
+\begin{table}[t]
+\caption{The four CASTLE tumour/normal pairs used for evaluation.}
+\label{tab:data}
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccrrr}
+\toprule
+Pair & Tumour run & Normal run & Tumour reads & Bases & Truth SVs \\
+\midrule
+HCC1954 & SRR28305163 & SRR28305160 & 11,561,429 & 196.4 Gbp & 1,106 \\
+H2009   & SRR28305172 & SRR28305169 & 12,683,263 & 201.8 Gbp & 925 \\
+HCC1937 & SRR28305185 & SRR28305182 & 12,386,643 & 185.4 Gbp & 703 \\
+H1437   & SRR28305179 & SRR28305175 & 12,080,830 & 199.8 Gbp & 221 \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+\begin{minipage}{\textwidth}\footnotesize Reads are PacBio Revio HiFi. Measured on the raw data: median read length 16.2 kb,
+median per-read quality Q38.5, overall Q37.4, i.e.\ an error rate of 0.018\%. Truth SVs are the
+records of the panel's \texttt{minda\_4\_2} ensemble for that pair.\end{minipage}
+\end{table}
+
+\subsection{The somatic material of a tumour is a small part of its core graph}
+
+Parsing both read sets at level 5 and counting the cores yields a graph of $7.0 \times 10^{7}$
+nodes and $7.5 \times 10^{7}$ edges for every pair (Table~\ref{tab:graph}), 2.3 GB on disk, in which
+a node is a 64-bit core label and its two read counts. The proportions of that graph are the first
+result. Cores carried only by the tumour reads --- the somatic hypothesis, before any filtering ---
+are 0.54--1.48\% of the nodes; cores carried only by the normal reads are 2.35--9.04\%. Somatic
+material is thus roughly one percent of the graph, and it is available for inspection without a
+reference, an assembly or an alignment.
+
+Most of that one percent is not a structural variant. A somatic single-nucleotide variant, or an
+indel below the reporting floor, also produces tumour-only cores, and each such core would otherwise
+become a candidate and a contig to align. These are separated from junctions by the shape of the
+bubble they form: a local edit leaves the two arms of the bubble the same length and colinear, while
+a novel adjacency does not (Section~\ref{sec:bubbles}). That test removes between 48.6 and 63.5 per
+cent of the somatic cores across the four pairs.
+
+\begin{table}[t]
+\caption{The two-coloured core graph and the junction contigs derived from it.}
+\label{tab:graph}
+\centering
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Pair & Nodes & Edges & Somatic & \multicolumn{2}{c}{Sub-SV edits} & Chunks & Contigs \\
+\cmidrule(lr){5-6}
+ & & & cores & cores & \% & & \\
+\midrule
+HCC1954 & 70,395,067 & 75,458,396 & 381,086 & 185,165 & 48.6 & 110,561 & 202,882 \\
+H2009   & 70,518,418 & 75,537,130 & 1,044,203 & 663,166 & 63.5 & 182,330 & 549,450 \\
+HCC1937 & 69,944,027 & 74,736,240 & 438,421 & 276,751 & 63.1 & 82,572 & 165,314 \\
+H1437   & 70,291,528 & 75,245,997 & 456,480 & 277,197 & 60.7 & 89,646 & 251,813 \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+\begin{minipage}{\textwidth}\footnotesize Somatic cores are the nodes with a tumour count and no normal count. Sub-SV edits are
+the somatic cores whose bubble is a local edit rather than a novel adjacency; they are excluded
+before chunks are formed. A chunk is a connected component of the remaining somatic subgraph, i.e.\
+one junction candidate. Contigs are emitted at up to five per chunk.\end{minipage}
+\end{table}
+
+\subsection{Junction contigs replace the read set at the aligner}
+
+A chunk is a connected component of the somatic subgraph: one junction candidate, identified with no
+coordinates. For each chunk, \Snape{} takes the first five tumour reads that carry it and cuts from
+each the span running from 50 cores before the somatic run to 50 cores after it --- the novel
+sequence with about 5 kb of germline anchor on either side (Fig.~\ref{fig:contig}). No assembly and
+no cross-read merging is needed to make that cut: consecutive cores of one read are adjacent and
+overlapping in that read's own bytes, so the span between two core boundaries is the sequence
+itself (Algorithm~\ref{alg:contigs}).
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  x=8mm, y=8mm, font=\scriptsize,
+  core/.style={draw=shared, fill=shared!20, minimum height=4mm, minimum width=7.4mm, inner sep=0pt},
+  som/.style={core, fill=tumouronly!22, draw=tumouronly},
+  gnode/.style={circle, draw=shared, fill=shared!20, inner sep=0pt, minimum size=3.4mm},
+  gsom/.style={gnode, draw=tumouronly, fill=tumouronly!22},
+  lbl/.style={inner sep=1pt, font=\scriptsize},
+  ar/.style={-{Latex[length=1.5mm]}, semithick, shorten >=0.4mm, shorten <=0.4mm}
+]
+% ---- reads
+\node[lbl, anchor=east] at (-0.4,3.0) {normal read};
+\foreach \i in {0,...,6}{ \node[core] at (\i*0.95,3.0) {}; }
+\node[lbl, anchor=west] at (6.3,3.0) {locus $A$ throughout};
+
+\node[lbl, anchor=east] at (-0.4,2.1) {tumour read};
+\foreach \i in {0,1,2}{ \node[core] at (\i*0.95,2.1) {}; }
+\node[som] at (2.85,2.1) {}; \node[som] at (3.8,2.1) {};
+\foreach \i in {5,6}{ \node[core] at (\i*0.95,2.1) {}; }
+\node[lbl, anchor=west] at (6.3,2.1) {$A$ joined to $B$};
+
+% ---- the graph
+\node[lbl, anchor=east] at (-0.4,0.85) {graph};
+\foreach \i in {0,1,2}{ \node[gnode] (n\i) at (\i*0.95,0.85) {}; }
+\node[gsom] (s0) at (2.85,1.35) {}; \node[gsom] (s1) at (3.8,1.35) {};
+\node[gnode] (m0) at (2.85,0.35) {}; \node[gnode] (m1) at (3.8,0.35) {};
+\node[gnode] (r0) at (4.75,0.85) {}; \node[gnode] (r1) at (5.7,0.85) {};
+\draw[ar] (n0) -- (n1); \draw[ar] (n1) -- (n2);
+\draw[ar, tumouronly] (n2) -- (s0); \draw[ar, tumouronly] (s0) -- (s1); \draw[ar, tumouronly] (s1) -- (r0);
+\draw[ar, shared] (n2) -- (m0); \draw[ar, shared] (m0) -- (m1); \draw[ar, shared] (m1) -- (r0);
+\draw[ar] (r0) -- (r1);
+\node[lbl, anchor=west, tumouronly] at (6.3,1.35) {tumour only};
+\node[lbl, anchor=west, shared] at (6.3,0.35) {both samples};
+
+% ---- the contig
+\node[lbl, anchor=east] at (-0.4,-0.75) {junction contig};
+\filldraw[fill=shared!20, draw=shared] (0,-0.95) rectangle (2.6,-0.55);
+\filldraw[fill=tumouronly!22, draw=tumouronly] (2.6,-0.95) rectangle (4.1,-0.55);
+\filldraw[fill=shared!20, draw=shared] (4.1,-0.95) rectangle (6.15,-0.55);
+\node[lbl, above=1pt, tumouronly] at (3.35,-0.55) {somatic run};
+\draw[decorate, decoration={brace, amplitude=3pt, mirror}] (0,-1.02) -- (2.6,-1.02);
+\draw[decorate, decoration={brace, amplitude=3pt, mirror}] (4.1,-1.02) -- (6.15,-1.02);
+\node[lbl] at (3.1,-1.45) {50 cores of germline anchor on each side, $\approx 5$ kb};
+\end{tikzpicture}
+\caption{\textbf{A somatic junction in core space, and the contig cut from it.} A locus that the
+tumour joins to a distant locus $B$ produces cores no normal read can produce (red), flanked on both
+sides by cores both samples carry (grey). In the graph the two samples' paths diverge and reconverge
+around those cores. Because consecutive cores of one read overlap in that read's own bases, the
+region between two core boundaries is sequence: the contig is cut directly from one tumour read as
+the somatic run plus 50 cores of germline anchor on each side. The anchors are what an aligner needs
+to place the breakpoint, and what identifies the normal reads that cover the same locus.}
+\label{fig:contig}
+\end{figure}
+
+What reaches the aligner is therefore 165,314--549,450 contigs of a mean 9.0--9.2 kb
+(Table~\ref{tab:graph}), which is 1.49--5.08 Gbp against the 185--202 Gbp of tumour reads they were
+cut from: a reduction of 40--124$\times$ in the sequence to be placed. The reduction tracks the
+somatic content of each tumour, being largest for HCC1937 and smallest for the SV-rich H2009.
+
+\subsection{The normal reads that answer the germline question}
+
+The graph decides somatic by exact core sequence, and inside a repeat that is not the same question
+as somatic: the tumour and normal reads may not spell one locus with the same 217 bp core --- a
+different number of units in a tandem array, a different paralogous copy sampled --- while the
+variant itself is shared. What settles those cases is the normal reads at the locus, in reference
+space, and it settles a large number of them. On HCC1954 the contigs alone produce 1,601 calls, at a
+precision of 0.587 and a recall of 0.849; asking the normal at each of their loci removes 554, of
+which 552 are false and 2 are true, for a precision of 0.895 at a recall of 0.847. It is the single largest
+contribution to precision in the pipeline.
+
+Aligning the whole normal read set to ask that question would restore the cost the method exists to
+avoid. \Snape{} instead asks the graph which normal reads cover the candidate loci. Each candidate
+names the contig it came from; that contig's germline anchors are sequence the normal has as well,
+and a normal read carrying the locus shares cores with them. Selecting every normal read that shares
+at least five anchor cores yields 176,912 of 11,337,735 reads on HCC1954, 1.56\% of the sample
+(Table~\ref{tab:pick}): 1,735 candidate contigs contribute 119,338 anchor labels, and one pass over
+the normal read set selects the reads that carry them in five minutes. Aligning that selection
+instead of the whole read set changes precision by 0.004 and recall not at all, and replaces hours
+of alignment with eleven and a half minutes: minimap2 places these reads at 19.1 Mbp/s on this
+machine (6.0 M reads, 97 Gbp, in 5,087 s at 19.1 GB peak), so the whole 195 Gbp normal is a
+multi-hour job on its own.
+
+\begin{table}[t]
+\caption{Selecting the normal reads that decide germline status (HCC1954).}
+\label{tab:pick}
+\centering
+\begin{tabular}{lrrrrr}
+\toprule
+Normal read set & Reads & Share & Precision & Recall & F1 \\
+\midrule
+Whole sample & 11,337,735 & 100\% & 0.891 & 0.858 & 0.874 \\
+Shared anchor cores $\geq 1$ & 405,604 & 3.58\% & 0.887 & 0.858 & 0.872 \\
+Shared anchor cores $\geq 5$ & 176,912 & 1.56\% & 0.887 & 0.858 & 0.872 \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+\begin{minipage}{\textwidth}\footnotesize Both selections produce the identical call set, 949 true and 121 false calls, so the
+tighter threshold is free: a read that covers the locus shares dozens of anchor cores, while a single
+shared core is what a repetitive anchor collects from elsewhere in the genome.\end{minipage}
+\end{table}
+
+The precision this question buys depends on how deep the normal is where it is asked. Thinning the
+same normal alignment and repeating the call (Fig.~\ref{fig:depth}) leaves 290 false calls at
+3$\times$, 172 at 5.5$\times$, 136 at 11$\times$ and 116 at 44$\times$: the curve has not flattened
+at the depth the samples are sequenced to. Because the selection makes the alignment cheap, the
+question can be asked at full depth.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.62\textwidth, height=4.6cm,
+  xmode=log, log basis x=2,
+  xlabel={Depth of the normal alignment at the candidate loci ($\times$)},
+  ylabel={False calls},
+  xtick={3,5.5,11,44}, xticklabels={3,5.5,11,44},
+  ymin=90, ymax=310, xmin=2.4, xmax=60,
+  grid=major, grid style={draw=black!12},
+  tick label style={font=\scriptsize}, label style={font=\scriptsize},
+  every axis plot/.append style={thick},
+  scaled x ticks=false
+]
+\addplot[color=tumouronly, mark=*, mark size=1.8pt] coordinates {(3,290) (5.5,172) (11,136) (44,116)};
+\node[font=\scriptsize, anchor=west] at (axis cs:3.2,290) {290};
+\node[font=\scriptsize, anchor=west] at (axis cs:5.8,172) {172};
+\node[font=\scriptsize, anchor=west] at (axis cs:11.6,136) {136};
+\node[font=\scriptsize, anchor=east] at (axis cs:42,116) {116};
+\end{axis}
+\end{tikzpicture}
+\caption{\textbf{The germline check does not saturate at the depth the samples carry.} The same
+HCC1954 call set, filtered against the same normal alignment thinned to four depths. Each halving of
+the depth at the candidate loci costs precision, so the question is worth asking at full depth ---
+which is affordable only because the reads that answer it are selected rather than all aligned.}
+\label{fig:depth}
+\end{figure}
+
+\subsection{Accuracy on the CASTLE panel}
+
+Table~\ref{tab:acc} and Fig.~\ref{fig:pr} give precision, recall and F1 for the four pairs against
+the 4-caller ensemble truth, with the published \Severus{} calls scored identically. On HCC1954
+\Snape{} reaches an F1 of 0.870 against 0.871 --- ahead on recall by 0.021, behind on precision by
+0.026, and 0.001 short overall. On the other three pairs it reaches 0.750--0.852 against
+0.810--0.903.
+
+The comparison carries a measurable asymmetry: \Severus{} is one of the callers whose output built
+the ensemble, so its calls are in that truth partly by construction. The panel publishes two looser
+ensembles for HCC1954, and scoring one and the same pair of call sets against all three
+(Table~\ref{tab:ens}) puts a size on it. Of the 110 \Snape{} calls the 4-caller ensemble counts false,
+47 are events the 2-caller ensemble contains. As the truth widens, both callers' precision rises and
+both recalls fall, and \Snape{} is ahead on F1 on the two wider ensembles.
+
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.72\textwidth, height=6.4cm,
+  xlabel={Precision}, ylabel={Recall},
+  xmin=0.69, xmax=0.98, ymin=0.65, ymax=0.93,
+  grid=major, grid style={draw=black!10},
+  tick label style={font=\scriptsize}, label style={font=\scriptsize},
+  legend style={font=\scriptsize, at={(0.02,0.98)}, anchor=north west, draw=black!25},
+  legend cell align=left
+]
+% iso-F1 contours: R = F1 P / (2P - F1)
+\foreach \f in {0.70,0.75,0.80,0.85,0.90}{
+  \addplot[domain=0.69:0.98, samples=90, gray!45, dashed, thin, forget plot] {\f*x/(2*x-\f)};
+}
+% each pair's two points joined, so the comparison is read per sample
+\addplot[gray!60, thin, forget plot] coordinates {(0.895,0.847) (0.921,0.826)};
+\addplot[gray!60, thin, forget plot] coordinates {(0.863,0.841) (0.913,0.894)};
+\addplot[gray!60, thin, forget plot] coordinates {(0.854,0.683) (0.859,0.795)};
+\addplot[gray!60, thin, forget plot] coordinates {(0.728,0.774) (0.782,0.842)};
+\addplot[only marks, mark=*, mark size=2.2pt, color=tumouronly] coordinates {
+  (0.895,0.847) (0.863,0.841) (0.854,0.683) (0.728,0.774)};
+\addlegendentry{\Snape}
+\addplot[only marks, mark=triangle*, mark size=2.8pt, color=normalonly] coordinates {
+  (0.921,0.826) (0.913,0.894) (0.859,0.795) (0.782,0.842)};
+\addlegendentry{\Severus{} (published)}
+\node[font=\scriptsize, anchor=south] at (axis cs:0.906,0.854) {HCC1954};
+\node[font=\scriptsize, anchor=east] at (axis cs:0.857,0.841) {H2009};
+\node[font=\scriptsize, anchor=north] at (axis cs:0.856,0.677) {HCC1937};
+\node[font=\scriptsize, anchor=south] at (axis cs:0.728,0.781) {H1437};
+\node[font=\scriptsize, gray!75, anchor=west, rotate=-30] at (axis cs:0.905,0.700) {F1 $=0.80$};
+\end{axis}
+\end{tikzpicture}
+\caption{\textbf{Precision and recall on the four CASTLE pairs.} Circles are \Snape{} at its shipped
+defaults, triangles the published \Severus{} calls, both scored with \Minda{} against the same
+4-caller ensemble truth. Grey lines join the two callers on the same pair, and dashed curves are iso-F1
+contours from 0.70 to 0.90. \Snape{} sits on the recall side of \Severus{} throughout, and on the same
+contour on HCC1954.}
+\label{fig:pr}
+\end{figure}
+
+\begin{table}[t]
+\caption{Somatic SV calling accuracy on the CASTLE panel, scored with \Minda.}
+\label{tab:acc}
+\centering
+\begin{tabular}{lrrrcrrr}
+\toprule
+& \multicolumn{3}{c}{\Snape} & & \multicolumn{3}{c}{\Severus{} (published)} \\
+\cmidrule(lr){2-4}\cmidrule(lr){6-8}
+Pair & Precision & Recall & F1 & & Precision & Recall & F1 \\
+\midrule
+HCC1954 & 0.895 & 0.847 & 0.870 & & 0.921 & 0.826 & 0.871 \\
+H2009   & 0.863 & 0.841 & 0.852 & & 0.913 & 0.894 & 0.903 \\
+HCC1937 & 0.854 & 0.683 & 0.759 & & 0.859 & 0.795 & 0.826 \\
+H1437   & 0.728 & 0.774 & 0.750 & & 0.782 & 0.842 & 0.810 \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+\begin{minipage}{\textwidth}\footnotesize \Minda{} \texttt{truthset}, 500 bp tolerance, 50 bp size
+floor, against each pair's \texttt{minda\_4\_2} ensemble. Every \Snape{} row is one run of the whole
+pipeline at its shipped defaults, including the selected normal reads of
+Section~\ref{sec:germline}; nothing is tuned per pair.\end{minipage}
+\end{table}
+
+\begin{table}[t]
+\caption{The same two call sets against the panel's three HCC1954 ensembles.}
+\label{tab:ens}
+\centering
+\begin{tabular}{lrrrrcrrr}
+\toprule
+& & \multicolumn{3}{c}{\Snape} & & \multicolumn{3}{c}{\Severus{} (published)} \\
+\cmidrule(lr){3-5}\cmidrule(lr){7-9}
+Ensemble & Records & P & R & F1 & & P & R & F1 \\
+\midrule
+\texttt{minda\_4\_2} & 1,106 & 0.895 & 0.847 & 0.870 & & 0.921 & 0.826 & 0.871 \\
+\texttt{minda\_3\_2} & 1,168 & 0.917 & 0.822 & \textbf{0.867} & & 0.938 & 0.796 & 0.861 \\
+\texttt{minda\_2\_1} & 1,413 & 0.940 & 0.696 & \textbf{0.800} & & 0.967 & 0.679 & 0.798 \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+\begin{minipage}{\textwidth}\footnotesize \texttt{minda\_$m$\_$p$} requires $m$ callers overall and
+$p$ callers in each of three platform groups. \texttt{minda\_4\_2} is what the panel reports
+against; the two wider ensembles admit events that fewer tools agreed on, and are correspondingly
+less dependent on any one caller's output.\end{minipage}
+\end{table}
+
+\begin{table}[t]
+\caption{F1 as a function of the one free parameter, the support floor.}
+\label{tab:supp}
+\centering
+\begin{tabular}{lrrrrr}
+\toprule
+Contigs required & HCC1954 & H2009 & HCC1937 & H1437 & mean \\
+\midrule
+$\geq 3$ & 0.784 & 0.698 & 0.641 & 0.476 & 0.650 \\
+$\geq 4$ & \textbf{0.872} & 0.838 & \textbf{0.762} & 0.722 & 0.799 \\
+$\geq 5$ (shipped) & 0.870 & \textbf{0.852} & 0.759 & \textbf{0.750} & \textbf{0.808} \\
+$\geq 6$ & 0.865 & 0.835 & 0.719 & 0.748 & 0.792 \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+\begin{minipage}{\textwidth}\footnotesize Each cell is one run of the whole pipeline, scored as in
+Table~\ref{tab:acc}; only the reporting floor differs. Three is worse than four on every pair. Four
+and five split the pairs two apiece, but not the margins: four wins HCC1954 by 0.002 and HCC1937 by
+0.003 while five wins H2009 by 0.014 and H1437 by 0.028, so five is the better single default and is
+what \Snape{} ships.\end{minipage}
+\end{table}
+
+\subsection{Simulated whole-genome tumours}
+
+The development benchmark is a simulated pair with an exact truth: a tumour genome carrying 600
+structural variants, 118,650 single-nucleotide variants and 6,580 short indels is built from the
+reference with insilicoSV~\cite{insilicosv}, and 30$\times$ HiFi reads are simulated from it and from
+the unmodified reference with Badread~\cite{badread}. Because the variants are written into the
+genome before sequencing, the truth is the set of novel adjacencies the tumour genome contains, and
+scoring is done at the junction level: a deletion contributes one junction, an inversion two, and a
+complex event as many as its grammar creates. At its shipped defaults \Snape{} recovers 526 of the 600 junctions and 70 of
+the 78 insertions, at a precision of 99.7\%: two of its 593 calls do not match a truth junction.
+Recall is 91.0\% for deletions, 92.3\% for inversions and 76.9\% for duplications, the last being
+where a tandem array of the duplicated unit leaves the fewest cores to work with.
+
+\subsection{Resource usage}
+
+Table~\ref{tab:time} gives wall time and peak memory for each stage on HCC1954, and
+Table~\ref{tab:arms} sets the whole pipeline against the alignment-first arm it is being compared
+with: 46 minutes 47 seconds against 4 hours 7 minutes, a factor of 5.3, at twice the peak memory.
+Almost all of that difference is the aligner. \Severus{} itself takes 9 minutes 47 seconds over the
+two alignments; producing those alignments takes 3 hours 57 minutes, which is the cost the somatic
+decision is made after in that design and before it in this one. The graph is built
+in 13.6 minutes at 84\% of the 16-core budget, and the whole pipeline, from two read sets to a VCF,
+takes 46 minutes and 47 seconds. Alignment accounts for 15.5 of those minutes, split between the
+1.87 Gbp of contigs and the 1.56\% of the normal read set that the germline check needs. Aligning
+both read sets whole, as the alignment-first design requires, is what Table~\ref{tab:arms} measures
+against it.
+
+\begin{table}[t]
+\caption{Wall time and peak memory per stage, HCC1954, 16 threads.}
+\label{tab:time}
+\centering
+\begin{tabular}{llrr}
+\toprule
+Stage & Input & Wall time & Peak RSS \\
+\midrule
+\texttt{graph} & both read sets, 391 Gbp & 13:36 & 41.2 GB \\
+\texttt{bubbles} & graph + both read sets & 09:43 & 5.7 GB \\
+\texttt{junctions} & graph + tumour reads, 196 Gbp & 02:53 & 2.9 GB \\
+minimap2 + sort & 202,882 contigs, 1.87 Gbp & 04:04 & 18.8 GB \\
+\texttt{call} & contig alignments & 00:02 & 0.03 GB \\
+\texttt{pick} & contigs + normal reads, 195 Gbp & 04:59 & 0.03 GB \\
+minimap2 + sort & 176,912 normal reads & 11:25 & 20.5 GB \\
+\texttt{call} & contig and normal alignments & 00:05 & 0.03 GB \\
+\midrule
+Total & two read sets to a VCF & \textbf{46:47} & 41.2 GB \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+\begin{minipage}{\textwidth}\footnotesize All stages pinned to the same 16 cores. \texttt{graph} and
+\texttt{bubbles} are the only stages that read both samples in full; \texttt{pick} streams the normal
+read set but holds only the anchor labels, which is why its memory is three orders of magnitude below
+the graph's. Peak memory for the run is the graph stage's.\end{minipage}
+\end{table}
+
+\begin{table}[t]
+\caption{What the two arms cost on HCC1954: reads in, somatic VCF out, same 16 cores.}
+\label{tab:arms}
+\centering
+\begin{tabular}{llrr}
+\toprule
+Arm & Stage & Wall time & Peak RSS \\
+\midrule
+\multirow{4}{*}{\Snape}
+ & graph, bubbles, junctions & 26:12 & 41.2 GB \\
+ & minimap2, 1.87 Gbp of contigs & 04:04 & 18.8 GB \\
+ & \texttt{call}, \texttt{pick}, minimap2 on 1.56\% of the normal & 16:31 & 20.5 GB \\
+ & \textbf{total} & \textbf{46:47} & \textbf{41.2 GB} \\
+\midrule
+\multirow{4}{*}{\Severus}
+ & minimap2 + index, 196 Gbp of tumour reads & 2:02:57 & 20.4 GB \\
+ & minimap2 + index, 195 Gbp of normal reads & 1:54:23 & 19.9 GB \\
+ & \Severus{} 1.7 over both alignments & 09:47 & 13.2 GB \\
+ & \textbf{total} & \textbf{4:07:07} & \textbf{20.4 GB} \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+\begin{minipage}{\textwidth}\footnotesize Both arms start from the same two read sets and end at a
+somatic VCF, on the same machine, pinned to the same 16 cores; both are fed from the same 2-bit read
+files, so neither pays for gzip. \Severus{} 1.7 is run in its tumour/normal mode with the VNTR bed
+it ships, unphased. The two arms also differ in what they leave behind: 93 GB of alignments against
+1.1 GB. \Severus{} scores 0.912 / 0.819 / 0.863 on this run, against the 0.921 / 0.826 / 0.871 of
+the published calls it is credited with in Table~\ref{tab:acc} --- close enough that the input path
+is not what separates the two callers.\end{minipage}
+\end{table}
+
+\section{Discussion}
+
+\Snape{} shows that the somatic decision in a tumour/normal pair can be made in core space, before a
+reference is consulted, and that doing so leaves an alignment problem one to two orders of magnitude
+smaller than the original one. The two properties of LCP that carry the method are the ones its
+theory guarantees: partition consistency makes a locus produce the same core in a tumour read and in
+a normal read, so the two samples can be compared by label; and the fact that consecutive cores
+overlap makes a somatic region excisable from a single read, which is what turns a set of tumour-only
+labels back into sequence an aligner can place.
+
+Level 5 is what these results are measured at. It puts a core at a median of 217 bp of raw read,
+which is long enough that a core is specific and short enough that a somatic event perturbs only a
+handful of them; the same choice makes a core insensitive to a 50 bp change, which is why the bubble
+test that separates local edits from junctions is carried out on minimizers of the arms rather than
+on core labels. A systematic study of level selection against event size is future work, and the
+level-to-length relation measured in~\cite{lcpan} makes it a well-posed one.
+
+The recall gap on HCC1937 is upstream of the caller: for 66\% of the missed events, no contig reaches
+either breakpoint, so the material is absent before any threshold is applied. Two mechanisms are
+available for that. Chunks that are carried by reads but never with enough anchor on both sides ---
+2,705 of 110,561 on HCC1954 --- are exactly the chunks a cross-read merge in core space would
+recover, and merging is well defined here because adjacent cores overlap. Second, an adjacency can be
+tumour-only while both of its endpoint cores are germline, in which case the junction leaves no
+somatic core at all; those adjacencies are already present in the graph as edges with a tumour count
+and no normal count, and using them as chunk seeds is a direct extension of the current chunk
+definition.
+
+Finally, the two-coloured core graph carries more than the caller currently reads. A chunk's tumour
+support relative to the coverage of the germline cores it hangs off is a local allele fraction, and
+it is available before any alignment; the edges carry per-colour traversal counts of their own, which
+no stage reads today. The same construction also extends past two samples: a multi-region or
+longitudinal series enters as one graph with one count vector per node, in which the shared and the
+private material of each sample are read off in exactly the same way. We leave both to future work.
+
+\section{Methods}
+
+\subsection{Cores and their labels}
+
+\Snape{} parses every read with \Lcptools~\cite{lcpan} at level $\ell = 5$. Write $\Phi_\ell(s)$ for
+the sequence of cores the parse produces on a string $s$. The two guarantees the method rests
+on~\cite{sv94a,sv94b} are, in the form stated in~\cite{lcpan}:
+
+\begin{definition}[Partition consistency]
+Given an input string $S$ and two occurrences $X_i$, $X_j$ of the same substring, $X_i$ and $X_j$
+are partitioned in the same way, with the possible exception of their left and right margins.
+\end{definition}
+
+\begin{definition}[Labeling consistency]
+Cores that consist of the same characters are assigned the same label.
+\end{definition}
+
+A read $r$ is represented by the labels of its cores. Two reads covering the same locus therefore
+emit the same labels over it, whichever sample they come from, and this --- not alignment --- is what
+lets \Snape{} equate sequence across reads.
+
+Two adjustments make the representation robust to the errors the data actually carries. First, cores
+within a margin $\mu = 10$ bp of either read end are discarded: partition consistency is a statement
+about interior content, and a core cut by a read boundary is not reproducible. Second, the label is
+computed over the \emph{homopolymer-compressed} bytes of the core: runs of one repeated base are
+collapsed to a single base before the parse, with \textsc{MurmurHash64A}~\cite{murmur} as the hash, so
+that a run-length slip does not change a locus's identity. Core start and end positions are mapped
+back to raw read coordinates, so nothing downstream reasons in compressed space. A level-5 core is
+therefore about 150 parsed bases~\cite{lcpan}, which on human sequence is a median of 217 bp of raw
+read.
+
+The compression is calibrated on the reads themselves rather than assumed. Comparing HCC1954's normal
+reads to each other over 5 Mb of chromosome 1 (11,824 reads) and calling a difference an error when
+at most 20\% of the reads covering that position carry it, 83.4\% of errors are indels (49.2\%
+deletion, 34.3\% insertion) and 16.6\% are substitutions. The indel errors are enriched
+2.3$\times$ in homopolymer runs of length $\geq 3$ relative to the composition of the same window,
+and depleted 0.4$\times$ outside runs, while substitution errors --- the control --- show no
+enrichment at all (1.0--1.1$\times$). Eighty percent of indel errors fall inside a run of length
+$\geq 2$ and are neutralised by the compression.
+
+\subsection{The two-coloured core graph}
+
+Let $\mathcal{R}_N$ and $\mathcal{R}_T$ be the normal and tumour read sets. Because the parse is not
+equivariant under reverse complementation --- a consequence of the LMAX rule's neighbour guards,
+which have no LMIN mirror --- each read is parsed on both strands and both parses contribute. For a
+label $x$, let $c_N(x)$ and $c_T(x)$ be the number of retained cores carrying $x$ in each sample. The
+node set is
+\begin{equation}\label{eq:nodes}
+V = \{\,x : c_N(x) \geq \theta \ \text{ or }\ c_T(x) \geq \theta\,\},\qquad \theta = 3,
+\end{equation}
+a label seen fewer than $\theta$ times in both samples being read error. Colour is not stored; it is
+derived from the counts,
+\begin{equation}\label{eq:colour}
+\chi(x) = \begin{cases}
+\mathsf{T} & c_N(x) = 0 < c_T(x) \quad\text{(somatic)},\\
+\mathsf{N} & c_T(x) = 0 < c_N(x),\\
+\mathsf{S} & c_N(x), c_T(x) > 0 \quad\text{(shared)}.
+\end{cases}
+\end{equation}
+Edges are the adjacencies the reads traverse: for every pair of consecutive retained cores in a read,
+$(u,v)$ is incremented in that read's colour, and an edge is kept when both of its endpoints are in
+$V$. The result is a directed graph with a per-colour count on every node and every edge, holding no
+coordinates and no sequence,
+\begin{equation}\label{eq:graph}
+\mathcal{G} = \bigl(V,\ E,\ (c_N, c_T),\ (e_N, e_T)\bigr).
+\end{equation}
+Both node and edge counting are done in one streaming pass over the two read sets, with per-worker
+hash maps merged into 64 label-sharded global maps; the node floor \eqref{eq:nodes} and the
+both-endpoints-survive rule for edges are applied once, at the end, on exact counts.
+
+What makes $\chi$ usable as a somatic decision is the pair of guarantees above, in the following
+form.
+
+\begin{proposition}\label{prop:somatic}
+Let a tumour haplotype join two loci whose sequences the normal also carries, with at least the LCP
+window of flanking sequence on each side of the join, and let both alleles be sequenced to at least
+$\theta$ reads. Then \emph{(i)} the cores strictly inside the two flanks are the cores the normal
+produces there, and \emph{(ii)} a core spanning the join receives a label that no normal read
+produces, unless the same adjacency, or a sequence with the same compressed bases, occurs elsewhere
+in the normal.
+\end{proposition}
+
+Part (i) is partition consistency applied to the flanks, whose content is unchanged by the join;
+part (ii) is labeling consistency read in the contrapositive --- a label is a function of the core's
+bases, so a core over bases the normal never sequences cannot carry a label the normal produced. The
+exception in (ii) is not hypothetical: in a tandem array or a segmental duplication the two samples
+may spell one locus with different cores while carrying the same allele, which is why \Snape{} puts the
+surviving candidates to the normal reads once more in reference space
+(Section~\ref{sec:germline}).
+
+\subsection{Separating sub-SV edits from junctions}\label{sec:bubbles}
+
+A \emph{bubble} is a node with out-degree at least two whose two node-disjoint linear arms converge
+on a common node, with exactly one arm somatic. Both cases of interest have this shape: a somatic
+SNV or short indel, and a novel adjacency into sequence the normal also carries. They differ in
+whether the somatic arm is the germline arm with a local change, and at level 5 the core labels
+cannot see that difference --- a 217 bp core either matches or does not.
+
+The arms are therefore compared on their sequence, through canonical minimizers ($k=21$, $w=22$,
+about 13 per core) taken on the homopolymer-compressed bases, and the comparison is ordered rather
+than set-based: a junction core is built from the two flanks' material, so shared minimizers alone
+say nothing. Writing $m_S$ and $m_G$ for the minimizer sequences of the somatic and germline arms and
+$\mathrm{lcs}$ for the length of their longest common subsequence, the somatic arm is classified as a
+local edit when
+\begin{equation}\label{eq:bubble}
+\bigl||m_S| - |m_G|\bigr| \leq 12
+\quad\text{and}\quad
+|m_S| - \mathrm{lcs}(m_S, m_G) \leq 20 ,
+\end{equation}
+that is, when the two arms are of nearly equal length and the somatic arm is almost entirely
+colinear with the germline one. The labels of arms satisfying \eqref{eq:bubble} are excluded from the
+somatic set before chunks are formed.
+
+\subsection{Junction contigs}
+
+The remaining somatic labels induce a subgraph, and each of its connected components is a
+\emph{chunk}: one junction candidate. The tumour reads are then streamed once. For a read carrying a
+chunk, let $i$ and $j$ be the indices of the first and last of its retained cores belonging to that
+chunk; the emitted contig is the substring of that read between the start of core $i - p$ and the end
+of core $j + p$, with $p = 50$ cores of padding. Somatic runs separated by fewer than $2p$ cores are
+merged into one window, so that an event whose interior is reference sequence --- a mobile element
+insertion, whose two joins are somatic while its body is not --- is emitted as a single contig
+spanning both joins. A window whose achieved anchor is shorter than 300 bp on either side is not
+emitted, and at most five contigs are kept per chunk. Contigs are named per read and per window, so
+that a read carrying two junctions supports each of them once.
+
+\begin{algorithm}[t]
+\SetAlgoLined
+\DontPrintSemicolon
+\KwIn{graph $\mathcal{G}$, tumour reads $\mathcal{R}_T$, edit labels $D$, padding $p$, cap $k$, minimum flank $f$}
+\KwOut{junction contigs}
+$S \gets \{x \in V : \chi(x) = \mathsf{T}\} \setminus D$\;
+$\mathcal{C} \gets$ connected components of the subgraph induced by $S$\;
+\ForEach{read $r \in \mathcal{R}_T$}{
+  $(x_1,\dots,x_m) \gets$ the retained core labels of $r$, in read order\;
+  \ForEach{maximal run $x_i,\dots,x_j$ of labels of one component $c \in \mathcal{C}$, runs less than
+           $2p$ cores apart being merged}{
+    \lIf{$\mathrm{taken}[c] \geq k$}{\textbf{continue}}
+    $a \gets \max(1, i-p)$;\quad $b \gets \min(m, j+p)$\;
+    \If{$\mathrm{start}(x_i) - \mathrm{start}(x_a) \geq f$ \textbf{and} $\mathrm{end}(x_b) - \mathrm{end}(x_j) \geq f$}{
+      emit the substring of $r$ from $\mathrm{start}(x_a)$ to $\mathrm{end}(x_b)$\;
+      $\mathrm{taken}[c] \gets \mathrm{taken}[c] + 1$\;
+    }
+  }
+}
+\caption{Junction contigs from the two-coloured core graph. Defaults: $p = 50$ cores, $k = 5$ contigs
+per component, $f = 300$ bp.}
+\label{alg:contigs}
+\end{algorithm}
+
+\subsection{Breakpoints from the aligned contigs}
+
+Contigs are aligned with \texttt{minimap2 -ax map-hifi -Y -{}-secondary=no}~\cite{minimap2} and sorted
+with \texttt{samtools}~\cite{samtools}. \Snape{} then reads the alignments and reports a junction as a
+pair of reference sides with the direction each side leaves the reference in: $d = +1$ when the
+alignment ends there going right, $d = -1$ when it starts there going left. That pair is the whole
+type vocabulary --- $(+,-)$ a deletion, $(-,+)$ a duplication, equal signs an inversion, two
+different contigs a breakend --- so no separate typing step is required. Junctions come from
+consecutive alignments of one contig chained in \emph{query} order, and from CIGAR indels at or above
+the 50 bp floor.
+
+Three gates act on the alignments. An alignment whose substitution rate exceeds 1\% is discarded:
+with reads at 0.018\% error, such an alignment is not the locus the contig came from. Inserted and
+deleted bases are excluded from that rate, since a contig carrying a real 400 bp deletion would
+otherwise score as if it were misplaced. Second, a short tandem duplication is not emitted as a split
+by the aligner but as an insertion; the duplicated copy is present in the contig on one side or the
+other of the inserted bases, and comparing the two, which needs no reference, recovers the duplicated
+interval. Third, a short inversion is not emitted as a split either --- the aligner walks through it
+and pays with a dense run of small indels --- and neither is a variable-number tandem repeat. The two
+are separated by the tandem-repeat content of the window's own bases, measured as the largest
+fraction of positions agreeing with the position $p$ before them over $p \in \{1,\dots,6\}$, which is
+$\approx 0.25$ for random sequence; a window above 0.40 is not a breakpoint, and a call whose anchor
+is above 0.50 is dropped.
+
+Junctions agreeing on both sides to within 50 bp, with the same contig pair and the same directions,
+are one call, positioned at the median of its supporting breakpoints, and a call is reported when at
+least five distinct contigs support it. The candidate pass that feeds Section~\ref{sec:germline} runs
+the same code at a floor of four, one below the reporting floor, so that a call sitting at the
+boundary still has its normal reads aligned: a candidate locus too many costs alignment, never
+precision.
+
+\subsection{The germline question, and the normal reads that answer it}
+\label{sec:germline}
+
+For each surviving call, \Snape{} reads the normal alignments at its locus and drops the call when
+either the same event is present there --- an indel of comparable size within the window --- or the
+normal cannot place the locus either, taken as a quarter or more of the normal reads carrying more
+than 2\% substitutions. A breakend is examined at both of its ends.
+
+The normal reads to align are chosen in core space. Every call records the contig it came from; the
+germline anchors of those contigs, being the flanking regions rather than the somatic middle, are
+sequence the normal also carries. \Snape{} parses those anchors, collects their core labels, streams
+the normal read set once, and emits every read sharing at least five labels with the collection.
+
+\subsection{Evaluation}
+
+Real-data accuracy is measured with \Minda~\cite{minda},
+\begin{verbatim}
+minda truthset --base <ensemble>.vcf --vcfs <calls>.vcf \
+               --min_size 50 --tolerance 500
+\end{verbatim}
+which is the tool and the setting the CASTLE panel reports against, applied unchanged to the
+\Severus{} calls published with the panel and to ours. On the simulation, where the truth is the set
+of novel adjacencies insilicoSV wrote into the tumour genome, calls are scored at the junction level
+with a 100 bp tolerance: a call matches when both of its breakpoints fall within the tolerance of a
+truth adjacency's two breakpoints, on the right contigs, in either pairing order. Insertions have no
+adjacency of their own and are matched on position and length.
+
+\subsection{Implementation}
+
+\Snape{} is implemented in C++17 as a single binary of about 2,300 lines over \Lcptools~\cite{lcpan},
+with \texttt{htslib}~\cite{samtools} for alignment input. Read sets are accepted as uncompressed
+FASTQ or as a 2-bit packed format the binary reads and writes, and every stage takes either. Each
+stage writes one checkpoint, and a run resumes from the last one present.
+
+\subsubsection{Data availability.}
+The sequencing data are from BioProject PRJNA1086849, and the truth sets from the CASTLE
+panel~\cite{castle}. An open-source implementation of \Snape{} is available at
+\url{https://github.com/Muti-Kara/snape}.
+
+\subsubsection{Competing interests.} C. Alkan is a co-founder of Lidya Genomics.
+
+\subsubsection{Author contributions statement.}
+A.A. and C.A. conceived the study and supervised the work. M.K. designed and implemented the method
+and conducted the experiments. M.K. wrote the manuscript, and all authors reviewed it.
+
+\begin{thebibliography}{99}
+
+\bibitem{severus} Keskus, A.G. et al. Severus detects somatic structural variation and complex
+rearrangements in cancer genomes using long-read sequencing. Nature Biotechnology (2025).
+\url{https://doi.org/10.1038/s41587-025-02618-8}
+
+\bibitem{savana} Elrick, H., Sauer, C.M., Espejo Valle-Inclan, J. et al. SAVANA: reliable analysis
+of somatic structural variants and copy number aberrations using long-read sequencing. Nature Methods
+22(7), 1436--1446 (2025).
+
+\bibitem{nanomonsv} Shiraishi, Y. et al. Precise characterization of somatic complex structural
+variations from tumor/control paired long-read sequencing data with nanomonsv. Nucleic Acids Research
+51(14), e74 (2023).
+
+\bibitem{sv94a} Sahinalp, S.C., Vishkin, U. On a parallel-algorithms method for string matching
+problems. In: Algorithms and Complexity, CIAC '94, LNCS 778, 22--32. Springer (1994).
+
+\bibitem{sv94b} Sahinalp, S.C., Vishkin, U. Symmetry breaking for suffix tree construction. In:
+Proceedings of the 26th Annual ACM Symposium on Theory of Computing, 300--309. ACM (1994).
+
+\bibitem{dct} Cole, R., Vishkin, U. Deterministic coin tossing and accelerating cascades: micro and
+macro techniques for designing parallel algorithms. In: Proceedings of the 18th Annual ACM Symposium
+on Theory of Computing, 206--219. ACM (1986).
+
+\bibitem{lcpan} Ashyralyyev, A. et al. LCPan: efficient variation graph construction using locally
+consistent parsing. Genome Biology 27 (2026).
+
+\bibitem{gencore} Ashyralyyev, A. et al. GenCore: genomic distance estimation using locally
+consistent parsing. bioRxiv (2026). \url{https://doi.org/10.64898/2026.01.10.698768}
+
+\bibitem{minda} Kolmogorov Lab. Minda: a tool for benchmarking structural variant calls.
+\url{https://github.com/KolmogorovLab/minda}
+
+\bibitem{castle} CASTLE: Cancer Standards Long-read Evaluation.
+\url{https://github.com/CASTLE-Panel/castle}
+
+\bibitem{insilicosv} Battistella, E., Jiang, N., Rohlicek, C., Shlyakhter, I., Popic, V. insilicoSV:
+a flexible grammar-based framework for structural variant simulation and placement. Bioinformatics
+41(11), btaf594 (2025).
+
+\bibitem{badread} Wick, R.R. Badread: simulation of error-prone long reads. Journal of Open Source
+Software 4(36), 1316 (2019).
+
+\bibitem{minimap2} Li, H. Minimap2: pairwise alignment for nucleotide sequences. Bioinformatics
+34(18), 3094--3100 (2018).
+
+\bibitem{samtools} Danecek, P. et al. Twelve years of SAMtools and BCFtools. GigaScience 10(2),
+giab008 (2021).
+
+\bibitem{murmur} Appleby, A. MurmurHash (2008). \url{https://github.com/aappleby/smhasher}
+
+\end{thebibliography}
+
+\end{document}
