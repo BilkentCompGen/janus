@@ -5,8 +5,8 @@
 // any contig exists, so the aligner only ever sees candidates that could be an SV.
 //
 // A BUBBLE is a source S with out-degree >= 2, two node-disjoint linear arms, and a sink T where they
-// converge -- one arm somatic (ncov == 0), the other germline. That is the same structure
-// refinement.cpp's arm walk follows; anything else is not a bubble and is left alone.
+// converge -- one arm somatic (ncov == 0), the other germline. Anything else is not a bubble and is
+// left alone.
 //
 //         S --[ somatic arm: c1 c2 ... ]--> T
 //          \--[ germline arm: g1 g2 ... ]--^

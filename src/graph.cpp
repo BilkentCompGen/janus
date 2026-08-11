@@ -13,9 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <condition_variable>
-#include <memory>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -29,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-// ---- fail-fast binary checkpoint IO (declared in svp.h; reused by compact.cpp) ----
+// ---- fail-fast binary checkpoint IO (declared in svp.h) ----
 FILE* xopen(const std::string& p, const char* m) { FILE* f = std::fopen(p.c_str(), m); if (!f) { std::fprintf(stderr, "[FATAL] fopen %s\n", p.c_str()); std::abort(); } return f; }
 void wr(FILE* f, const void* p, size_t n) { if (n && std::fwrite(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] fwrite\n"); std::abort(); } }
 void rd(FILE* f, void* p, size_t n) { if (n && std::fread(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] truncated checkpoint\n"); std::abort(); } }
@@ -44,13 +42,9 @@ static inline uint64_t thr_ns() { struct timespec ts; clock_gettime(CLOCK_THREAD
 static double self_cpu_s()  { struct rusage r; getrusage(RUSAGE_SELF, &r);     return r.ru_utime.tv_sec + r.ru_utime.tv_usec / 1e6 + r.ru_stime.tv_sec + r.ru_stime.tv_usec / 1e6; }
 
 namespace {
-using SEdge = std::pair<uint64_t, uint64_t>;        // signature edge (edges.bin record)
-// Per-emission sigs are collected as bare uint64_t: each pool pass is a single colour
-// (normal OR tumor), so a per-record colour byte is pure waste. The run length of equal
-// sigs after sort IS the n-count (normal pass) / t-count (tumor pass); the other stays 0.
+using SEdge = std::pair<uint64_t, uint64_t>;        // an adjacency, keyed by its two signatures
 
 // ASCII complement lookup. Default 'N' (non-ACGT collapses to 'N'); A/T and C/G swapped.
-// Used by the remap+reverse RC pass and by canonical-window hashing.
 static uint8_t COMP_LUT[256];
 static bool init_comp_lut() {
     for (int i = 0; i < 256; i++) COMP_LUT[i] = 'N';
@@ -69,11 +63,10 @@ static const bool COMP_LUT_READY = init_comp_lut();
 // merge: every read enters BOTH ways (its bytes as sequenced and their reverse complement) and every
 // kept core enters as extract() produced it. A locus therefore has a mirror twin in the other strand
 // family; the twins are two nodes with different sigs and no core in common, and pairing them is the
-// scorer's job, not the graph's.
-// Repeats are handled by COVERAGE, not by a reference list (opt-in SVP_SPLIT_REPEATS, below).
+// scorer's job, not the graph's. Repeats are ordinary nodes, told apart by COVERAGE.
 
-// Node identity = core_sig (MurmurHash64A over the core's bytes), computed in extract(). The sig itself
-// is what gets stored per node -- the core bytes are no longer kept.
+// Node identity = core_sig (MurmurHash64A over the core's homopolymer-compressed bytes), computed in
+// extract(). That sig is the only thing stored per node; no sequence is kept anywhere.
 
 // ---- stage timing (wall-clock; one Tic per stage entry) ----
 struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
@@ -149,7 +142,7 @@ std::vector<std::string> collect_shards(const std::string& path) {
 }
 
 struct Shard { std::string path; int col; };
-struct Batch { std::vector<std::string> seqs; int col; uint32_t shard = 0; uint32_t rid0 = 0; };   // rid0 = global read index (within shard) of seqs[0]
+struct Batch { std::vector<std::string> seqs; int col; };
 
 // Plain, uncompressed FASTQ. Decompression is not part of this program: measured on this box,
 // gunzipping the 80 GB whole-genome .gz costs ~10 min while an assembler reads the resulting
@@ -243,103 +236,16 @@ void reads_close(Reads& r) { if (r.f) std::fclose(r.f); r.f = nullptr; }
 namespace {
 
 // ---- the build: ONE pass over the reads, exact maps -----------------------------------------
-// This was two passes with a bloom cascade in front: the cascade knew a signature's MULTIPLICITY but
-// not its NEIGHBOURS, so the reads had to be walked again once survivors were known. An exact map
-// knows both. What that costs is holding adjacencies for error cores too, since survivorship is not
-// decided until the end -- but the pruning rule is exact, not approximate: an edge is kept iff both
-// endpoints survive, which is what breaking the chain at a dead core amounted to.
-//
-// The cascade comment said two exact hashmaps of every distinct signature would not coexist. With
-// homopolymer normalisation that is no longer true -- distinct is 78.7 M per colour, and n/t share
-// one record -- so the RAM the bloom was buying is no longer worth its second pass.
-//
-// One further difference, and it is an improvement: the cascade reports a colour's count as 0 when
-// that colour stayed under the mm floor (its hits were absorbed by the filters and never recorded).
-// The exact map reports what was actually seen. A node at ncov=25/tcov=2 came back as tcov=0 before.
+// One pass and not two, because an exact map knows a signature's MULTIPLICITY and its NEIGHBOURS at
+// the same time. It costs holding adjacencies for error cores as well, since survivorship is not
+// decided until the end, but the pruning rule stays exact: an edge is kept iff both endpoints
+// survive. With homopolymer normalisation the map fits -- distinct is 78.7 M per colour and the two
+// colours share one record.
 using SigNodeMap = ankerl::unordered_dense::map<uint64_t, std::pair<uint32_t, uint32_t>>;
 
-// ---- SVP_CASCADE: an admission gate in front of the exact maps ------------------------------
-// The paragraph above holds for HiFi and stops holding for ONT. Measured on the COLO829 R10 pair:
-// 96.5% of core emissions are DISTINCT (HiFi: 4.1%), because a 217 bp core survives a 0.6%/base
-// error rate only 27% of the time. At 248.5 Gbp that is 5.02 G emissions -> ~3.8 G distinct sigs,
-// and the two maps at their measured 29.6 and 39.0 bytes per entry want ~295 GB. The box has 157.
-//
-// Every one of those bytes is spent on cores that the mm floor discards at the end. So put a
-// cascade of Bloom filters in front and only let a sig into the exact map once it has been seen
-// min_mult times. Bloom has no false negatives, so nothing real is refused; the false positives it
-// does admit are counted EXACTLY in pass 2 and then dropped by the same exact mm gate as before.
-// The graph that comes out is therefore identical to the single-pass one -- verified on `hard`.
-//
-// This is not the old cascade. That one WAS the counter, which is why it reported a colour's count
-// as 0 when that colour stayed under the floor; here it only decides who gets counted.
-namespace casc {
-
-// A blocked Bloom filter: all k bits of an item live in one 64-byte line, so an insert costs one
-// cache miss instead of k. At 5 G inserts that is the whole difference.
-struct BBloom {
-    uint64_t* w = nullptr;
-    uint64_t nblk = 0;
-    static constexpr int K = 6;                     // 6 x 9 bits of position fits in one mixed word
-    void init(uint64_t bits) {
-        nblk = std::max<uint64_t>(1, bits >> 9);
-        w = (uint64_t*)std::calloc(nblk * 8, 8);
-        if (!w) { std::fprintf(stderr, "[FATAL] cascade: cannot allocate %.2f GB\n", nblk * 64 / 1e9); std::abort(); }
-    }
-    void release() { std::free(w); w = nullptr; nblk = 0; }
-    uint64_t bytes() const { return nblk * 64; }
-    static inline uint64_t mix(uint64_t x) {
-        x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33; return x;
-    }
-    // Sets the item's k bits and reports whether they were ALL already set (i.e. probably seen before).
-    inline bool test_and_set(uint64_t h) {
-        uint64_t* b = w + (((h >> 32) % nblk) << 3);
-        uint64_t g = mix(h);
-        bool all = true;
-        for (int i = 0; i < K; i++) {
-            const unsigned p = (unsigned)(g & 511); g >>= 9;
-            const uint64_t m = 1ull << (p & 63);
-            all &= (__atomic_fetch_or(&b[p >> 6], m, __ATOMIC_RELAXED) & m) != 0;
-        }
-        return all;
-    }
-};
-
-constexpr int NSH = 64;                              // same sig-sharding as the node/edge globals
-using SigSet = ankerl::unordered_dense::set<uint64_t>;
-
-// min_mult-1 filters in series, then the exact set: filter i holds "seen at least i+1 times".
-struct Gate {
-    std::vector<BBloom> bf;
-    SigSet adm[NSH];
-    std::mutex mtx[NSH];
-    // min_mult-2 filters, never fewer than one: admission at min_mult-1 sights, one short of the
-    // floor. That slack is deliberate. Two threads can hit the same sig between one filter's load
-    // and its store and both read it as unseen, which costs that sig a level; with the slack, any
-    // core the exact gate would keep still gets in. Admitting a bit early is free -- pass 2 counts
-    // it exactly and the mm gate throws it out -- whereas admitting late loses a real node.
-    void init(int min_mult, uint64_t bits) {
-        bf.resize(std::max(1, min_mult - 2));
-        for (size_t i = 0; i < bf.size(); i++) bf[i].init(std::max<uint64_t>(1u << 26, bits >> (3 * i)));
-    }
-    void drop_filters() { for (auto& f : bf) f.release(); bf.clear(); }
-    inline bool offer(uint64_t sig) {                // true => this sight admits the sig
-        for (auto& f : bf) if (!f.test_and_set(sig)) return false;
-        return true;
-    }
-    inline bool admitted(uint64_t sig) const { return adm[sig & (NSH - 1)].contains(sig); }
-    uint64_t size() const { uint64_t n = 0; for (int i = 0; i < NSH; i++) n += adm[i].size(); return n; }
-    uint64_t filter_bytes() const { uint64_t n = 0; for (const auto& f : bf) n += f.bytes(); return n; }
-};
-
-}  // namespace casc
-
 // One read -> node counts AND raw consecutive adjacencies, both strands, in a single walk.
-// `gate` non-null => pass 2 of the cascade: only admitted cores are counted, and the chain BREAKS at
-// a non-admitted one rather than bridging over it -- which is exactly what "an edge is kept iff both
-// endpoints survive" does in the single-pass path.
 void process_read_single(std::string& s, int level, int margin, int col,
-                         SigNodeMap& nmap, EdgeMap& emap, std::string& rc_buf, uint64_t& cpu_ext, uint64_t& ncores,
-                         const casc::Gate* gate = nullptr) {
+                         SigNodeMap& nmap, EdgeMap& emap, std::string& rc_buf, uint64_t& cpu_ext, uint64_t& ncores) {
     for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
@@ -349,7 +255,6 @@ void process_read_single(std::string& s, int level, int margin, int col,
         uint64_t prev = 0; bool have = false;
         ncores += eff.size();
         for (const Span& e : eff) {
-            if (gate && !gate->admitted(e.sig)) { have = false; continue; }
             auto& c = nmap[e.sig]; (col == 0 ? c.first : c.second)++;
             // Every consecutive pair, survivor or not -- the mm gate is applied after the pass.
             if (have && prev != e.sig) { auto& x = emap[SEdge(prev, e.sig)]; (col == 0 ? x.first : x.second)++; }
@@ -363,38 +268,13 @@ void process_read_single(std::string& s, int level, int margin, int col,
     chain(p);
 }
 
-// Cascade pass 1: the same walk with no maps at all -- every core is offered to the filters, and the
-// sights that clear them go into a thread-local set for merging into the gate's shards.
-void process_read_admit(std::string& s, int level, int margin, casc::Gate& g,
-                        casc::SigSet& la, std::string& rc_buf, uint64_t& cpu_ext, uint64_t& ncores) {
-    for (char& ch : s) if (ch >= 'a' && ch <= 'z') ch -= 32;
-    const uint64_t len = s.size();
-    if (len < (uint64_t)(2 * margin + 4)) return;
-    std::vector<int> keep; std::vector<Span> eff;
-    auto chain = [&](const Parse& p) {
-        spans_of(p, keep, eff);
-        ncores += eff.size();
-        for (const Span& e : eff) if (g.offer(e.sig)) la.insert(e.sig);
-    };
-    Parse p = parse_strand(s.data(), len, level, margin, keep, cpu_ext);
-    chain(p);
-    rc_into(s, rc_buf);
-    p = parse_strand(rc_buf.data(), len, level, margin, keep, cpu_ext);
-    chain(p);
-}
-
 struct SCEdge { uint64_t a, b; uint32_t n, t; };   // sig-pair adjacency + per-colour counts (before node-id resolve)
 
 // The single pass itself: readers stream both samples, workers accumulate exact local node/edge maps
-// and periodically merge them into 64 sig-sharded globals. Same reader/worker/queue shape as the
-// bloom pool, so the only variable being changed is what the workers accumulate INTO.
-//
-// `gate` + `admit=true` runs this same machinery as the cascade's pass 1: filters instead of maps,
-// gate->adm as the only output, out_nodes/out_edges left untouched. `gate` + `admit=false` is pass 2.
+// and periodically merge them into 64 sig-sharded globals.
 void run_pool_single(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
                      std::vector<SigCount>& out_nodes, std::vector<SCEdge>& out_edges,
-                     uint64_t& reads_n, uint64_t& reads_t,
-                     casc::Gate* gate = nullptr, bool admit = false) {
+                     uint64_t& reads_n, uint64_t& reads_t) {
     constexpr int NSHARD = 64;
     SigNodeMap gnode[NSHARD]; EdgeMap gedge[NSHARD];
     std::mutex nmtx[NSHARD], emtx[NSHARD];
@@ -412,17 +292,17 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
     auto reader = [&]() {
         std::vector<char> buf(BLOCK);
         std::vector<std::string> batch; batch.reserve(BATCH);
-        std::string carry; int col_local = 0; uint32_t cur_shard = 0; uint64_t shard_reads = 0;
+        std::string carry; int col_local = 0; uint64_t shard_reads = 0;
         auto flush = [&]() {
             if (batch.empty()) return;
             std::unique_lock<std::mutex> lk(qmtx);
             cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
-            q.push(Batch{std::move(batch), col_local, cur_shard, 0}); cv_empty.notify_one();
+            q.push(Batch{std::move(batch), col_local}); cv_empty.notify_one();
             batch.clear(); batch.reserve(BATCH);
         };
         size_t si; std::string svseq;
         while ((si = next.fetch_add(1)) < shards.size()) {
-            col_local = shards[si].col; cur_shard = (uint32_t)si; shard_reads = 0;
+            col_local = shards[si].col; shard_reads = 0;
             const bool svb = is_svb(shards[si].path);
             FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
             if (svb) {
@@ -458,20 +338,9 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
     auto worker = [&]() {
         std::string rc_buf; rc_buf.reserve(1u << 16);
         SigNodeMap ln; EdgeMap le; ln.reserve(1u << 20); le.reserve(1u << 20);
-        casc::SigSet la;
         uint64_t ext = 0, emis = 0;
         const char* fe = std::getenv("SVP_FLUSH");   // test hook: force mid-run merges at smoke scale
         const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 22);
-        auto flush_adm = [&]() {
-            std::vector<std::vector<uint64_t>> ba(casc::NSH);
-            for (uint64_t s : la) ba[s & (casc::NSH - 1)].push_back(s);
-            for (int sh = 0; sh < casc::NSH; sh++) {
-                if (ba[sh].empty()) continue;
-                std::lock_guard<std::mutex> lk(gate->mtx[sh]);
-                for (uint64_t s : ba[sh]) gate->adm[sh].insert(s);
-            }
-            la.clear();
-        };
         auto flush = [&]() {
             std::vector<std::vector<std::pair<uint64_t, std::pair<uint32_t, uint32_t>>>> bn(NSHARD);
             for (const auto& kv : ln) bn[kv.first & (NSHARD - 1)].push_back(kv);
@@ -499,15 +368,10 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
                 b = std::move(q.front()); q.pop(); cv_full.notify_one();
             }
             const int c = b.col & 1;
-            if (admit) {
-                for (std::string& s : b.seqs) process_read_admit(s, level, margin, *gate, la, rc_buf, ext, emis);
-                if (la.size() >= FLUSH) flush_adm();
-                continue;
-            }
-            for (std::string& s : b.seqs) process_read_single(s, level, margin, c, ln, le, rc_buf, ext, emis, gate);
+            for (std::string& s : b.seqs) process_read_single(s, level, margin, c, ln, le, rc_buf, ext, emis);
             if (ln.size() >= FLUSH || le.size() >= FLUSH) flush();
         }
-        admit ? flush_adm() : flush();
+        flush();
         emissions += emis;
     };
 
@@ -516,15 +380,6 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
       for (int i = 0; i < nw; i++) th.emplace_back(worker);
       for (auto& t : th) t.join(); }
     reads_n = rn; reads_t = rt;
-
-    if (admit) {
-        const uint64_t na = gate->size();
-        std::fprintf(stderr, "[casc] pass1 emissions=%.3f M -> admitted=%.3f M (%.2f%% of emissions); "
-                             "filters %.2f GB + admit set ~%.2f GB\n",
-                     emissions.load() / 1e6, na / 1e6, emissions.load() ? 100.0 * na / emissions.load() : 0.0,
-                     gate->filter_bytes() / 1e9, na * 21.0 / 1e9);
-        return;
-    }
 
     // ---- the mm gate, applied once, on exact counts ----
     uint64_t distinct = 0, kept = 0;
@@ -564,10 +419,10 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
 
 }  // namespace
 
-// ---- merged stage: reads -> bloom-count -> edge-count -> self-contained graph.bin ----
-// graph.bin v3 schema: u64 K, u64 sig[K], u32 ncov[K], u32 tcov[K], u64 E, CEdge[E].
-//   sig[K]  = MurmurHash64A node identity (replaces the old raw-byte payload; colour is derived on
-//             demand from ncov/tcov and no longer stored).
+// ---- the stage: reads -> counted cores and adjacencies -> self-contained graph.bin ----
+// graph.bin schema: u64 K, u64 sig[K], u32 ncov[K], u32 tcov[K], u64 E, CEdge[E].
+//   sig[K]  = MurmurHash64A over the core's homopolymer-compressed bytes = the node's identity;
+//             colour is derived from ncov/tcov on demand and never stored.
 //   CEdge   = {u32 src, u32 dst, u32 ncov, u32 tcov}: directed adjacency with per-colour traversal
 //             counts (how many normal / tumor reads cross it). No core sequence is stored anymore.
 void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, const std::string& dir,
@@ -592,37 +447,8 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     const Snap P0 = snap();
 
     // ---- the build: ONE pass over the reads, exact maps, nodes and edges together ----
-    // SVP_CASCADE puts an admission pass in front of it (see casc:: above). Sizing the filter needs
-    // an item count before a single core has been parsed, and the input bytes give it: a FASTQ record
-    // costs 2.04 bytes per base (measured on the ONT pair), each strand emits one core per `stride`
-    // bases, and on a high-error read almost every emission is distinct -- so distinct ~ emissions.
-    // 16 bits each is where a blocked filter's false-positive rate is a few parts in a thousand, and
-    // a false positive costs nothing but an entry that pass 2 counts and the mm gate then discards.
-    // Stride is level-dependent: 97.7 bases at L5, and each level down multiplies emissions by ~2.35
-    // (measured 116.2 / 273.4 / 641.4 M for L5 / L4 / L3 over the same 5.75 Gbp of ONT reads).
-    // SVP_CASCADE_GB caps the filter for a box with less headroom -- a smaller filter only means more
-    // false admissions, never a lost node.
     std::vector<SigCount> nodes; std::vector<SCEdge> sedges; uint64_t nr_n = 0, nr_t = 0;
-    std::unique_ptr<casc::Gate> gate;
-    if (std::getenv("SVP_CASCADE")) {
-        double bases = 0;
-        for (const auto& s : shards_all) {
-            struct stat st;
-            if (::stat(s.path.c_str(), &st)) continue;
-            bases += st.st_size * (is_svb(s.path) ? 4.0 : 1 / 2.04);   // .svb packs 4 bases a byte
-        }
-        const double stride = 97.7 / std::pow(2.35, 5 - level);
-        uint64_t bits = std::max<uint64_t>(1u << 28, (uint64_t)(16.0 * 2.0 * bases / stride));
-        if (const char* cg = std::getenv("SVP_CASCADE_GB")) bits = std::min(bits, (uint64_t)(std::atof(cg) * 8e9));
-        gate = std::make_unique<casc::Gate>();
-        gate->init(min_mult, bits);
-        std::fprintf(stderr, "[casc] on: %d filter(s), %.2f GB, over %.1f Gbp of reads; admits at >=%d sights (mm=%d)\n",
-                     (int)gate->bf.size(), gate->filter_bytes() / 1e9, bases / 1e9, std::max(1, min_mult - 2) + 1, min_mult);
-        uint64_t d0 = 0, d1 = 0;
-        run_pool_single(shards_all, level, margin, threads, min_mult, nodes, sedges, d0, d1, gate.get(), true);
-        gate->drop_filters();                       // the filters have done their job; pass 2 only reads the set
-    }
-    run_pool_single(shards_all, level, margin, threads, min_mult, nodes, sedges, nr_n, nr_t, gate.get(), false);
+    run_pool_single(shards_all, level, margin, threads, min_mult, nodes, sedges, nr_n, nr_t);
     const uint64_t K = nodes.size();
     const Snap P1 = snap();
     tic.mark("pool_both");
@@ -651,7 +477,7 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     const Snap P4 = snap();
     tic.mark("resolve_edges");
 
-    // ---- write self-contained graph.bin v3: u64 K, u64 sig[K], u32 ncov[K], u32 tcov[K], u64 E, CEdge[E] ----
+    // ---- write self-contained graph.bin: u64 K, u64 sig[K], u32 ncov[K], u32 tcov[K], u64 E, CEdge[E] ----
     const std::string gp = dir + "/graph.bin";
     FILE* fg = xopen(gp + ".tmp", "wb");
     uint64_t Kw = K; wr(fg, &Kw, 8);
@@ -660,7 +486,7 @@ void run_graph_reads(const std::string& normal_fq, const std::string& tumor_fq, 
     atomic_close(fg, gp + ".tmp", gp);
     const Snap P5 = snap();
     tic.mark("write");
-    std::fprintf(stderr, "[graph] normal_reads=%lu tumor_reads=%lu nodes=%lu edges=%lu -> %s/graph.bin (v3: sig + edge counts, no payload)\n",
+    std::fprintf(stderr, "[graph] normal_reads=%lu tumor_reads=%lu nodes=%lu edges=%lu -> %s/graph.bin\n",
                  (unsigned long)nr_n, (unsigned long)nr_t, (unsigned long)K, (unsigned long)E, dir.c_str());
 
     // ---- per-component CPU-second + execution-efficiency table -------------------------------

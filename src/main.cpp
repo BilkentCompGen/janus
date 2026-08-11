@@ -11,18 +11,16 @@
 //   svp pick      <ctg.fa> <calls.vcf> <normal> <out.fq> the normal reads worth aligning
 //   svp pack      <out.svb>                    FASTQ (stdin)   -> 2-bit .svb
 //   svp dump      <in.svb>                     .svb            -> FASTQ (stdout)
-//   svp refine    <dir>                        graph.bin     -> refined.bin (topology EC)
 //
 // Every stage takes .svb or uncompressed FASTQ, so the pipeline needs no shell to convert between
 // them. The only outside programs are the aligner and samtools, which svp is not and does not
 // reimplement; `run` invokes them and every default it passes is the one measured in
-// docs/REAL_DATA.md.
+// docs/RESULTS.md.
 #include "bubbles.h"
 #include "call.h"
 #include "graph.h"
 #include "junctions.h"
 #include "pick.h"
-#include "refinement.h"
 #include "svb.h"
 
 #include <cstdio>
@@ -42,13 +40,12 @@ static void usage() {
         "usage:\n"
         "  svp run       <normal> <tumour> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10] [--min-mult 3]\n"
         "  svp graph     <normal> <tumour> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
-        "  svp junctions <graph.bin> <reads> <out.fa> [threads] [pad_cores] [per_chunk] [min_flank] [min_vaf] [edge_tcov] [edge_deg]\n"
-        "  svp bubbles   <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20] [loose_swap=1]\n"
+        "  svp junctions <graph.bin> <reads> <out.fa> [threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"
+        "  svp bubbles   <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]\n"
         "  svp call      <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=4]\n"
-        "  svp pick      <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads] [min_shared]\n"
+        "  svp pick      <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads=16] [min_shared=5]\n"
         "  svp pack      <out.svb> < reads.fastq\n"
-        "  svp dump      <in.svb> > reads.fastq\n"
-        "  svp refine    <dir>                                  (graph.bin -> refined.bin)\n");
+        "  svp dump      <in.svb> > reads.fastq\n");
 }
 
 // ---- `run`: the pipeline ---------------------------------------------------------------------
@@ -198,7 +195,6 @@ int main(int argc, char** argv) {
     if (cmd == "run" && pos.size() == 4)
         return run_pipeline(pos[0], pos[1], pos[2], pos[3], level, margin, min_mult, threads);
     if (cmd == "graph" && pos.size() == 3) run_graph_reads(pos[0], pos[1], pos[2], level, margin, min_mult, threads);
-    else if (cmd == "refine" && pos.size() == 1) run_refine(pos[0]);
     else { usage(); return 2; }
     return 0;
 }

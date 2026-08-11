@@ -1,9 +1,0 @@
-HPC: 223/233 detected   |   noHPC: 225/233 detected
-
-=== found by HPC, MISSED by noHPC: 0 ===
-=== found by noHPC, MISSED by HPC: 2 ===
-        id  chrom         pos    svlen         region  cores  present  depleted   ncov   dose | other: dep   ncov
-  sv125377      Y  45,118,102    5,278              ?    152   100.0%      3.3%   4321   1.07         0.0%      0
-  sv125319      1 122,295,921      887              ?     22   100.0%     27.3%    920   0.78         0.0%      0
-(backbone depth: HPC=29  noHPC=24)
-
