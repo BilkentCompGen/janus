@@ -1,210 +1,177 @@
-# Pipeline — current stages and algorithms
+# Pipeline — the stages, and what each one does
 
-`svp` is a reference-free somatic SV caller. It builds a 2-colour LCP-core graph directly from
-reads (normal vs tumor HiFi), error-corrects it, then calls somatic variants off it. No assembly,
-no alignment, no reference in the caller. The graph is **coordinate-free** *and*, since the **v3
-sig-only** format, **sequence-free**: a node is a 64-bit core signature plus its per-colour read
-counts. Sequence and genome coordinates only re-enter at the very end, in the anchoring step, and
-only to write a VCF a benchmark can score.
+`svp` calls somatic structural variants from a tumour/normal pair of HiFi read sets. The somatic
+decision is made in a graph built from the reads themselves, with no reference and no assembly; a
+reference enters only at the end, to give the surviving candidates coordinates a VCF can carry.
 
-End-to-end benchmark flow:
-`reference → insilicoSV (truth) → Badread (reads) → [svp graph → svp refine] → call_v3 → anchor_v3 → Truvari`.
+    svp run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10] [--min-mult 3]
 
-## The v3 on-disk graph (one format, two files)
-`graph.bin` (build output) and `refined.bin` (refine output) are byte-identical in layout, so every
-consumer reads either one:
+One command, eight stages, each skipped when its output is already in `<dir>`, so a kill and a
+restart pick up where they left off:
+
+| # | stage | in | out |
+|---|---|---|---|
+| 1 | `graph` | both read sets | `graph.bin` |
+| 2 | `bubbles` | `graph.bin` + both read sets | `drop.sigs` |
+| 3 | `junctions` | `graph.bin` + tumour reads | `ctg.fa` |
+| 4 | minimap2 + samtools | `ctg.fa` + `ref.fa` | `ctg.bam` |
+| 5 | `call` (no normal) | `ctg.bam` | `candidates.vcf` |
+| 6 | `pick` | `ctg.fa` + `candidates.vcf` + normal reads | `normal_at_candidates.fastq` |
+| 7 | minimap2 + samtools | that FASTQ + `ref.fa` | `normal.bam` |
+| 8 | `call` (with normal) | `ctg.bam` + `normal.bam` | `calls.vcf` |
+
+Every stage takes `.svb` or uncompressed FASTQ directly, so nothing has to convert between them —
+minimap2 is the only thing in the pipeline that cannot read `.svb`, and `run` streams `svp dump` into
+it rather than writing a FASTQ out. The only outside programs are the aligner and samtools, which svp
+is not and does not reimplement. Every default `run` passes is the one measured in `RESULTS.md`.
+
+## 1. `graph` — reads → `graph.bin`
+
+One pass over both samples. Each read is parsed into LCP cores (level 5, `lib/lcptools` `biolcp`)
+**both ways**, its own bytes and their reverse complement, because the parse is not
+reverse-complement symmetric (`FOUNDATIONS.md`). Cores within `margin` (10 bp) of a read end are
+dropped — those are the ones a read boundary can truncate.
+
+A core's identity is `core_sig` = **MurmurHash64A over the core's homopolymer-compressed bytes**
+(`src/extract.cpp`). Compression before hashing is why a HiFi run-length slip does not change a
+locus's identity; start/end stay in raw read coordinates, so positions and margins are unaffected.
+
+Counts are exact — one `sig -> (ncov, tcov)` map and one `(prev_sig, cur_sig) -> (ncov, tcov)` map,
+64-way sharded, merged from per-worker maps. A signature becomes a node if it was seen `min_mult`
+(3) times in **either** colour; an edge survives iff both of its endpoints do. Node id is the index
+into the sig-sorted survivor array.
 
 ```
-u64 K                         # nodes
-u64 sig[K]                    # MurmurHash64A of the core's bytes = the node's identity
-u32 ncov[K], u32 tcov[K]      # normal / tumor read counts on the core
+u64 K                                              # nodes
+u64 sig[K]                                         # MurmurHash64A over the HPC core bytes
+u32 ncov[K], u32 tcov[K]                           # normal / tumour read counts on the core
 u64 E
-CEdge{u32 src, u32 dst, u32 ncov, u32 tcov}[E]    # directed adjacency + per-colour traversal counts
+CEdge{u32 src, u32 dst, u32 ncov, u32 tcov}[E]     # directed adjacency, per-colour traversal counts
 ```
 
-- **No `color[]`, no `seqlen[]`, no payload.** Colour is *derived* on demand:
-  `ncov && tcov → 3 shared`, `ncov → 1 normal-only`, `tcov → 2 tumor-only (candidate somatic)`.
-- **Edges carry counts** (how many normal/tumor reads crossed that adjacency). Node counts are
-  mm-floored at build time; edge counts are raw (min 1) — the gap between the two is what `refine`'s
-  edge gate exists to close.
-- **No sequence anywhere** ⇒ every "size" the caller produces is a **core count**, not bp. Only
-  `anchor_v3` converts to bp, using the average core step it measures on the reference.
+No colour array and no sequence is stored. **Colour is derived**: `ncov == 0 && tcov > 0` is
+somatic, `tcov == 0 && ncov > 0` normal-only, both non-zero shared. That derived somatic set is the
+entire somatic hypothesis — everything downstream only narrows it.
 
-## CLI — two resumable, checkpointed stages
-The expensive LCP pass is paid in `graph`; `run` skips any stage whose checkpoint already exists.
-Checkpoints are atomic (`.tmp` + rename). **`call` and `anchor` are no longer subcommands** — they
-live as out-of-band tools (below).
+`graph.bin` is not byte-reproducible in its junk-core tail (map merge order), but the surviving core
+set is deterministic.
 
-```
-svp graph  <normal> <tumor> <dir> [--level 5 --margin 10 --min-mult 3 --threads 16]
-svp refine <dir>
-svp run    <normal> <tumor> <dir>   # graph → refine, skipping completed stages
-```
+## 2. `bubbles` — `graph.bin` + reads → `drop.sigs`
 
-Each sample argument is a single FASTQ/`.gz` **or a directory of shards** (`.fastq` / `.fq` / `.svb`),
-read in parallel.
+Most somatic material in the graph is not a junction: it is SNVs and sub-SV edits, and each one
+would otherwise become a chunk, a contig, and a minute of alignment. A **bubble** is a source with
+out-degree ≥ 2 whose two node-disjoint linear arms converge on one sink, with exactly one arm
+somatic. An L5 core spans ~217 bp, so a core signature cannot see a 50 bp change — the arms are
+opened up with minimizers (k=21, w=22, ~13 per core, taken on homopolymer-compressed bytes) and
+compared **in order**:
 
-## 1. graph  (`run_graph_reads`, graph.cpp)  — reads → self-contained `graph.bin`
-Two passes over the same reads.
+- same sequence with a local change → the arms are the same length and the longest common
+  subsequence covers nearly all of the somatic arm → an edit, and its cores go into `drop.sigs`;
+- a novel adjacency → shared minimizers do not stay in order and the LCS collapses → kept.
 
-**Decode.** One pipe-reader per `.gz` reads plain FASTQ from a **rapidgzip** decode process
-(`open_decode` → `popen`; parallel single-stream inflate, ~1.5 GB/s @ ~4 cores vs zlib's
-~120 MB/s/core). `.svb` shards (2-bit packed, `tools/svb_pack`) are `fopen`ed and decoded inline —
-no pipe, no gzip. Tunables: `SVP_RAPIDGZIP` (binary path, default `lib/rapidgzip/venv/bin/rapidgzip`),
-`SVP_DECP` (decode threads/file), `SVP_FILL_NW` (pass-2 workers), `SVP_NOCACHE`.
+Thresholds: `max_dlen` 12 minimizers of arm-length difference, `max_unmatched` 20 somatic minimizers
+outside the LCS. On `hard` that drops 83% of somatic cores and 84% of the contigs for 2 junctions of
+recall.
 
-**Pass 1 — count (`run_pool_both`).** Both samples in one pool. Workers run **two LCP extractions
-per read, forward and reverse-complement** (the parse is not RC-symmetric), drop any core within
-`margin` (10) of a read end, and take each core's identity `core_sig` = **MurmurHash64A over the
-core's own bytes** (no flank). Each sig is counted in a sharded **bloom cascade** — one cascade per
-colour (`min_mult-1` plain bloom filters + an exact survivor map). **Survivors** = sigs seen
-**≥ `min_mult`** times; they become the graph's nodes. The per-colour `min_mult` gate happens *inside*
-the cascade, **before** the normal/tumor merge (a normal-error sig drops, leaving its locus
-tumor-only). Bloom collisions can only over-keep (false survivor); they never drop a real one (FN = 0).
-Survivors are merged into one `(sig, n, t)` record and sorted by sig — **node id = sorted index**.
+## 3. `junctions` — `graph.bin` + tumour reads → `ctg.fa`
 
-`SVP_COUNT_ONLY=1` stops here and dumps every survivor as `counts.bin` (`u64 K` + `{sig,n,t}[K]`),
-so any candidate mm-floor can be studied offline.
+A **chunk** is a connected component of the somatic subgraph, minus everything `drop.sigs` named:
+one junction candidate, found without a reference. The tumour reads are scanned once and, for each
+chunk, the first `per_chunk` (5) reads carrying it are cut down to
 
-**Pass 2 — edge count (`edge_count_pool`).** Re-decode and re-LCP the same reads (same dual-strand
-extraction, same margin, same blacklist merge, so the adjacencies match the node set). For each read,
-walk its cores in order and, for every consecutive pair where **both** cores survived the mm gate,
-increment that `(prev, cur)` adjacency in the read's colour (a non-surviving core breaks the chain).
-Per-worker maps are periodically merged into 64 sig-sharded global maps. Afterwards the sig-pair edges
-are resolved to node ids (self-loops dropped) and sorted → `CEdge[E]`.
+    [ start of (first somatic core − pad_cores) , end of (last somatic core + pad_cores) ]
 
-**Repeat-core blacklist (ON by default, `src/blacklist.cpp`).** Cores whose sig occurs more than
-*minfreq* times in the reference (built by `tools/build_blacklist`) are repeats. A maximal run of them
-is absorbed into its non-blacklisted flanks as two **overlapping** merged cores — `(A+X)` and `(X+B)` —
-so `A→X→B` collapses to `A→B` and the bare repeat core never becomes a node (the two merged cores
-still share the run's bytes, so the edge is a real overlap). `SVP_BLACKLIST=<path>` overrides the file;
-`SVP_NOBLACKLIST=1` disables it. **The identical merge must be applied by anything that re-parses the
-reference** (`anchor_v3`, `tools/fasta_cores`) or merged reference cores will not match merged graph
-nodes and anchoring silently fails.
-*Gotcha:* the default path `outputs/svp/blacklist_l5_mm10.bin` is not in the tree (only
-`blacklist_l5_mm2.bin` is), and a missing blacklist is a fail-fast abort — pass `SVP_BLACKLIST=` or
-`SVP_NOBLACKLIST=1`.
+with `pad_cores` = 50, which is the novel sequence plus a few kilobases of germline anchor either
+side. No assembly and no cross-read merge is needed to get there: consecutive LCP cores of one read
+are already adjacent and overlapping in that read's own bytes, so the span between two core
+boundaries **is** the sequence. Runs closer together than the padding are merged into one window —
+a mobile-element insertion is somatic only at its two joins, and cutting them apart would mean no
+contig ever contains the insertion.
 
-**Cross-pass core-boundary cache (`CoreCache`) — currently vestigial.** Pass 1 can record each read's
-filtered core `(start, width)` pairs, keyed by `(shard, read-index)`, so a second pass could replay
-them instead of re-extracting. Nothing consumes it: `edge_count_pool` re-extracts unconditionally, and
-it is disabled outright whenever the blacklist is on (which is the default), because the merge rewrites
-core boundaries. Don't count on it for a cost estimate.
+A window whose achieved anchor is under `min_flank` (300 bp) on either side is not emitted, and the
+count of those is reported: they are exactly the chunks a cross-read merge would be for. Records are
+named `<read>_<n>`, so a read carrying two junctions cannot inflate either one's support.
 
-## 2. refine  (`run_refine`, refinement.cpp)  — `graph.bin` → `refined.bin`
-Topology + counts error-correction; **same v3 format in and out**. Each structure is judged by its read
-count **relative to local coverage** (never a global gate — that is what an over-aggressive `min_mult`
-does, distorting real bubbles). Default passes:
+## 4, 7. minimap2
 
-1. **tips** — short dead-end core-chains whose count ≪ the junction they hang off, plus tiny
-   low-count isolated contigs (pure error islands). Iterated (removal exposes new tips).
-2. **low-cov side-branches** — leaf-ish sprouts whose count is a small fraction of their strongest
-   neighbour (recurrent-error cores clinging to a real path).
-3. **bubble popping** — the low, error-like minority arm of a short bubble, judged **per colour and
-   flank-relative**: the arm is compared against the bubble's anchor (flank) coverage in *each* sample,
-   not an absolute count. A balanced arm is a germline het (keep both); an arm present in tumor and
-   absent in normal is a candidate somatic (keep); only a clearly imbalanced, non-somatic minority arm
-   is popped. Then a tip re-pass.
-4. **edge gate** (`pass_edges`) — node counts are mm-floored but edge counts are raw, so a
-   "tumor-only" edge can rest on a *single* tumor read: the dominant somatic-junction false positive.
-   Two local, per-colour gates: a **hard floor** (`max(ncov,tcov) ≥ REF_EDGE_MM`, default 3 — the edge
-   analogue of the node mm floor) and a **relative gate** (drop an edge carrying less than
-   `REF_EDGE_FRAC`, default 0.10, of its endpoints' coverage in *every* colour it has). Edges with a
-   killed endpoint are dropped regardless.
+`minimap2 -ax map-hifi -Y --secondary=no` into `samtools sort`. Stage 4 places the junction contigs;
+stage 7 places only the normal reads stage 6 picked.
 
-An `abs_keep` floor (default 10) protects well-covered cores in the tip/low-cov passes. Env-tunable:
-`REF_TIP_MAX REF_TIP_FRAC REF_ISLAND_CNT REF_LOWCOV_FRAC REF_BUB_MAX REF_HET_FRAC REF_SOM_FRAC
-REF_ABS_KEEP REF_ROUNDS REF_EDGE_MM REF_EDGE_FRAC`. (Log `[refine]`.)
+## 5, 8. `call` — aligned contigs → breakpoints
 
-**Opt-in modes — each writes a DISTINCT file, never clobbering `refined.bin`:**
-- **`REF_ITER=<N>` → `refined_iter.bin`: the iterative node↔edge convergence loop.** Nodes and edges
-  are not independent — an error edge's reads also inflated its endpoints' node counts. So: first a
-  one-shot **flow-conservation filter** (`REF_FLOW=1`, default on inside this mode) removing nodes
-  whose summed incident edge counts *exceed* their own read count (an impossibility: every read
-  through a node is partitioned among its edges — empirically ~95% error cores, real cores violate
-  ~0.01%); it must run on still-consistent counts, i.e. before any deflation. Then up to N rounds of:
-  gate the edges → **subtract each dropped edge's per-colour counts from its endpoint nodes** → remove
-  nodes left at zero coverage in both colours → rebuild adjacency → re-run the node passes. The peel is
-  monotonic (dead nodes only accumulate, edges only shrink), so it converges; N is just the bound, and
-  the loop exits early when a round drops nothing. Known approximation: a read crosses a node once but
-  up to two of its edges, so a node with one kept and one dropped edge is over-deflated.
-  `REF_EDGE_CLAMP=1` (clamp each surviving edge to `min(endpoint counts)`) is **off** — measured to
-  recolour shared edges to tumor-only once deflation zeroes a node's `ncov` (~55k false-somatic edges);
-  the flow filter is the safe alternative because it *drops* over-flow structures instead of
-  recolouring them.
-- **`REF_TIP_NUKE=1` → `refined_nuketip.bin`**: aggressive tip removal (ignores `abs_keep`, removes
-  every tip ≤ `REF_TIP_MAX`). Measured: clears ~116k extra tip errors while eroding ~0.03% of somatic
-  cores (short SV-end trims, not lost calls).
+The part of a breakpoint caller that is doing work on this input, and nothing else: a MAPQ and
+mismatch gate, split alignments chained in **query** order, CIGAR indels at or above the SV floor,
+clustering, a support floor. Phasing, coverage histograms, VAF and multi-sample subtraction are idle
+here by construction — a contig is not a read pileup, and the somatic decision was already made in
+the graph.
 
-## 3. tools/call_v3  — `refined.bin` → `<prefix>.tsv` + `<prefix>.altsigs.bin`
-Standalone (not a `svp` subcommand, not built by `make`). Reference-free somatic calling straight off
-the refined graph, using **only graph-intrinsic signals** — derived colour, per-node `ncov`/`tcov`,
-topology. A somatic allele always involves a tumor-only (colour-2) core. Call sources:
+A junction is two reference sides plus the direction each side leaves the reference in: `d=+1` the
+alignment ends there going right, `d=-1` it starts there going left. That pair is the whole type
+vocabulary — (+,−) deletion, (−,+) duplication, equal signs inversion, two contigs a breakend — so
+the caller never has to know what an SV is in order to type one.
 
-- **BUBBLE** — a two-arm bubble carrying ≥1 tumor arm → `T/N`, `T/S`, `T/T`. The tumor arm is the alt
-  allele; type and size come from the signed **arm core-count Δ** = `|alt| − |ref|` cores
-  (`|Δ| ≤ SNP_EPS` (0) → SNP, `Δ > 0` → INS of Δ cores, `Δ < 0` → DEL of −Δ cores). Support = the alt
-  arm's minimum `tcov`; VAF = mean alt `tcov` / anchor `tcov`.
-- **BND** — a tumor-only run that **bridges two shared (real) anchor cores at ~full tumor depth**
-  (`CALL_DEPTH_FRAC`, default 0.30) = a novel adjacency with no reference counterpart (so it never
-  forms a bubble) → DUP / INV / large-indel / translocation breakend. Recovered by tracing the
-  highest-`tcov` tumor path to the nearest shared core on each side (works inside the repeat tangle;
-  no degree-1 requirement), run length capped at `CALL_JMAX` (12). Tagged `BND_CNgain` when an anchor's
-  tumor/normal depth ratio ≥ 1.5.
-- **TIP** — a tumor-only dead-end chain (≤16 cores) → insertion-end / breakend candidate.
+Three cases do not reach the aligner as a split, and each is read out of the contig's own bases:
 
-Duplicates (including fwd/RC re-emissions of the same allele) are collapsed by a hash of the **alt
-core-sig set**; consumed nodes are not reused by a later pass. Env: `CALL_MINSUP` (default 3),
-`CALL_JMAX`, `CALL_DEPTH_FRAC`. Outputs `<prefix>.tsv` (per-call features; sizes in **cores**) and
-`<prefix>.altsigs.bin` (`{u64 id, u32 nsig, u64 sig[]}` per call — the alt cores' stored sigs).
-(Log `[call]`.)
+- **short tandem duplication** — minimap2 writes the second copy as an insertion. The copy it
+  duplicates is right there in the contig, on one side or the other of the inserted bases, and those
+  flanking bases are aligned, so they *are* the reference at that locus. Which side matches says
+  which copy the aligner kept, and that fixes the duplicated interval.
+- **short inversion** — the aligner walks straight through it and pays with a dense run of tiny
+  indels. A window that shredded is a breakpoint pair whatever the aligner called the pieces.
+- **a VNTR that looks like one** — the same shred. It is separated from a real inversion by the
+  tandem-repeat fraction of the window's own bases (`shred_rep`, 0.40); random sequence sits near
+  0.25.
 
-## 4. tools/anchor_v3  — calls + reference → `calls.vcf`
-`anchor_v3 <graph_v3.bin> <ref.fasta> <calls_prefix> <out.vcf> [threads=16]` (needs `ref.fasta.fai`).
-The calls are coordinate-free; this stage gives them coordinates so a benchmark can score them.
+Support counts **distinct contig names**, so a contig reaching the same junction twice supports it
+once. Positions are 1-based from the moment a junction is built, so the VCF writer converts nothing.
 
-The alt cores are tumor-only and by definition **absent** from the reference — but their shared /
-normal-only graph **neighbours** are present. So: for each call, collect its anchor nodes from the
-graph; **re-extract the reference contig-parallel** with the *same* level/margin/blacklist merge and
-the *same* `core_sig`, both strands; match anchors by sig (a sig seen at ≥2 distinct positions is a
-repeat → dropped as ambiguous); bracket the call between its located anchors on the contig where most
-of them agree. Core counts become bp via the **average core step measured on that same scan**
-(`total_bp / total_cores`) — nothing is assumed about core length. BND records are re-typed and
-re-sized against the anchored reference span (a bridged span that re-parses as mostly normal-only
-cores is really a DEL; a sub-50 bp span with a long junction is really an INS), a `LOCALSUB` filter
-flags junctions that merely reproduce the span they bridge (local SNP/MNP misfires), and same-class
-calls at the same locus are deduped keeping the highest-support representative. Emits VCF 4.2 with
-`SVTYPE / SVLEN / END / NANCHOR / CALLSRC / SUBTYPE`. (Log `[anchor]`.)
+**The mismatch gate** (`max_mm`, 0.01) drops an alignment carrying far more mismatch than the reads
+can contain — that is not this locus. It counts substitutions only: NM includes inserted and deleted
+bases, so using it raw would score a contig carrying a real 400 bp deletion at 8% and throw away
+exactly the events being looked for.
 
-## 5. Scoring
-```
-scripts/truvari.sh <truth.vcf> <calls.vcf> <ref.fa> [outdir]     # truvari bench --pctseq 0 + FN/FP breakdown
-cd simulation && make bench/hard CALL=<calls.vcf>                # same, against truth/hard/out.vcf
-```
+**The anchor-repeat gate** (`anchor_rep`, 0.50) drops a call whose anchor is a tandem repeat, taken
+on the anchor side only, where the bases are aligned at under 1% mismatch and therefore are the
+reference at that locus.
 
-## Source layout (`src/`)
-`graph.cpp` (graph stage + readers / pools / bloom cascade / `.svb` reader / `CoreCache` / checkpoint
-IO), `extract.cpp` (biolcp SoA adapter + the MurmurHash64A `core_sig`), `blacklist.cpp` (the shared
-repeat `(A+X)→(X+B)` merge), `refinement.cpp` (`run_refine`), `main.cpp` (CLI: `graph`/`refine`/`run`),
-`svp.h` (shared PODs + IO helpers), `graph.h` (stage decls), `unordered_dense.h` (vendored flat hash
-map). One binary, one Makefile, no CMake/CI. The v3 call/anchor tools live in `tools/` and are compiled
-out of band; `anchor_v3` must link the same `extract.o` + `blacklist.o` + `lcptools` so its parse and
-sigs are byte-identical to the graph's.
+**The germline question** is the one thing the graph cannot ask. The graph decides somatic by exact
+core sequence, and in a repeat that is not the same question as somatic: the tumour and normal reads
+simply do not spell the locus with the same 217 bp core, so `ncov == 0` is true of the *string*
+while the *variant* is shared. `call` asks the normal reads at the reference locus instead — same
+event, or a locus the normal cannot place either (a quarter or more of its reads above 2% mismatch),
+and the call is dropped. Breakends are asked at both ends.
 
-## Build flag
-`-DLARGE_GENOME` is load-bearing and must match `lib/lcptools`'s build (64-bit core start/end on a
-whole-genome reference). Rebuild the static lib if you see segfaults on struct fields. svp links no
-zlib — all decode is rapidgzip (installed by `make install-deps` into `lib/rapidgzip/venv`).
+Stage 5 runs this with no normal, to produce the candidate loci. Stage 8 runs it again with the
+normal BAM stage 7 built.
 
-## Known gaps / next steps
-- **Sizes are core counts, not bp, until anchoring.** Everything upstream of `anchor_v3` reasons in
-  cores; a size in bp only exists after the average-core-step conversion, which is a *mean* — expect
-  size error on short events.
-- **Short insertions (<50 bp)** are below LCP-core resolution (median INS ~25 bp) → low recall.
-  **[historical, v2 payload caller]** ≥50 bp DEL/DUP/INV recovered ~95–98%; the v2 caller reached
-  ~85% overall. The sig-only v3 caller is a port of it, **not yet re-benchmarked** — do not quote the
-  old numbers for it.
-- **DUP vs INV sub-typing** is unresolved: both land as `BND`. The BND/TIP false-positive filter is
-  the other open front.
-- Inversions/DUPs are limited by dual fwd+RC extraction (see `FOUNDATIONS.md`) — strand folding is the
-  precondition for cleaner recovery, and cannot be done by per-emission canonicalization.
+## 6. `pick` — which normal reads are worth aligning
+
+The germline question is the largest single source of precision in the pipeline: without it hcc1954
+leaves 1409 false calls instead of 241. Answering it by aligning the whole normal would make the
+aligner the dominant cost of a caller whose premise is that the graph replaces alignment — and it
+aligns far more than the question needs, which is only ever asked at the candidate loci.
+
+Each candidate names the contig it came from (`CTG=` in the VCF). `pick` takes those contigs'
+**germline anchors** — the flanks, which are sequence the normal has too, as opposed to the somatic
+middle, which it does not — parses them into cores, and emits every normal read sharing at least
+`min_shared` (5) of them. On hcc1954 that is 1.56% of the sample, and it answers the question as
+well as all of it: 0.887/0.858 against 0.891/0.858, fourteen minutes of alignment against two hours.
+
+## Source layout
+
+    src/graph.cpp       the graph stage, the .svb/FASTQ reader every stage shares, checkpoint IO
+    src/extract.cpp     biolcp adapter: homopolymer compression + MurmurHash64A core_sig
+    src/bubbles.cpp     sub-SV bubbles -> drop.sigs
+    src/junctions.cpp   somatic chunks -> junction contigs
+    src/call.cpp        aligned contigs (+ the normal at the locus) -> VCF
+    src/pick.cpp        the normal reads the germline question needs
+    src/svb_pack.cpp    FASTQ -> 2-bit .svb
+    src/svb_dump.cpp    .svb -> FASTQ
+    src/main.cpp        the CLI and `run`
+    src/svp.h           shared structs, the reads interface, checkpoint IO decls
+    src/unordered_dense.h   vendored flat hash map (ankerl)
+
+One binary, one Makefile, no CMake, no CI.
+
+`-DLARGE_GENOME` is load-bearing: it must match the flag `lib/lcptools` was built with (64-bit core
+start/end), or core structs read back corrupt.

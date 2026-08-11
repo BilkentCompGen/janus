@@ -1,8 +1,11 @@
-# svp on real tumour/normal HiFi — what was measured
+# Results — everything that was measured
 
-Two sittings. **2026-08-05/06** established that the simulation numbers do not survive contact with
-real data and that nothing tried then was worth keeping. **2026-08-10** found what was wrong and
-fixed it. F1 against the paper's own truth, from that state to this one:
+Scoring is **Minda**, the Severus paper's own instrument, at the paper's settings:
+
+    minda truthset --base hifi/<pair>/truth_clean.vcf --vcfs <calls>.vcf --min_size 50 --tolerance 500
+
+Severus is scored the same way, from its **published** output in the paper's archive, so the
+comparison is symmetric. F1 against that truth, from the first real-data sitting to now:
 
 | | hcc1954 | h2009 | hcc1937 | h1437 |
 |---|---|---|---|---|
@@ -16,10 +19,10 @@ unless it says otherwise.
 ## The data
 
 **Reads** — ENA, BioProject **PRJNA1086849**, the Severus paper's own project, which is the
-**CASTLE** panel (Cancer Standards Long-read Evaluation). PacBio **Revio**, five tumour/normal pairs,
-`hifi/get.sh` fetches and packs them. Measured on the raw fastq, not assumed: median read 16.2 kb,
-median per-read Q38.5, overall Q37.4 → **0.018% error**. These are HiFi despite every file in the
-archive being named `_subreads.fastq.gz`.
+**CASTLE** panel (Cancer Standards Long-read Evaluation). PacBio **Revio**, five tumour/normal
+pairs; `hifi/get.sh` fetches and packs them. Measured on the raw fastq, not assumed: median read
+16.2 kb, median per-read Q38.5, overall Q37.4 → **0.018% error**. These are HiFi despite every file
+in the archive being named `_subreads.fastq.gz`.
 
 | pair | tumour | normal | truthset |
 |---|---|---|---|
@@ -106,30 +109,27 @@ hcc1954, against the 8.35M-read whole-normal arm:
 | normal | reads | alignment | precision | recall | F1 |
 |---|---|---|---|---|---|
 | whole | 8.35M | ~2 h | 0.891 | 0.858 | 0.874 |
-| picked, `min_shared` 1 | 405,604 (3.58%) | ~14 min | 0.887 | 0.858 | 0.872 |
-| picked, `min_shared` 5 | 176,912 (1.56%) | ~14 min | 0.887 | 0.858 | 0.872 |
+| picked, `min_shared` 1 | 405,604 (3.58%) | 858 s | 0.887 | 0.858 | 0.872 |
+| picked, `min_shared` 5 | 176,912 (1.56%) | 858 s | 0.887 | 0.858 | 0.872 |
 
 1 and 5 give the identical call set — TP 949, FP 121 — so the tighter cut is free. A read that really
 covers the locus shares dozens of cores; a single shared core is what a repetitive anchor collects
-from everywhere.
+from everywhere. **`pick` was verified on hcc1954 only**; the other three pairs' numbers below were
+measured against their deepened normal aligned whole.
 
 **7. `min_supp` 3 → 4.** Not a mechanism, a point on the precision/recall curve — but the point is
 chosen from four samples rather than one: 3 is worse than 4 on every one of them, and 5 wins on
 h2009 and h1437 by about as much as 4 wins on hcc1937 and hcc1954. The tie goes to recall, which is
 the side svp is behind on for three of the four.
 
-## Running it
-
-    svp run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir>
-
-One command, eight stages, each skipped when its output is already there: graph → bubbles →
-junctions → minimap2 on the contigs → `call` with no normal → `pick` → minimap2 on the picked normal
-reads → `call`. Verified end to end on hcc1954: the one command reproduces the 0.887 / 0.858 / 0.872
-that the stages run by hand produce, record for record. Every stage takes .svb or
-uncompressed FASTQ directly, so nothing has to convert between them; the only outside programs are
-minimap2 and samtools, which svp is not. Every default it passes is the one measured below — the
-configuration is in `src/`, not in a wrapper script, which is why the ones this work was measured
-with are gone rather than kept as the way to reproduce it.
+**8. Homopolymer compression before hashing.** Checked on the reads themselves rather than assumed,
+and not on the simulation: `scripts/hifi_error_profile.py` compares hcc1954's normal reads to each
+other over 5 Mb of chr1 (11,824 reads), calling a difference an error when at most 20% of the reads
+covering that locus carry it. **83.4% of the errors are indels** (49.2% deletion, 34.3% insertion),
+and those indel errors are **2.3× enriched** in homopolymer runs ≥ 3 while run=1 is depleted 0.4×.
+Substitution errors, the control, show no enrichment at all (1.0–1.1×). 80% of indel errors sit in a
+run ≥ 2, so compressing runs before hashing neutralises about two thirds of everything that could
+change a core's identity.
 
 ## Where svp stands
 
@@ -156,16 +156,34 @@ pad 50, `min_aln` 0, `shred_rep` 0.40, `anchor_rep` 0.50, `normal_dirty` 0.25, `
 | | Severus | 0.782 | 0.842 | 0.810 |
 
 **svp is level with the published Severus output on hcc1954 and behind on the other three.** On
-hcc1954 it is ahead on recall by 0.032 and behind on precision by 0.034, for an F1 0.001 short;
-with the whole normal aligned instead of the picked 1.56% it is 0.891/0.858/0.874, ahead by 0.003 --
-that difference is what the pick costs, against two hours of alignment instead of fourteen minutes; the same
-call set scored against the 2-support ensemble is 0.924 / 0.710 / 0.803 against Severus's
-0.967 / 0.679 / 0.798, ahead on recall and F1 there too. On hcc1937 and h1437 svp passes Severus on
+hcc1954 it is ahead on recall by 0.032 and behind on precision by 0.034, for an F1 0.001 short; with
+the whole normal aligned instead of the picked 1.56% it is 0.891/0.858/0.874, ahead by 0.003 — that
+difference is what the pick costs, against two hours of alignment instead of fourteen minutes. The
+same call set scored against the 2-support ensemble is 0.924/0.710/0.803 against Severus's
+0.967/0.679/0.798, ahead on recall and F1 there too. On hcc1937 and h1437 svp passes Severus on
 PRECISION at supp≥6 (0.872 against 0.859, 0.806 against 0.782) but gives up too much recall to get
 there. h2009 is behind on both at every setting. The other three samples have no looser ensemble in
 the archive, so only the 4-support number exists for them.
 
-Simulation, same code path: `hard` gives 526/600 junctions at 98.0% precision at supp≥3 and 100.0%
+The whole of `svp run` was verified end to end on hcc1954: the one command reproduces the
+0.887/0.858/0.872 that the stages run by hand produce, record for record.
+
+## Simulation
+
+The development loop, and the regression check for everything above. `insilicoSV` writes a tumour
+genome and its truth from `simulation/ref.fasta`; Badread simulates HiFi reads from both
+(`scripts/sim_reads_badread.sh`, `scripts/gen_badread_reads_wg.sh`). `hard` is a whole-genome ~30×
+pair, hypermutated: ~118k SNVs, ~6.6k small indels, ~600 SVs, `min_intersv_dist=1` so small variants
+pepper the junctions.
+
+Scoring is **junction-level**, against the simulator's own `adjacencies.bed` — the pairs of
+reference loci the tumour puts next to each other and the normal does not — so a deletion counts one
+junction and an inversion two, and a caller that splits an event into its real pieces is not
+punished for it:
+
+    scripts/severus_bp_eval.py <calls.vcf> <truth.vcf> <adjacencies.bed> [tolerance=100]
+
+At the shipped defaults `hard` gives **526/600 junctions at 98.0% precision** at supp≥3 and 100.0%
 at supp≥5, against Severus's 83.9% / 93.9% on the same contig BAM.
 
 ## Measured and rejected
@@ -176,16 +194,19 @@ Written down because each cost real time and each would otherwise be tried again
   sibling branch, because the tumour can only fail to match the normal's spelling if the normal also
   fails to match the tumour's. The mechanism is right and the filter is not: it removed 23 false
   calls and 16 true ones. In repeats an anchor carries both a somatic and a normal-only branch for
-  many reasons that are not an allelic swap. Diff at `/home/yuio/tmp/bubbles_colour_rule.diff`.
+  many reasons that are not an allelic swap.
 - **Loosening the bubble length threshold** (`max_dlen` 12 → 2). The threshold is 12 MINIMIZERS,
   roughly a 130–190 bp difference, which is far above the 50 bp floor the caller reports at — and it
   removes 63.1% of hcc1937's somatic cores against 48.6% of hcc1954's, while hcc1937's missed
   deletions have a median of 127 bp. The reasoning holds and the effect does not: +0.015 recall for
   −0.010 precision, at 46% more contigs. The small events do not come back, so they are missing for
   some other reason.
-- **Tumour-only adjacencies between two germline cores.** 282,455 exist in hcc1954's graph and
-  `build_chunks` reads none of them; 6,172 survive a support and degree filter. Implemented behind
-  `edge_tcov` (default 0, off) and not yet measured end to end.
+- **Tumour-only adjacencies between two germline cores.** A rearrangement is an adjacency change,
+  and an adjacency can be tumour-only while both of its ends are germline, in which case the
+  junction leaves no somatic core at all — only an edge the normal never traverses. 282,455 of those
+  exist in hcc1954's graph and `build_chunks` reads none of them; 6,172 survive a support and degree
+  filter. Seeding chunks from them was implemented and never measured end to end, so the code is
+  gone rather than left behind a default-off flag.
 - **The VNTR bed Severus was run with.** 37.3% of the remaining false calls are inside it — and
   10.3% of the true ones. As a hard mask it costs 3 true calls per false one removed. Severus does
   not use it as a mask either.
@@ -197,15 +218,14 @@ Written down because each cost real time and each would otherwise be tried again
   enrichment and not enough. **The mismatch gate** re-swept after everything else: F1 is flat from
   0.01 to 0.03, so it stays at the precision end.
 - **Asking the germline question against the CONTIG instead of the reference.** The contig IS the
-  locus -- [anchor | somatic run | anchor] -- so a normal read that carries the event aligns through
+  locus — [anchor | somatic run | anchor] — so a normal read that carries the event aligns through
   the run and one that does not stops at the junction, and the index is the candidate contigs alone
   (17 MB against hg38's 3.1 GB). Implemented and measured: 0.832/0.844 against 0.887/0.858 for the
-  same picked reads against hg38. Spanning had to be qualified as spanning WITHOUT a large indel --
-  a normal read lacking the contig's deletion still aligns straight across it, the aligner just pays
-  with an insertion -- and that fixed recall (0.781 -> 0.844) without closing the precision gap. What
+  same picked reads against hg38. Spanning had to be qualified as spanning WITHOUT a large indel — a
+  normal read lacking the contig's deletion still aligns straight across it, the aligner just pays
+  with an insertion — and that fixed recall (0.781 → 0.844) without closing the precision gap. What
   it has no answer for is the reference-space check's second clause, "the normal cannot place this
-  locus either", which is what catches the repeat loci. Code in
-  /home/yuio/trash/20260810-contig-germline.
+  locus either", which is what catches the repeat loci.
 - **A third pass over the reads to genotype each call.** Not built. `per_chunk` 10 already showed
   that doubling the contigs behind a support count does not sharpen it, and the normal side of such
   a pass is blind to exactly the germline leak that matters — if the tumour spells the locus
@@ -216,6 +236,5 @@ Written down because each cost real time and each would otherwise be tried again
 
 hcc1954's remaining 116 false calls at supp≥4 have a median SVLEN of 384 bp and a median support of
 7 against 10 for the true calls; half are under 500 bp. No property tested separates them at a ratio
-worth applying. The three samples without a deep normal are the obvious next measurement, and the
-recall gap on hcc1937 — where 66% of the misses have no contig at either breakpoint — is upstream of
-the caller, in what the graph and `junctions` produce.
+worth applying. The recall gap on hcc1937 — where 66% of the misses have no contig at either
+breakpoint — is upstream of the caller, in what the graph and `junctions` produce.

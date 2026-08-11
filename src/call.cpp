@@ -1,4 +1,4 @@
-// svp call <ctg.bam> <out.vcf> [min_mapq=10] [min_aln=1000] [min_sv=50] [cluster=50] [min_supp=3]
+// svp call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=4]
 //
 // Breakpoints from the aligned junction contigs -- the stage after minimap2, in svp instead of
 // Severus. It is the part of Severus that was doing work on this input and nothing else: a MAPQ and
@@ -329,7 +329,7 @@ void collect(const char* bam, int min_mapq, hts_pos_t min_aln, int min_sv, std::
     }
 }
 
-struct Cl { Jn j; hts_pos_t p1, p2; uint32_t supp; double rep; hts_pos_t sp1, sp2; };
+struct Cl { Jn j; hts_pos_t p1, p2; uint32_t supp; double rep; };
 
 uint32_t distinct(std::vector<uint32_t>& q) {
     std::sort(q.begin(), q.end());
@@ -353,10 +353,7 @@ std::vector<Cl> cluster(std::vector<Jn>& jn, hts_pos_t tol, uint32_t min_supp) {
         }
         const uint32_t s = distinct(q);
         std::sort(a.begin(), a.end()); std::sort(c.begin(), c.end()); std::sort(rp.begin(), rp.end());
-        // How far apart the supporting contigs put the same breakpoint. Contigs that carry the same
-        // real junction agree to a few bases; a locus that merely attracts alignments does not.
-        if (s >= min_supp) out.push_back({jn[i], a[a.size() / 2], c[c.size() / 2], s, rp[rp.size() / 2],
-                                          a.back() - a.front(), c.back() - c.front()});
+        if (s >= min_supp) out.push_back({jn[i], a[a.size() / 2], c[c.size() / 2], s, rp[rp.size() / 2]});
         i = k;
     }
     return out;
@@ -409,7 +406,6 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
                     "##INFO=<ID=STRANDS,Number=1,Type=String,Description=\"Direction each side leaves the reference\">\n"
                     "##INFO=<ID=SUPP,Number=1,Type=Integer,Description=\"Supporting contigs\">\n"
                     "##INFO=<ID=REP,Number=1,Type=Float,Description=\"Tandem-repeat fraction of the anchor\">\n"
-                    "##INFO=<ID=SPREAD,Number=1,Type=Integer,Description=\"bp between the furthest apart supporting breakpoints\">\n"
                     "##INFO=<ID=CTG,Number=1,Type=String,Description=\"One junction contig supporting this call; `svp pick` reads the normal at ITS anchors\">\n"
                     "##ALT=<ID=DEL,Description=\"Deletion\">\n##ALT=<ID=DUP,Description=\"Duplication\">\n"
                     "##ALT=<ID=INV,Description=\"Inversion\">\n"
@@ -422,9 +418,9 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
                      c.p1, t, n++, alt.c_str(), t);
         if (c.j.c1 == c.j.c2)
             std::fprintf(f, "SVLEN=%" PRIhts_pos ";END=%" PRIhts_pos ";", c.p2 - c.p1, c.p2);
-        std::fprintf(f, "STRANDS=%c%c;SUPP=%u;REP=%.3f;SPREAD=%" PRIhts_pos ";CTG=%s\tGT:DV\t0/1:%u\n",
+        std::fprintf(f, "STRANDS=%c%c;SUPP=%u;REP=%.3f;CTG=%s\tGT:DV\t0/1:%u\n",
                      c.j.d1 > 0 ? '+' : '-', c.j.d2 > 0 ? '+' : '-', c.supp, c.rep,
-                     std::max(c.sp1, c.sp2), qname[c.j.q].c_str(), c.supp);
+                     qname[c.j.q].c_str(), c.supp);
     }
     for (const ClIns& c : ci)
         std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_INS%d\tN\t<INS>\t.\tPASS\tSVTYPE=INS;SVLEN=%d;SUPP=%u;CTG=%s\tGT:DV\t0/1:%u\n",

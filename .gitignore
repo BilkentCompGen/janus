@@ -4,48 +4,23 @@
 .venv
 __pycache__
 
+# the binary and its objects
+/svp
+build
+
+# third-party sources built in place (lcptools, Badread, ...) and generated benchmark data
 lib
 simulation
 outputs
-build
-/svp
-/svp.*
-/colo829
-# Real HiFi pairs: 445 GB of reads, graphs and the CASTLE archive. The shell that fetches and runs
+
+# Real HiFi pairs: hundreds of GB of reads, graphs and the CASTLE archive. The shell that fetches
 # them IS source, so it stays. (A trailing comment on the pattern line does not work -- git reads it
 # as part of the pattern, which is why this directory was untracked rather than ignored.)
 /hifi/*
 !/hifi/*.sh
 
-# experiment/throwaway analysis (not part of the tracked implementation)
-tools/*
-!tools/bubble_recall.cpp
-!tools/trace.cpp
-!tools/build_trace.sh
-!tools/build_blacklist.cpp
-!tools/build_blacklist.sh
-docs/analysis
-experiments
-scripts/fakebin
-/li2020.pdf
-
-# bloom-counting build artifacts
-/svp_bloom*
-/build_bloom/
+# stray LaTeX build -- the paper lives in /home/yuio/paper
+/paper
 
 # claude workspace (contains git worktrees)
 .claude
-
-# stray LaTeX build — the paper lives in /home/yuio/paper
-/paper
-
-# lab: compiled binaries + generated reports (sources + shape catalog are tracked)
-lab/classify
-lab/cut_real
-lab/generate
-lab/pickwin
-lab/render_bin
-lab/htmls
-
-# stray empty build logs
-/build_pa*.log

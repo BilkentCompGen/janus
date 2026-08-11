@@ -3,35 +3,22 @@ CXX      := g++
 # whole-genome reference). MUST match the flag the static lib is built with (below).
 CXXFLAGS := -std=c++17 -O3 -march=native -flto=auto -DLARGE_GENOME -Wall -Wextra -Wpedantic -MMD
 INC      := -Ilib/lcptools -Isrc
-# -lhts: `svp call` reads the aligned contig BAM (system htslib, headers in /usr/include/htslib).
+# -lhts: `svp call` reads the aligned BAMs (system htslib, headers in /usr/include/htslib).
 LDFLAGS  := -Llib/lcptools -llcptools -lm -lhts
 # mold linker if installed (faster links); default linker otherwise. -flto link uses CXXFLAGS.
 LDFLAGS  += $(shell command -v mold >/dev/null 2>&1 && echo -fuse-ld=mold)
 
 BUILD  := build
 
-# src/ holds the calling pipeline and nothing else, and all of it links into ONE binary: `svp`.
-# graph + junctions are the two halves of calling, pack/dump are the read format both consume.
-# src/severus/ is the vendored slice of Severus the contig arm calls into. Investigation tools stay
-# in tools/, python and shell in scripts/ -- neither is part of calling.
+# src/ holds the pipeline and nothing else, and all of it links into ONE binary: `svp`.
+# scripts/ is measurement, never part of calling.
 SRC := $(wildcard src/*.cpp)
 OBJ := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRC))
 
-# PGO (profile-guided optimization) — biggest free codegen win for the branch-heavy LCP/count
-# pass. Two-step; force a full object rebuild between steps (make does NOT track flag changes):
-#   make clean && make PGO=generate && make run        # instrumented run writes build/pgo/*.gcda
-#   <remove build/*.o + svp, KEEP build/pgo> && make PGO=use
-PGO ?=
-ifeq ($(PGO),generate)
-  CXXFLAGS    += -fprofile-generate=build/pgo
-endif
-ifeq ($(PGO),use)
-  CXXFLAGS    += -fprofile-use=build/pgo -fprofile-correction -Wno-missing-profile
-endif
-
 LEVEL   ?= 5
-OUT     := outputs/svp
-# box rule: never rm — move to a timestamped trash dir (resolved once per make run)
+THREADS ?= 16
+MINMULT ?= 3
+# box rule: never rm -- move to a timestamped trash dir (resolved once per make run)
 TRASH   := /home/yuio/trash/svp-clean-$(shell date +%Y%m%d-%H%M%S)
 
 svp: $(OBJ)
@@ -40,24 +27,19 @@ svp: $(OBJ)
 $(BUILD)/%.o: src/%.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INC) -c $< -o $@
 
-
 $(BUILD):
 	mkdir -p $@
 
-# ---------- run target (whole-genome, reads only — assemblies are never a caller input) ----------
-READS_N  ?= simulation/reads/normal/hifi.svb
-READS_T  ?= simulation/reads/wgs/hifi.svb
-MINMULT  ?= 1
-THREADS  ?= 16
+# ---------- the pipeline, end to end (reads only -- an assembly is never a caller input) ----------
+# make run NORMAL=hifi/hcc1954/n.svb TUMOUR=hifi/hcc1954/t.svb DIR=outputs/svp/hcc1954
+NORMAL ?=
+TUMOUR ?=
+REF    ?= /home/datasets/references/genomes/hg38/hg38.fa
+DIR    ?= outputs/svp/run
 run: svp
-	@mkdir -p $(OUT)/wgs
-	/usr/bin/time -v ./svp run $(READS_N) $(READS_T) $(OUT)/wgs --level $(LEVEL) --min-mult $(MINMULT) --threads $(THREADS)
-
-run-list:
-	@echo "read-based pipeline (reads only — no assembly in the caller):"
-	@echo "  make run    normal=$(READS_N)"
-	@echo "              tumor =$(READS_T)"
-	@echo "  overrides: LEVEL=$(LEVEL) MINMULT=$(MINMULT) READS_N=... READS_T=..."
+	@test -n "$(NORMAL)" -a -n "$(TUMOUR)" || { echo "usage: make run NORMAL=<n.svb|fq> TUMOUR=<t.svb|fq> [REF=... DIR=...]"; exit 2; }
+	@mkdir -p $(DIR)
+	taskset -c 0-15 ./svp run $(NORMAL) $(TUMOUR) $(REF) $(DIR) --level $(LEVEL) --min-mult $(MINMULT) --threads $(THREADS)
 
 install-deps: install-deps-lcptools install-deps-badread
 
@@ -67,9 +49,9 @@ install-deps: install-deps-lcptools install-deps-badread
 install-deps-lcptools:
 	cd lib/lcptools && gcc -O3 -march=native -DLARGE_GENOME -c encoding.c core.c lps.c && ar rcs liblcptools.a encoding.o core.o lps.o
 
-# Badread HiFi read simulator (rrwick) — single-threaded, so sim_reads_badread.sh
-# shards contigs across threads. Installed into a self-contained venv; the system
-# python is left untouched.
+# Badread HiFi read simulator (rrwick) -- only needed to regenerate the simulation benchmark.
+# Single-threaded, so scripts/sim_reads_badread.sh shards contigs across threads. Installed into a
+# self-contained venv; the system python is left untouched.
 install-deps-badread: lib/Badread/venv/bin/badread
 lib/Badread/venv/bin/badread:
 	@if [ ! -d lib/Badread ]; then \
@@ -79,21 +61,18 @@ lib/Badread/venv/bin/badread:
 	cd lib/Badread && python3 -m venv venv && ./venv/bin/pip install --quiet --upgrade pip && ./venv/bin/pip install --quiet .
 	@./lib/Badread/venv/bin/badread --version
 
-# clean: build artifacts only (binary + objects). Keeps outputs/ — run results are expensive
-# (a graph.bin is ~18 min) so they are NOT swept by a plain `make clean`.
+# clean: build artifacts only (binary + objects). Run outputs are expensive -- a graph.bin is tens of
+# minutes -- so they are NOT swept by a plain `make clean`.
 clean:
 	@mkdir -p $(TRASH) && mv -f $(BUILD) svp $(TRASH)/ 2>/dev/null || true
 	@echo "clean: build/ + svp -> $(TRASH)"
 
-# clean-outputs: run results under outputs/svp (graph.bin / simplify.bin / logs / experiment dirs).
 clean-outputs:
-	@mkdir -p $(TRASH) && mv -f $(OUT)/* $(TRASH)/ 2>/dev/null || true
-	@echo "clean-outputs: $(OUT)/* -> $(TRASH)"
+	@mkdir -p $(TRASH) && mv -f outputs/svp/* $(TRASH)/ 2>/dev/null || true
+	@echo "clean-outputs: outputs/svp/* -> $(TRASH)"
 
-# clean-all: both of the above (build artifacts + run outputs).
 clean-all: clean clean-outputs
 
-.PHONY: install-deps install-deps-lcptools install-deps-badread \
-        clean clean-outputs clean-all run-list run
+.PHONY: install-deps install-deps-lcptools install-deps-badread clean clean-outputs clean-all run
 
 -include $(OBJ:.o=.d)
