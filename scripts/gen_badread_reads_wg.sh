@@ -7,7 +7,7 @@
 # Resumable: a sample is skipped if its hifi.fastq already exists.
 # Usage: gen_badread_reads_wg.sh [sim_id=hard] [depth=30] [threads=$(nproc)]
 set -euo pipefail
-ROOT=/home/yuio/svp
+ROOT=/home/yuio/snape
 ID="${1:-hard}"
 DEPTH="${2:-30}"
 THREADS="${3:-$(nproc)}"

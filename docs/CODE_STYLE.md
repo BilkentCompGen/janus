@@ -1,4 +1,4 @@
-# svp code style — house rules
+# snape code style — house rules
 
 Non-negotiable on this branch. Every line is read and reviewed; brevity and directness beat "clean
 architecture".
@@ -31,13 +31,13 @@ architecture".
 
 ## File organisation
 
-- `svp.h` holds what more than one stage needs: the extraction decl, the shared PODs, the reads
+- `snape.h` holds what more than one stage needs: the extraction decl, the shared PODs, the reads
   interface, the checkpoint IO helpers. Nothing else goes in it.
 - Each stage is one `.cpp` plus a header that carries its one-line entry point and the explanation of
   what the stage is for.
 
 ## Build
 
-- One `Makefile`. No CMake, no CI, no test harness. A single binary, `svp`.
+- One `Makefile`. No CMake, no CI, no test harness. A single binary, `snape`.
 - `make clean && make` must succeed with only `lib/lcptools` built (`make install-deps-lcptools`) and
   system htslib present.

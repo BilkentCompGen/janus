@@ -1,10 +1,10 @@
 # Pipeline — the stages, and what each one does
 
-`svp` calls somatic structural variants from a tumour/normal pair of HiFi read sets. The somatic
+`snape` calls somatic structural variants from a tumour/normal pair of HiFi read sets. The somatic
 decision is made in a graph built from the reads themselves, with no reference and no assembly; a
 reference enters only at the end, to give the surviving candidates coordinates a VCF can carry.
 
-    svp run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10] [--min-mult 3]
+    snape run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10] [--min-mult 3]
 
 One command, eight stages, each skipped when its output is already in `<dir>`, so a kill and a
 restart pick up where they left off:
@@ -21,8 +21,8 @@ restart pick up where they left off:
 | 8 | `call` (with normal) | `ctg.bam` + `normal.bam` | `calls.vcf` |
 
 Every stage takes `.svb` or uncompressed FASTQ directly, so nothing has to convert between them —
-minimap2 is the only thing in the pipeline that cannot read `.svb`, and `run` streams `svp dump` into
-it rather than writing a FASTQ out. The only outside programs are the aligner and samtools, which svp
+minimap2 is the only thing in the pipeline that cannot read `.svb`, and `run` streams `snape dump` into
+it rather than writing a FASTQ out. The only outside programs are the aligner and samtools, which snape
 is not and does not reimplement. Every default `run` passes is the one measured in `RESULTS.md`.
 
 ## 1. `graph` — reads → `graph.bin`
@@ -155,7 +155,8 @@ Each candidate names the contig it came from (`CTG=` in the VCF). `pick` takes t
 **germline anchors** — the flanks, which are sequence the normal has too, as opposed to the somatic
 middle, which it does not — parses them into cores, and emits every normal read sharing at least
 `min_shared` (5) of them. On hcc1954 that is 1.56% of the sample, and it answers the question as
-well as all of it: 0.887/0.858 against 0.891/0.858, fourteen minutes of alignment against two hours.
+well as all of it: 0.887/0.858 against 0.891/0.858 (both arms at a floor of four, where the
+comparison was made), and 11:25 of alignment against about two hours.
 
 ## Source layout
 
@@ -168,7 +169,7 @@ well as all of it: 0.887/0.858 against 0.891/0.858, fourteen minutes of alignmen
     src/svb_pack.cpp    FASTQ -> 2-bit .svb
     src/svb_dump.cpp    .svb -> FASTQ
     src/main.cpp        the CLI and `run`
-    src/svp.h           shared structs, the reads interface, checkpoint IO decls
+    src/snape.h           shared structs, the reads interface, checkpoint IO decls
     src/unordered_dense.h   vendored flat hash map (ankerl)
 
 One binary, one Makefile, no CMake, no CI.

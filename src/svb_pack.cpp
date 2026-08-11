@@ -1,6 +1,6 @@
-// svp pack: FASTQ (stdin) -> one .svb file (argv[1]). 2-bit packs pure-ACGT reads
+// snape pack: FASTQ (stdin) -> one .svb file (argv[1]). 2-bit packs pure-ACGT reads
 // (A=00 C=01 G=10 T=11, base i in byte i/4, high 2 bits first); RAW-escapes any read
-// containing a non-ACGT base (e.g. N) so packing is lossless. svp reads .svb natively.
+// containing a non-ACGT base (e.g. N) so packing is lossless. snape reads .svb natively.
 // Streaming, O(1) memory; only the sequence line of each FASTQ record is kept.
 // Format matches src/graph.cpp open_svb/svb_next.
 #ifndef _GNU_SOURCE
@@ -25,7 +25,7 @@ static inline int code(char c) {
 }
 
 int cmd_pack(int argc, char** argv) {
-    if (argc < 2) { std::fprintf(stderr, "usage: svp pack out.svb < reads.fastq\n"); return 1; }
+    if (argc < 2) { std::fprintf(stderr, "usage: snape pack out.svb < reads.fastq\n"); return 1; }
     FILE* out = std::fopen(argv[1], "wb");
     if (!out) { std::perror("fopen out"); return 1; }
 

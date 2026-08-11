@@ -8,7 +8,7 @@ AMD 9950X) unless noted.
 
 A locally-consistent parse (lcptools, branch `biolcp`) recursively partitions a sequence into
 **cores** — variable-length substrings whose boundaries depend only on a local window, so the same
-locus tends to yield the same core whether it is seen inside one read or another. svp runs at
+locus tends to yield the same core whether it is seen inside one read or another. snape runs at
 **level 5**: median core ~217 bp raw, ~150 homopolymer-compressed bases (L4 ~63, L6 ~352).
 
 ## Three load-bearing properties
@@ -20,7 +20,7 @@ shared neighbours are the anchors everything downstream hangs off — the flanks
 and the cores `pick` matches normal reads on.
 
 **2. Chiral asymmetry.** The parse is *not* reverse-complement symmetric — `parse1`'s LMAX neighbour
-guards have no LMIN mirror. svp therefore extracts **both** strands explicitly, and each locus
+guards have no LMIN mirror. snape therefore extracts **both** strands explicitly, and each locus
 appears as two independent nodes `W` and `RC(W)` with different signatures and no core in common.
 This cannot be fixed by canonicalising each emission (`min(bytes, revcomp(bytes))`), because the two
 strands' cores are different substrings, not reverse complements of each other. Two consequences:

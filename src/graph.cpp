@@ -2,7 +2,7 @@
 #define _GNU_SOURCE 1   // expose sched_getaffinity under strict -std=c++17
 #endif
 #include "graph.h"
-// extract is declared in svp.h (provided by src/extract.cpp over biolcp).
+// extract is declared in snape.h (provided by src/extract.cpp over biolcp).
 
 #include <sys/stat.h>
 #include <sys/resource.h>
@@ -27,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-// ---- fail-fast binary checkpoint IO (declared in svp.h) ----
+// ---- fail-fast binary checkpoint IO (declared in snape.h) ----
 FILE* xopen(const std::string& p, const char* m) { FILE* f = std::fopen(p.c_str(), m); if (!f) { std::fprintf(stderr, "[FATAL] fopen %s\n", p.c_str()); std::abort(); } return f; }
 void wr(FILE* f, const void* p, size_t n) { if (n && std::fwrite(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] fwrite\n"); std::abort(); } }
 void rd(FILE* f, void* p, size_t n) { if (n && std::fread(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] truncated checkpoint\n"); std::abort(); } }
@@ -122,7 +122,7 @@ static bool is_gz(const std::string& p) { return p.size() >= 3 && p.compare(p.si
 std::vector<std::string> collect_shards(const std::string& path) {
     struct stat st;
     if (stat(path.c_str(), &st) != 0) { std::fprintf(stderr, "[FATAL] no input %s\n", path.c_str()); std::abort(); }
-    if (is_gz(path)) { std::fprintf(stderr, "[FATAL] %s is compressed; svp reads uncompressed FASTQ only -- decompress it first\n", path.c_str()); std::abort(); }
+    if (is_gz(path)) { std::fprintf(stderr, "[FATAL] %s is compressed; snape reads uncompressed FASTQ only -- decompress it first\n", path.c_str()); std::abort(); }
     if (!S_ISDIR(st.st_mode)) return {path};
     std::vector<std::string> v;
     size_t skipped_gz = 0;
@@ -154,7 +154,7 @@ static FILE* open_fastq(const std::string& path) {
     return f;
 }
 
-// ---- .svb compact reads (2-bit packed; svp uses only the ACGT sequence, no qual/name) ------
+// ---- .svb compact reads (2-bit packed; snape uses only the ACGT sequence, no qual/name) ------
 // A sample is a dir of shard.<k>.svb; each file = 32B header then sequential records:
 //   len_tag u32 (low 31 = length L, bit31 = RAW); payload = RAW ? L ASCII bytes verbatim :
 //   ceil(L/4) packed bytes, 2 bits/base (A=00 C=01 G=10 T=11), base i in byte i/4, high 2 bits
@@ -192,9 +192,9 @@ static bool svb_next(FILE* f, std::string& seq) {
     return true;
 }
 
-}  // namespace   (the reader below is svp.h's, and the rest of this file is not)
+}  // namespace   (the reader below is snape.h's, and the rest of this file is not)
 
-// ---- the shared reads input (svp.h) ---------------------------------------------------------
+// ---- the shared reads input (snape.h) ---------------------------------------------------------
 // The same two readers above, behind one interface, so bubbles and junctions can take a .svb
 // directly instead of being handed a FASTQ stream by a shell.
 Reads reads_open(const std::string& path) {
@@ -339,7 +339,7 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
         std::string rc_buf; rc_buf.reserve(1u << 16);
         SigNodeMap ln; EdgeMap le; ln.reserve(1u << 20); le.reserve(1u << 20);
         uint64_t ext = 0, emis = 0;
-        const char* fe = std::getenv("SVP_FLUSH");   // test hook: force mid-run merges at smoke scale
+        const char* fe = std::getenv("SNAPE_FLUSH");   // test hook: force mid-run merges at smoke scale
         const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 22);
         auto flush = [&]() {
             std::vector<std::vector<std::pair<uint64_t, std::pair<uint32_t, uint32_t>>>> bn(NSHARD);

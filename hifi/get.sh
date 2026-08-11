@@ -22,8 +22,8 @@
 # trashed the moment its .svb lands, and trashing frees nothing on this filesystem, so the total is
 # what has to fit, not the peak.
 set -uo pipefail
-cd /home/yuio/svp/hifi
-SVP=/home/yuio/svp
+cd /home/yuio/snape/hifi
+SNAPE=/home/yuio/snape
 API=https://www.ebi.ac.uk/ena/portal/api/filereport
 TRASH=/home/yuio/trash/hifi-gz; mkdir -p "$TRASH"
 
@@ -57,7 +57,7 @@ fetch_pack() {   # $1 = accession, $2 = sample name, $3 = expected bases
         --max-tries=0 --retry-wait=30 --continue=true -o "$acc.gz.part" "https://$url" || return 1
     mv "$acc.gz.part" "$acc.gz"
     echo "[$name] paketleniyor $(date +%T)"
-    pigz -dc "$acc.gz" | "$SVP/svp" pack "$out.tmp" 2> "${out%.svb}.pack.log" || return 1
+    pigz -dc "$acc.gz" | "$SNAPE/snape" pack "$out.tmp" 2> "${out%.svb}.pack.log" || return 1
     local got                                     # "[svb_pack] out.svb: N reads, M bases"
     got=$(awk '/bases/{print $(NF-1)}' "${out%.svb}.pack.log")
     [ "$got" = "$want" ] || echo "[$name] UYARI: $got baz paketlendi, ENA $want diyor"
