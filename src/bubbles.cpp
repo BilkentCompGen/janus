@@ -40,7 +40,10 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <condition_variable>
+#include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -93,41 +96,97 @@ void hpc_local(const char* s, int len, std::string& out) {
     for (int i = 0; i < len; i++) if (i == 0 || s[i] != s[i - 1]) out.push_back(s[i]);
 }
 
-using MinMap = ankerl::unordered_dense::map<uint64_t, std::vector<uint64_t>>;
+// The cores this stage needs sequence for, each given a dense id so a hit costs one lookup and no
+// allocation. Membership is read-only once built, so every worker can probe it at once.
+struct Want {
+    ankerl::unordered_dense::map<uint64_t, uint32_t> id;
+    uint32_t add(uint64_t sig) {
+        const uint32_t n = (uint32_t)id.size();
+        return id.emplace(sig, n).first->second;
+    }
+    uint32_t find(uint64_t sig) const {
+        const auto it = id.find(sig);
+        return it == id.end() ? UINT32_MAX : it->second;
+    }
+    size_t size() const { return id.size(); }
+};
 
-// One pass over one sample's reads: the first read covering a wanted core gives that core its
-// minimizers. Which read it was does not matter -- the core is the same sequence in all of them.
-void collect(const std::string& path, const ankerl::unordered_dense::set<uint64_t>& want, int NT,
-             MinMap& out, int k, int w, const char* tag) {
-    Reads in = reads_open(path);
-    std::mutex in_mu, out_mu; std::string shared;
-    std::atomic<uint64_t> nread{0};
+// One pass over one sample's reads: any read covering a wanted core gives that core its minimizers.
+// WHICH read cannot matter -- equal signatures mean equal homopolymer-compressed bytes, and the
+// minimizers are computed from those bytes.
+//
+// One reader thread fills batches of reads; the workers take a whole batch at a time and never touch
+// the input again. A hit needs no lock either: `seen` is one atomic flag per wanted core and the
+// worker that claims a flag writes that core's minimizers.
+// [Before: every worker took the input mutex per read AND copied the read while holding it, then
+//  took a global map mutex twice per hit. Measured on hcc1954: 21.9 M voluntary context switches
+//  and 732% of the 1600% the run was given.]
+void collect(const std::string& path, const Want& want, int NT,
+             std::vector<std::vector<uint64_t>>& mins_of, int k, int w, const char* tag) {
+    const size_t W = want.size();
+    mins_of.assign(W, {});
+    std::unique_ptr<std::atomic<uint8_t>[]> seen(new std::atomic<uint8_t>[W ? W : 1]);
+    for (size_t i = 0; i < W; i++) seen[i].store(0, std::memory_order_relaxed);
+
+    constexpr size_t Q_CAP = 128, BATCH = 32;
+    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
+    std::queue<std::vector<std::string>> q;
+    bool eof = false;
+    std::atomic<uint64_t> nread{0}, ncov{0};
+
+    auto reader = [&]() {
+        Reads in = reads_open(path);
+        std::vector<std::string> batch; batch.reserve(BATCH);
+        std::string seq;
+        auto push = [&]() {
+            if (batch.empty()) return;
+            std::unique_lock<std::mutex> lk(qmtx);
+            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
+            q.push(std::move(batch)); cv_empty.notify_one();
+            batch.clear(); batch.reserve(BATCH);
+        };
+        while (reads_next(in, seq, nullptr)) {
+            batch.push_back(std::move(seq));
+            if (batch.size() >= BATCH) push();
+        }
+        push();
+        reads_close(in);
+        { std::lock_guard<std::mutex> lk(qmtx); eof = true; }
+        cv_empty.notify_all();
+    };
+
     auto worker = [&]() {
-        std::string seq, hs; std::vector<uint64_t> mins;
+        std::string hs; std::vector<uint64_t> mins;
         for (;;) {
-            { std::lock_guard<std::mutex> lk(in_mu);
-              if (!reads_next(in, shared, nullptr)) return;
-              seq = shared; }
-            nread++;
-            int n; const uint64_t *st, *en, *sg;
-            extract(seq.data(), (int)seq.size(), 0, LEVEL, &n, &st, &en, &sg);
-            for (int i = 0; i < n; i++) {
-                if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > seq.size()) continue;
-                if (!want.contains(sg[i])) continue;
-                { std::lock_guard<std::mutex> lk(out_mu); if (out.contains(sg[i])) continue; }
-                hpc_local(seq.data() + st[i], (int)(en[i] - st[i]), hs);
-                minimizers(hs.data(), (int)hs.size(), k, w, mins);
-                std::lock_guard<std::mutex> lk(out_mu);
-                if (!out.contains(sg[i])) out[sg[i]] = mins;
+            std::vector<std::string> batch;
+            {
+                std::unique_lock<std::mutex> lk(qmtx);
+                cv_empty.wait(lk, [&]{ return !q.empty() || eof; });
+                if (q.empty()) return;
+                batch = std::move(q.front()); q.pop(); cv_full.notify_one();
+            }
+            for (const std::string& seq : batch) {
+                nread++;
+                int n; const uint64_t *st, *en, *sg;
+                extract(seq.data(), (int)seq.size(), 0, LEVEL, &n, &st, &en, &sg);
+                for (int i = 0; i < n; i++) {
+                    if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > seq.size()) continue;
+                    const uint32_t id = want.find(sg[i]);
+                    if (id == UINT32_MAX || seen[id].load(std::memory_order_relaxed)) continue;
+                    hpc_local(seq.data() + st[i], (int)(en[i] - st[i]), hs);
+                    minimizers(hs.data(), (int)hs.size(), k, w, mins);
+                    if (seen[id].exchange(1, std::memory_order_acq_rel) == 0) { mins_of[id] = mins; ncov++; }
+                }
             }
         }
     };
+
     std::vector<std::thread> th;
-    for (int i = 0; i < NT; i++) th.emplace_back(worker);
+    th.emplace_back(reader);
+    for (int i = 1; i < std::max(2, NT); i++) th.emplace_back(worker);
     for (auto& t : th) t.join();
-    reads_close(in);
     std::fprintf(stderr, "[bubbles] %s: %llu okuma -> %zu/%zu cekirdek kapsandi\n",
-                 tag, (unsigned long long)nread.load(), out.size(), want.size());
+                 tag, (unsigned long long)nread.load(), (size_t)ncov.load(), W);
 }
 
 size_t lcs(const std::vector<uint64_t>& a, const std::vector<uint64_t>& b) {
@@ -150,34 +209,61 @@ struct Graph {
     std::vector<uint32_t> on, in;
 };
 
-void build_csr(Graph& g, std::vector<CEdge>& ce) {
-    const uint64_t K = g.K;
-    std::vector<uint32_t> od(K + 1, 0), idg(K + 1, 0);
-    for (const CEdge& e : ce) { od[e.src]++; idg[e.dst]++; }
-    g.oo.assign(K + 1, 0); g.io.assign(K + 1, 0);
-    for (uint64_t i = 0; i < K; i++) { g.oo[i + 1] = g.oo[i] + od[i]; g.io[i + 1] = g.io[i] + idg[i]; }
-    g.on.resize(g.oo[K]); g.in.resize(g.io[K]);
-    std::vector<uint64_t> c1(g.oo.begin(), g.oo.end()), c2(g.io.begin(), g.io.end());
-    for (const CEdge& e : ce) { g.on[c1[e.src]++] = e.dst; g.in[c2[e.dst]++] = e.src; }
-    std::vector<CEdge>().swap(ce);
-}
-
+// graph.bin, streamed: the edge section is read twice in 1 M-edge chunks (degrees, then fill)
+// instead of being materialised as one CEdge array. That array was 1.2 GB on hcc1954 and every byte
+// of it was thrown away once the CSR existed. The per-colour counts go the same way -- they exist
+// only to decide `som`, so they are consumed a chunk at a time and never all held at once.
 Graph load_graph(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
     Graph g;
     if (std::fread(&g.K, 8, 1, f) != 1) die("read K");
-    g.sig.resize(g.K); std::vector<uint32_t> nc(g.K), tc(g.K);
+    g.sig.resize(g.K);
     if (std::fread(g.sig.data(), 8, g.K, f) != g.K) die("read sigs");
-    if (std::fread(nc.data(), 4, g.K, f) != g.K) die("read ncov");
-    if (std::fread(tc.data(), 4, g.K, f) != g.K) die("read tcov");
+
+    g.som.assign(g.K, 0);
+    constexpr size_t CH = 1u << 20;
+    std::vector<uint32_t> buf(CH);
+    for (uint64_t done = 0; done < g.K; ) {                       // ncov: som candidate iff 0
+        const size_t m = (size_t)std::min<uint64_t>(CH, g.K - done);
+        if (std::fread(buf.data(), 4, m, f) != m) die("read ncov");
+        for (size_t i = 0; i < m; i++) g.som[done + i] = (buf[i] == 0);
+        done += m;
+    }
+    for (uint64_t done = 0; done < g.K; ) {                       // tcov: and only if tumour saw it
+        const size_t m = (size_t)std::min<uint64_t>(CH, g.K - done);
+        if (std::fread(buf.data(), 4, m, f) != m) die("read tcov");
+        for (size_t i = 0; i < m; i++) g.som[done + i] = (uint8_t)(g.som[done + i] & (buf[i] > 0));
+        done += m;
+    }
+
     uint64_t E = 0;
     if (std::fread(&E, 8, 1, f) != 1) die("read E");
-    std::vector<CEdge> ce(E);
-    if (std::fread(ce.data(), sizeof(CEdge), E, f) != E) die("read edges");
+    // The fill cursors below are 32-bit, which halves what they cost on a 75 M-edge graph. Node ids
+    // are 32-bit anyway (CEdge), so a graph this loader could not take is one nothing else could
+    // read either -- but say so rather than truncate.
+    if (E > 0xffffffffull) die("graph.bin has more than 2^32 edges");
+    const long epos = std::ftell(f);
+    std::vector<uint32_t> od(g.K + 1, 0), idg(g.K + 1, 0);
+    std::vector<CEdge> ce(CH);
+    for (uint64_t done = 0; done < E; ) {                         // pass 1: degrees
+        const size_t m = (size_t)std::min<uint64_t>(CH, E - done);
+        if (std::fread(ce.data(), sizeof(CEdge), m, f) != m) die("read edges");
+        for (size_t i = 0; i < m; i++) { od[ce[i].src]++; idg[ce[i].dst]++; }
+        done += m;
+    }
+    g.oo.assign(g.K + 1, 0); g.io.assign(g.K + 1, 0);
+    for (uint64_t i = 0; i < g.K; i++) { g.oo[i + 1] = g.oo[i] + od[i]; g.io[i + 1] = g.io[i] + idg[i]; }
+    std::vector<uint32_t>().swap(od); std::vector<uint32_t>().swap(idg);
+    g.on.resize(g.oo[g.K]); g.in.resize(g.io[g.K]);
+    std::vector<uint32_t> c1(g.oo.begin(), g.oo.end()), c2(g.io.begin(), g.io.end());
+    if (std::fseek(f, epos, SEEK_SET) != 0) die("seek edges");
+    for (uint64_t done = 0; done < E; ) {                         // pass 2: fill
+        const size_t m = (size_t)std::min<uint64_t>(CH, E - done);
+        if (std::fread(ce.data(), sizeof(CEdge), m, f) != m) die("read edges");
+        for (size_t i = 0; i < m; i++) { g.on[c1[ce[i].src]++] = ce[i].dst; g.in[c2[ce[i].dst]++] = ce[i].src; }
+        done += m;
+    }
     std::fclose(f);
-    g.som.resize(g.K);
-    for (uint64_t i = 0; i < g.K; i++) g.som[i] = (nc[i] == 0 && tc[i] > 0);
-    build_csr(g, ce);
     return g;
 }
 
@@ -205,36 +291,53 @@ bool uniform(const Graph& g, const std::vector<uint32_t>& arm, uint8_t want) {
 
 struct Bub { std::vector<uint32_t> som_arm, germ_arm; };
 
-std::vector<Bub> find_bubbles(const Graph& g, int maxlen) {
-    std::vector<Bub> out;
-    std::vector<uint32_t> a1, a2;
-    uint64_t nsrc = 0;
-    for (uint64_t s = 0; s < g.K; s++) {
-        if (g.oo[s + 1] - g.oo[s] < 2) continue;
-        nsrc++;
-        for (uint64_t i = g.oo[s]; i < g.oo[s + 1]; i++) {
-            const uint32_t T1 = trace_arm(g, g.on[i], maxlen, a1);
-            if (T1 == UINT32_MAX) continue;
-            for (uint64_t j = i + 1; j < g.oo[s + 1]; j++) {
-                if (trace_arm(g, g.on[j], maxlen, a2) != T1) continue;
-                if (g.som[a1[0]] == g.som[a2[0]]) continue;      // need exactly one somatic arm
-                if (!uniform(g, a1, g.som[a1[0]]) || !uniform(g, a2, g.som[a2[0]])) continue;
-                out.push_back(g.som[a1[0]] ? Bub{a1, a2} : Bub{a2, a1});
+// Every branching node is independent of every other one, so the sweep is split into contiguous
+// ranges and the ranges are concatenated in range order -- the same bubbles in the same order as the
+// single-threaded sweep produced, which is what keeps drop.sigs byte-for-byte the same.
+std::vector<Bub> find_bubbles(const Graph& g, int maxlen, int NT) {
+    const int nt = std::max(1, NT);
+    std::vector<std::vector<Bub>> part(nt);
+    std::vector<uint64_t> nsrc(nt, 0);
+    std::vector<std::thread> th;
+    for (int t = 0; t < nt; t++) th.emplace_back([&, t]{
+        const uint64_t lo = g.K * t / nt, hi = g.K * (t + 1) / nt;
+        std::vector<uint32_t> a1, a2;
+        for (uint64_t s = lo; s < hi; s++) {
+            if (g.oo[s + 1] - g.oo[s] < 2) continue;
+            nsrc[t]++;
+            for (uint64_t i = g.oo[s]; i < g.oo[s + 1]; i++) {
+                const uint32_t T1 = trace_arm(g, g.on[i], maxlen, a1);
+                if (T1 == UINT32_MAX) continue;
+                for (uint64_t j = i + 1; j < g.oo[s + 1]; j++) {
+                    if (trace_arm(g, g.on[j], maxlen, a2) != T1) continue;
+                    if (g.som[a1[0]] == g.som[a2[0]]) continue;      // need exactly one somatic arm
+                    if (!uniform(g, a1, g.som[a1[0]]) || !uniform(g, a2, g.som[a2[0]])) continue;
+                    part[t].push_back(g.som[a1[0]] ? Bub{a1, a2} : Bub{a2, a1});
+                }
             }
         }
+    });
+    for (auto& t : th) t.join();
+    std::vector<Bub> out;
+    uint64_t total = 0, srcs = 0;
+    for (int t = 0; t < nt; t++) { total += part[t].size(); srcs += nsrc[t]; }
+    out.reserve(total);
+    for (int t = 0; t < nt; t++) {
+        for (Bub& b : part[t]) out.push_back(std::move(b));
+        std::vector<Bub>().swap(part[t]);
     }
     std::fprintf(stderr, "[bubbles] %llu dugum, %llu dallanma -> %zu temiz bubble (maxlen=%d)\n",
-                 (unsigned long long)g.K, (unsigned long long)nsrc, out.size(), maxlen);
+                 (unsigned long long)g.K, (unsigned long long)srcs, out.size(), maxlen);
     return out;
 }
 
-std::vector<uint64_t> arm_mins(const Graph& g, const std::vector<uint32_t>& arm, const MinMap& m) {
-    std::vector<uint64_t> out;
+void arm_mins(const Graph& g, const std::vector<uint32_t>& arm, const Want& want,
+              const std::vector<std::vector<uint64_t>>& mins, std::vector<uint64_t>& out) {
+    out.clear();
     for (uint32_t v : arm) {
-        auto it = m.find(g.sig[v]);
-        if (it != m.end()) out.insert(out.end(), it->second.begin(), it->second.end());
+        const uint32_t id = want.find(g.sig[v]);
+        if (id != UINT32_MAX) out.insert(out.end(), mins[id].begin(), mins[id].end());
     }
-    return out;
 }
 
 }  // namespace
@@ -255,15 +358,15 @@ int cmd_bubbles(int argc, char** argv) {
     if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
 
     const Graph g = load_graph(gpath);
-    const std::vector<Bub> bubs = find_bubbles(g, MAXLEN);
+    const std::vector<Bub> bubs = find_bubbles(g, MAXLEN, NT);
     if (bubs.empty()) { std::fprintf(stderr, "[bubbles] temiz bubble yok\n"); return 0; }
 
-    ankerl::unordered_dense::set<uint64_t> want_s, want_g;
+    Want want_s, want_g;
     for (const Bub& b : bubs) {
-        for (uint32_t v : b.som_arm) want_s.insert(g.sig[v]);
-        for (uint32_t v : b.germ_arm) want_g.insert(g.sig[v]);
+        for (uint32_t v : b.som_arm) want_s.add(g.sig[v]);
+        for (uint32_t v : b.germ_arm) want_g.add(g.sig[v]);
     }
-    MinMap mm_s, mm_g;
+    std::vector<std::vector<uint64_t>> mm_s, mm_g;
     collect(tpath, want_s, NT, mm_s, KMER, W, "tumor");
     collect(npath, want_g, NT, mm_g, KMER, W, "normal");
 
@@ -271,8 +374,10 @@ int cmd_bubbles(int argc, char** argv) {
     // a local edit, not a novel adjacency. Its cores never become a contig.
     ankerl::unordered_dense::set<uint64_t> drop;
     uint64_t nbub = 0;
+    std::vector<uint64_t> ms, mg;
     for (const Bub& b : bubs) {
-        const std::vector<uint64_t> ms = arm_mins(g, b.som_arm, mm_s), mg = arm_mins(g, b.germ_arm, mm_g);
+        arm_mins(g, b.som_arm, want_s, mm_s, ms);
+        arm_mins(g, b.germ_arm, want_g, mm_g, mg);
         if (ms.empty() || mg.empty() || ms.size() > 400 || mg.size() > 400) continue;
         if (std::llabs((long long)ms.size() - (long long)mg.size()) > MAX_DLEN) continue;
         if ((long long)(ms.size() - lcs(ms, mg)) > MAX_UNM) continue;
