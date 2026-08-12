@@ -285,8 +285,8 @@ void process_read_single(std::string& s, int level, int margin, int col,
     chain(nr, strv, enr, sgr);
 }
 
-// Survivor lookup. out_nodes is sorted by signature, so the top SIGBITS bits of a signature index
-// straight into the run of the array that could hold it: one offset table of 2^SIGBITS + 1 uint32s
+// Survivor lookup. out_nodes is sorted by signature, so the top BITS bits of a signature index
+// straight into the run of the array that could hold it: one offset table of 2^BITS + 1 uint32s
 // (67 MB) replaces a 70 M-entry hash set (is this core alive?) and a 70 M-entry hash map (which node
 // id is it?), 2.4 GB between them, and answers both in one probe of about four entries.
 struct SigIndex {
@@ -316,8 +316,11 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
     SigNodeMap gnode[NSHARD]; EdgeMap gedge[NSHARD];
     std::mutex nmtx[NSHARD], emtx[NSHARD];
     const int nshards = (int)shards.size();
-    const int nrd = nshards;
-    const int nw = std::max(1, threads - nrd);
+    // Readers are capped at half the budget: a reader loops over shards, so more of them than that
+    // only takes threads away from the parse. With a sample given as a directory of 12 shards per
+    // colour and --threads 8, one-reader-per-shard left nw = max(1, 8 - 24) = 1 worker.
+    const int nrd = std::max(1, std::min(nshards, std::max(1, threads) / 2));
+    const int nw = std::max(1, std::max(1, threads) - nrd);
     std::atomic<size_t> next{0}, done{0};
     std::atomic<int> readers_left{nrd};
     std::atomic<uint64_t> rn{0}, rt{0}, emissions{0}, extract_ns{0};
@@ -354,6 +357,13 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
                         if (line_no == 1) {
                             if (carry.empty()) batch.emplace_back(start, n);
                             else { carry.append(start, n); batch.push_back(std::move(carry)); carry.clear(); }
+                            // Upper-case HERE, where a FASTQ sequence line is formed. This block
+                            // reader is the graph stage's own -- it is not reads_next(), which folds
+                            // case for the other stages -- so a soft-masked FASTQ (the simulation's
+                            // own reference is soft-masked) would otherwise reach extract() as
+                            // lower-case bytes: hpc() splits at every case boundary and the cores
+                            // come out with different signatures than the same reads in .svb.
+                            for (char& c : batch.back()) if (c >= 'a' && c <= 'z') c -= 32;
                             shard_reads++;
                             if (batch.size() >= BATCH) flush();
                         } else if (!carry.empty()) carry.clear();
@@ -435,7 +445,7 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
         std::vector<std::vector<SigCount>> part(NSHARD);
         std::atomic<int> next_sh{0};
         std::vector<std::thread> th;
-        for (int i = 0; i < threads; i++) th.emplace_back([&]{
+        for (int i = 0, nt = std::max(1, threads); i < nt; i++) th.emplace_back([&]{
             for (int sh = next_sh.fetch_add(1); sh < NSHARD; sh = next_sh.fetch_add(1)) {
                 part[sh].reserve(gnode[sh].size() / 2);
                 for (const auto& kv : gnode[sh]) {
@@ -463,7 +473,7 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
         std::vector<std::vector<CEdge>> part(NSHARD);
         std::atomic<int> next_sh{0};
         std::vector<std::thread> th;
-        for (int i = 0; i < threads; i++) th.emplace_back([&]{
+        for (int i = 0, nt = std::max(1, threads); i < nt; i++) th.emplace_back([&]{
             for (int sh = next_sh.fetch_add(1); sh < NSHARD; sh = next_sh.fetch_add(1)) {
                 part[sh].reserve(gedge[sh].size() / 3);
                 for (const auto& kv : gedge[sh]) {
