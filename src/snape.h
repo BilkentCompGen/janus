@@ -11,11 +11,16 @@
 extern "C" void extract(const char* str, int len, uint64_t offset, int target_level,
                              int* n_out, const uint64_t** starts_out,
                              const uint64_t** ends_out, const uint64_t** sigs_out);
-uint64_t core_sig(const char* key, int len);
 
-// One kept core of one parse: its span in the read plus its signature. A read's cores go in as
-// extract() produced them, both strands.
-struct Span { uint32_t st, en; uint64_t sig; };
+// Both strands of one read from ONE compression: run for run, hpc(rc(s)) is rc(hpc(s)), so the
+// reverse strand is a reversal of the compressed forward string and its run map. The reverse
+// coordinates are positions in the read's reverse complement, exactly as if the caller had
+// reverse-complemented the read itself and called extract() on it. The graph build reads every
+// base twice, so this halves the compression work; single-strand callers still use extract().
+extern "C" void extract2(const char* str, int len, int target_level,
+                              int* nf, const uint64_t** stf, const uint64_t** enf, const uint64_t** sgf,
+                              int* nr, const uint64_t** str_, const uint64_t** enr, const uint64_t** sgr);
+uint64_t core_sig(const char* key, int len);
 
 // Shared graph-stage structs (survivor record + directed node-id edge), hoisted from
 // graph.cpp's anon namespace so other stages can read graph.bin without duplication.
