@@ -39,9 +39,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <condition_variable>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -50,9 +48,7 @@
 namespace {
 int LEVEL = 5;                             // runtime, from SNAPE_LEVEL; echoed in the banner
 constexpr int MARGIN = 10;                 // MUST match the graph build
-// 256 reads a batch, 32 batches in flight: the whole point is that a worker never waits on the
-// input, and 2000-read batches (34 MB each, one per worker) were both coarse and heavy.
-constexpr size_t BATCH = 256, Q_CAP = 32;
+constexpr size_t BATCH = 2000;
 
 [[noreturn]] void die(const char* m) { std::fprintf(stderr, "[jcontigs] FATAL: %s\n", m); std::exit(1); }
 
@@ -201,47 +197,23 @@ int cmd_junctions(int argc, char** argv) {
 
     Reads in = reads_open(rpath);
     FILE* out = std::fopen((opath + ".tmp").c_str(), "w"); if (!out) die("open out");
-    std::mutex out_mu;
+    std::mutex in_mu, out_mu;
     std::atomic<uint64_t> seen{0}, emitted{0}, emit_bp{0}, seen_bp{0}, short_flank{0};
-
-    // One reader fills batches, the workers take whole batches. The loop this replaces filled the
-    // batch under the input mutex AND copied every read into it while holding that mutex, so with
-    // 2000-read batches the lock was busy about as often as the workers were: measured 684% of the
-    // 1600% it was given.
-    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
-    std::queue<std::vector<Read>> q;
     bool eof = false;
 
-    auto reader = [&]() {
-        std::vector<Read> batch; batch.reserve(BATCH);
-        Read r;
-        auto push = [&]() {
-            if (batch.empty()) return;
-            std::unique_lock<std::mutex> lk(qmtx);
-            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
-            q.push(std::move(batch)); cv_empty.notify_one();
-            batch.clear(); batch.reserve(BATCH);
-        };
-        while (reads_next(in, r.seq, &r.name)) {
-            batch.push_back(std::move(r));
-            if (batch.size() >= BATCH) push();
-        }
-        push();
-        { std::lock_guard<std::mutex> lk(qmtx); eof = true; }
-        cv_empty.notify_all();
-    };
-
     auto worker = [&]() {
-        std::string chunk_out;
+        std::vector<Read> batch; std::string chunk_out;
         std::vector<int> ci; std::vector<int32_t> cc;      // reused across reads
         for (;;) {
-            std::vector<Read> batch;
+            batch.clear();
             {
-                std::unique_lock<std::mutex> lk(qmtx);
-                cv_empty.wait(lk, [&]{ return !q.empty() || eof; });
-                if (q.empty()) return;
-                batch = std::move(q.front()); q.pop(); cv_full.notify_one();
+                std::lock_guard<std::mutex> lk(in_mu);
+                if (eof) return;
+                Read r;
+                while (batch.size() < BATCH && reads_next(in, r.seq, &r.name)) batch.push_back(r);
+                if (batch.size() < BATCH) eof = true;
             }
+            if (batch.empty()) return;
             chunk_out.clear();
             uint64_t sbp = 0, ebp = 0, en = 0, sf = 0;
             for (const Read& r : batch) {
@@ -300,8 +272,7 @@ int cmd_junctions(int argc, char** argv) {
         }
     };
     std::vector<std::thread> th;
-    th.emplace_back(reader);
-    for (int i = 1; i < std::max(2, NT); i++) th.emplace_back(worker);
+    for (int i = 0; i < NT; i++) th.emplace_back(worker);
     for (auto& t : th) t.join();
     reads_close(in); std::fclose(out);
     if (std::rename((opath + ".tmp").c_str(), opath.c_str())) die("rename");
