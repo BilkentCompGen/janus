@@ -34,7 +34,9 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <condition_variable>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -142,40 +144,73 @@ int cmd_pick(int argc, char** argv) {
 
     Reads in = reads_open(reads);
     FILE* fo = std::fopen((out + ".tmp").c_str(), "w"); if (!fo) die("open out");
-    std::mutex in_mu, out_mu;
+    std::mutex out_mu;
     std::atomic<uint64_t> seen{0}, kept{0};
-    std::string shared_seq, shared_name;
+
+    // One reader fills batches, the workers take whole batches. The loop this replaces took the
+    // input mutex once per read and copied the read AND its name while holding it, so every thread
+    // queued behind every other thread's memcpy -- the same shape bubbles' collect had, where it
+    // cost more than half the machine.
+    constexpr size_t Q_CAP = 128, BATCH = 32;
+    struct Rd { std::string name, seq; };
+    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
+    std::queue<std::vector<Rd>> q;
+    bool eof = false;
+
+    auto reader = [&]() {
+        std::vector<Rd> batch; batch.reserve(BATCH);
+        Rd r;
+        auto push = [&]() {
+            if (batch.empty()) return;
+            std::unique_lock<std::mutex> lk(qmtx);
+            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
+            q.push(std::move(batch)); cv_empty.notify_one();
+            batch.clear(); batch.reserve(BATCH);
+        };
+        while (reads_next(in, r.seq, &r.name)) {
+            batch.push_back(std::move(r));
+            if (batch.size() >= BATCH) push();
+        }
+        push();
+        { std::lock_guard<std::mutex> lk(qmtx); eof = true; }
+        cv_empty.notify_all();
+    };
 
     auto worker = [&]() {
-        std::string seq, name, buf;
+        std::string buf;
         for (;;) {
+            std::vector<Rd> batch;
             {
-                std::lock_guard<std::mutex> lk(in_mu);
-                if (!reads_next(in, shared_seq, &shared_name)) return;
-                seq = shared_seq; name = shared_name;
+                std::unique_lock<std::mutex> lk(qmtx);
+                cv_empty.wait(lk, [&]{ return !q.empty() || eof; });
+                if (q.empty()) return;
+                batch = std::move(q.front()); q.pop(); cv_full.notify_one();
             }
-            const uint64_t s = ++seen;
-            int n; const uint64_t *st, *en, *sg;
-            extract(seq.data(), (int)seq.size(), 0, LEVEL, &n, &st, &en, &sg);
-            int hit = 0;
-            for (int i = 0; i < n && hit < MINSH; i++) {
-                if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > seq.size()) continue;
-                hit += sigs.contains(sg[i]);
+            for (const Rd& r : batch) {
+                const uint64_t s = ++seen;
+                int n; const uint64_t *st, *en, *sg;
+                extract(r.seq.data(), (int)r.seq.size(), 0, LEVEL, &n, &st, &en, &sg);
+                int hit = 0;
+                for (int i = 0; i < n && hit < MINSH; i++) {
+                    if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > r.seq.size()) continue;
+                    hit += sigs.contains(sg[i]);
+                }
+                if (hit >= MINSH) {
+                    buf.assign("@"); buf += r.name; buf += "\n"; buf += r.seq;
+                    buf += "\n+\n"; buf.append(r.seq.size(), 'I'); buf += "\n";
+                    std::lock_guard<std::mutex> lk(out_mu);
+                    std::fwrite(buf.data(), 1, buf.size(), fo);
+                    kept++;
+                }
+                if (s % 2000000 == 0)
+                    std::fprintf(stderr, "[pick]   %llu okuma, %llu secildi\n",
+                                 (unsigned long long)s, (unsigned long long)kept.load());
             }
-            if (hit >= MINSH) {
-                buf.assign("@"); buf += name; buf += "\n"; buf += seq;
-                buf += "\n+\n"; buf.append(seq.size(), 'I'); buf += "\n";
-                std::lock_guard<std::mutex> lk(out_mu);
-                std::fwrite(buf.data(), 1, buf.size(), fo);
-                kept++;
-            }
-            if (s % 2000000 == 0)
-                std::fprintf(stderr, "[pick]   %llu okuma, %llu secildi\n",
-                             (unsigned long long)s, (unsigned long long)kept.load());
         }
     };
     std::vector<std::thread> th;
-    for (int i = 0; i < NT; i++) th.emplace_back(worker);
+    th.emplace_back(reader);
+    for (int i = 1; i < std::max(2, NT); i++) th.emplace_back(worker);
     for (auto& t : th) t.join();
     reads_close(in); std::fclose(fo);
     if (std::rename((out + ".tmp").c_str(), out.c_str())) die("rename");
