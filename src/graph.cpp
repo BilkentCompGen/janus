@@ -384,13 +384,19 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
 
     auto worker = [&]() {
         uint64_t ext = 0, emis = 0;
-        // 512 k entries, swept on the 1.5 M-read pair (wall, peak RSS, same graph.bin):
-        // 4 M 95.9 s / 18.9 GB, 2 M 98.3 s / 15.9 GB, 512 k 94.1 s / 10.6 GB, 128 k 100.7 s / 9.9 GB
-        // (the 2 M and 128 k runs shared the box with another job, so read their walls as +-4%).
-        // A worker's own tables and the per-shard staging vectors are both bounded by this, so it is
-        // the largest single term in peak memory; below ~512 k the extra merges start costing time.
+        // How many entries a worker accumulates before merging into the shard maps. It is the
+        // largest single term in peak memory -- a worker's own two tables AND the per-shard staging
+        // vectors are bounded by it -- and it is also a speed dial, because a bigger table dedupes
+        // more repeats BEFORE the locked, cache-missing global merge ever sees them.
+        // Swept end to end on hcc1954 (391 Gbp, 16 cores), against the same binary each time; the
+        // graph.bin is the same at every setting (checked on the 1.5 M-read pair, where the run to
+        // run noise this build inherits does not fire):
+        //     4 M   13:20.54 / 42.53 GB      2 M  14:05.63 / 36.88 GB
+        //     1 M   14:05.09 / 33.10 GB    512 k  16:02.05 / 31.01 GB
+        // 1 M is where both numbers are still better than the 17:09.81 / 40.37 GB this pipeline
+        // shipped with: same wall as 2 M for 3.8 GB less, and 512 k gives back most of the time.
         const char* fe = std::getenv("SNAPE_FLUSH");   // test hook: force mid-run merges at smoke scale
-        const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 19);
+        const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 20);
         SigNodeMap ln; EdgeMap le; ln.reserve(1u << 20); le.reserve(1u << 20);
         // The per-shard staging vectors are reused: at this threshold they are the second largest
         // allocation a worker makes, and rebuilding them per flush was pure allocator traffic.
