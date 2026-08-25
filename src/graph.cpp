@@ -249,10 +249,38 @@ static bool svb_next(FILE* f, std::string& seq) {
 // ---- the shared reads input (snape.h) ---------------------------------------------------------
 // The same two readers above, behind one interface, so bubbles and junctions can take a .svb
 // directly instead of being handed a FASTQ stream by a shell.
+// One line out of the block buffer, newline stripped. `s` points into the buffer, or into r.carry
+// when the line straddled a block boundary. False at EOF.
+static bool rd_line(Reads& r, const char*& s, size_t& n) {
+    r.carry.clear();
+    for (;;) {
+        if (r.pos >= r.end) {
+            r.end = std::fread(r.buf.data(), 1, r.buf.size(), r.f);
+            r.pos = 0;
+            if (r.end == 0) {                                // EOF: a last line with no newline still counts
+                if (r.carry.empty()) return false;
+                s = r.carry.data(); n = r.carry.size();
+                while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) n--;
+                return true;
+            }
+        }
+        const char* base = r.buf.data() + r.pos;
+        const char* nl = (const char*)std::memchr(base, '\n', r.end - r.pos);
+        if (!nl) { r.carry.append(base, r.end - r.pos); r.pos = r.end; continue; }
+        size_t len = (size_t)(nl - base);
+        r.pos += len + 1;
+        if (r.carry.empty()) { s = base; n = len; }
+        else { r.carry.append(base, len); s = r.carry.data(); n = r.carry.size(); }
+        while (n && (s[n - 1] == '\r')) n--;
+        return true;
+    }
+}
+
 Reads reads_open(const std::string& path, const std::string& sample) {
     Reads r;
     r.svb = is_svb(path);
     r.f = r.svb ? open_svb(path) : open_fastq(path);
+    if (!r.svb) r.buf.resize(1u << 20);
     if (!sample.empty()) r.tag = sample + "|";
     return r;
 }
@@ -264,23 +292,18 @@ bool reads_next(Reads& r, std::string& seq, std::string* name) {
         r.idx++;
         return true;
     }
-    static thread_local char* buf = nullptr;                 // one line buffer per calling thread
-    static thread_local size_t cap = 0;
-    ssize_t n = getline(&buf, &cap, r.f);
-    if (n <= 0) return false;
-    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
+    const char* p; size_t n;
+    if (!rd_line(r, p, n)) return false;                     // '@name'
     if (name) {
-        const char* sp = (const char*)std::memchr(buf + 1, ' ', n > 0 ? (size_t)n - 1 : 0);
+        const char* sp = n > 1 ? (const char*)std::memchr(p + 1, ' ', n - 1) : nullptr;
         name->assign(r.tag);
-        name->append(buf + 1, sp ? (size_t)(sp - buf - 1) : (size_t)(n > 0 ? n - 1 : 0));
+        name->append(p + 1, sp ? (size_t)(sp - p - 1) : (n > 0 ? n - 1 : 0));
     }
-    n = getline(&buf, &cap, r.f);
-    if (n <= 0) return false;
-    while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) n--;
-    seq.assign(buf, (size_t)n);
+    if (!rd_line(r, p, n)) return false;                     // sequence
+    seq.assign(p, n);
     for (char& c : seq) if (c >= 'a' && c <= 'z') c -= 32;
-    if (getline(&buf, &cap, r.f) <= 0) return false;         // '+'
-    if (getline(&buf, &cap, r.f) <= 0) return false;         // quality, discarded
+    if (!rd_line(r, p, n)) return false;                     // '+'
+    if (!rd_line(r, p, n)) return false;                     // quality, discarded
     r.idx++;
     return true;
 }

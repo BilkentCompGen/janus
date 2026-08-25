@@ -69,6 +69,12 @@ struct Reads {
     bool svb = false;
     uint64_t idx = 0;
     std::string tag;                 // "" or "<sample>|", prepended to every name this reader hands out
+    // A 1 MB block reader, not getline per line. Measured on a real 114 GiB read set: the block
+    // reader graph has always used does 3257 MB/s while four getline calls per record do 1080, and
+    // junctions and pick are both bounded by it -- with sixteen threads sitting at 31% waiting.
+    std::vector<char> buf;
+    size_t pos = 0, end = 0;
+    std::string carry;               // a line that straddled a block boundary
 };
 // `sample` is the line's name from the sheet, or "" for a reader whose names nothing downstream
 // distinguishes (pick's normal, bubbles' collect). With N tumour lines the tag is what stops two
