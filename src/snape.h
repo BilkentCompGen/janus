@@ -50,6 +50,15 @@ struct SigCount { uint64_t sig; uint32_t slot; };
 // Directed adjacency, node ids, with its own slot into the edge count arena.
 struct CEdge { uint32_t src, dst; };      // no per-sample counts: nothing reads them
 
+// graph.bin carries every surviving core's RAW bytes, 2-bit packed, so bubbles can measure an arm in
+// bases and derive its minimizers without re-reading the FASTQs. A core holding a base outside ACGT
+// is stored verbatim instead, flagged in the high bit of its length.
+constexpr uint32_t SEQ_RAW = 0x80000000u;
+inline uint64_t seq_bytes(uint32_t len) {
+    const uint64_t n = len & ~SEQ_RAW;
+    return (len & SEQ_RAW) ? n : (n + 3) / 4;
+}
+
 // One reads input, FASTQ or .svb, walked sequentially. Defined in graph.cpp, which already had the
 // .svb reader, so that every stage that walks the reads uses the SAME one -- bubbles and junctions
 // used to take FASTQ only, which is the entire reason the pipeline needed a shell to hand them

@@ -142,107 +142,6 @@ struct Want {
     size_t size() const { return id.size(); }
 };
 
-// One pass over one sample's reads: any read covering a wanted core gives that core its minimizers.
-// WHICH read cannot matter -- equal signatures mean equal homopolymer-compressed bytes, and the
-// minimizers are computed from those bytes.
-//
-// One reader thread fills batches of reads; the workers take a whole batch at a time and never touch
-// the input again. A hit needs no lock either: `seen` is one atomic flag per wanted core and the
-// worker that claims a flag writes that core's minimizers.
-// [Before: every worker took the input mutex per read AND copied the read while holding it, then
-//  took a global map mutex twice per hit. Measured on hcc1954: 21.9 M voluntary context switches
-//  and 732% of the 1600% the run was given.]
-void collect(const std::string& path, const Want& want, int NT,
-             std::vector<std::vector<uint64_t>>& mins_of, std::vector<uint32_t>& raw_of,
-             std::vector<uint32_t>& hpc_of, int k, int w, const char* tag, double& overlap) {
-    const size_t W = want.size();
-    mins_of.assign(W, {});
-    raw_of.assign(W, 0);
-    hpc_of.assign(W, 0);
-    std::unique_ptr<std::atomic<uint8_t>[]> seen(new std::atomic<uint8_t>[W ? W : 1]);
-    for (size_t i = 0; i < W; i++) seen[i].store(0, std::memory_order_relaxed);
-
-    constexpr size_t Q_CAP = 128, BATCH = 32;
-    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
-    std::queue<std::vector<std::string>> q;
-    bool eof = false;
-    std::atomic<uint64_t> nread{0}, ncov{0};
-    // Consecutive cores of one read overlap in that read's own bytes, so summing core lengths over an
-    // arm overcounts by (cores-1) x overlap. Measure the overlap here rather than assume it: without
-    // it, an arm length in bases cannot be compared between arms of different core count.
-    std::atomic<uint64_t> ov_sum{0}, ov_n{0};
-
-    auto reader = [&]() {
-        Reads in = reads_open(path, "");
-        std::vector<std::string> batch; batch.reserve(BATCH);
-        std::string seq;
-        auto push = [&]() {
-            if (batch.empty()) return;
-            std::unique_lock<std::mutex> lk(qmtx);
-            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
-            q.push(std::move(batch)); cv_empty.notify_one();
-            batch.clear(); batch.reserve(BATCH);
-        };
-        while (reads_next(in, seq, nullptr)) {
-            batch.push_back(std::move(seq));
-            if (batch.size() >= BATCH) push();
-        }
-        push();
-        reads_close(in);
-        { std::lock_guard<std::mutex> lk(qmtx); eof = true; }
-        cv_empty.notify_all();
-    };
-
-    auto worker = [&]() {
-        std::string hs; std::vector<uint64_t> mins;
-        for (;;) {
-            std::vector<std::string> batch;
-            {
-                std::unique_lock<std::mutex> lk(qmtx);
-                cv_empty.wait(lk, [&]{ return !q.empty() || eof; });
-                if (q.empty()) return;
-                batch = std::move(q.front()); q.pop(); cv_full.notify_one();
-            }
-            for (const std::string& seq : batch) {
-                nread++;
-                int n; const uint64_t *st, *en, *sg;
-                extract(seq.data(), (int)seq.size(), 0, LEVEL, &n, &st, &en, &sg);
-                if (n > 1) {
-                    uint64_t s = 0, c = 0;
-                    for (int i = 0; i + 1 < n; i++)
-                        if (en[i] > st[i + 1]) { s += en[i] - st[i + 1]; c++; }
-                    ov_sum += s; ov_n += c;
-                }
-                for (int i = 0; i < n; i++) {
-                    if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > seq.size()) continue;
-                    const uint32_t id = want.find(sg[i]);
-                    if (id == UINT32_MAX || seen[id].load(std::memory_order_relaxed)) continue;
-                    hpc_local(seq.data() + st[i], (int)(en[i] - st[i]), hs);
-                    minimizers(hs.data(), (int)hs.size(), k, w, mins);
-                    if (seen[id].exchange(1, std::memory_order_acq_rel) == 0) {
-                        mins_of[id] = mins;
-                        raw_of[id] = (uint32_t)(en[i] - st[i]);
-                        hpc_of[id] = (uint32_t)hs.size();
-                        ncov++;
-                    }
-                }
-            }
-        }
-    };
-
-    std::vector<std::thread> th;
-    th.emplace_back(reader);
-    for (int i = 1; i < std::max(2, NT); i++) th.emplace_back(worker);
-    for (auto& t : th) t.join();
-    std::fprintf(stderr, "[bubbles] %s: %llu okuma -> %zu/%zu cekirdek kapsandi\n",
-                 tag, (unsigned long long)nread.load(), (size_t)ncov.load(), W);
-    if (ov_n.load()) {
-        overlap = (double)ov_sum.load() / (double)ov_n.load();
-        std::fprintf(stderr, "[bubbles] %s: ardisik cekirdek ortalama ortusme %.1f bp (%llu cift)\n",
-                     tag, overlap, (unsigned long long)ov_n.load());
-    }
-}
-
 size_t lcs(const std::vector<uint64_t>& a, const std::vector<uint64_t>& b) {
     if (a.empty() || b.empty()) return 0;
     std::vector<uint16_t> prev(b.size() + 1, 0), cur(b.size() + 1, 0);
@@ -263,7 +162,22 @@ struct Graph {
     std::vector<uint32_t> on, in;
     int S = 0;
     std::vector<uint32_t> tc;                   // per-node tumour count, kept only under SNAPE_BUBBLE_TSV
+    std::vector<uint32_t> slen;                 // per-node RAW core length, SEQ_RAW = stored verbatim
+    std::vector<uint64_t> soff;                 // where that core's bytes start in `seq`
+    std::vector<uint8_t> seq;                   // every surviving core's bytes, 2-bit packed
+    uint64_t ov_s = 0, ov_c = 0;                // summed consecutive-core overlap, and its pair count
 };
+
+// A core's bytes, back from the 2-bit packing graph wrote.
+void seq_get(const Graph& g, uint32_t v, std::string& out) {
+    const uint32_t len = g.slen[v], n = len & ~SEQ_RAW;
+    out.resize(n);
+    if (!n) return;
+    const uint8_t* p = g.seq.data() + g.soff[v];
+    if (len & SEQ_RAW) { std::memcpy(&out[0], p, n); return; }
+    static const char L[4] = { 'A', 'C', 'G', 'T' };
+    for (uint32_t i = 0; i < n; i++) out[i] = L[(p[i >> 2] >> (6 - 2 * (i & 3))) & 3];
+}
 
 // graph.bin v2, streamed: nothing is materialised that the CSR replaces. The count planes are
 // SoA now, so only plane 0 (the normal) is read at all -- `som` is exactly "the normal never saw
@@ -274,9 +188,10 @@ Graph load_graph(const std::string& path) {
     Graph g;
     char mg[4]; uint32_t ver = 0, S = 0, resv = 0;
     if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin (bad magic)");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 3) die("graph.bin version is not 3 -- rebuild it");
+    if (std::fread(&ver, 4, 1, f) != 1 || ver != 4) die("graph.bin version is not 4 -- rebuild it");
     if (std::fread(&S, 4, 1, f) != 1 || S < 2 || S > 64) die("graph.bin sample count out of range");
     if (std::fread(&resv, 4, 1, f) != 1) die("read header");
+    if (std::fread(&g.ov_s, 8, 1, f) != 1 || std::fread(&g.ov_c, 8, 1, f) != 1) die("read overlap");
     g.S = (int)S;
     if (std::fread(&g.K, 8, 1, f) != 1) die("read K");
     g.sig.resize(g.K);
@@ -303,6 +218,17 @@ Graph load_graph(const std::string& path) {
     } else if (std::fseek(f, (long)((size_t)(S - 1) * g.K * sizeof(cov_t)), SEEK_CUR) != 0) {
         die("seek past tumour planes");
     }
+
+    uint64_t sbytes = 0;
+    if (std::fread(&sbytes, 8, 1, f) != 1) die("read core sequence size");
+    g.slen.resize(g.K);
+    if (g.K && std::fread(g.slen.data(), 4, g.K, f) != g.K) die("read core lengths");
+    g.seq.resize(sbytes);
+    if (sbytes && std::fread(g.seq.data(), 1, sbytes, f) != sbytes) die("read core sequence");
+    g.soff.resize(g.K);
+    { uint64_t at = 0;
+      for (uint64_t i = 0; i < g.K; i++) { g.soff[i] = at; at += seq_bytes(g.slen[i]); }
+      if (at != sbytes) die("core sequence section is the wrong size"); }
 
     uint64_t E = 0;
     if (std::fread(&E, 8, 1, f) != 1) die("read E");
@@ -404,6 +330,25 @@ std::vector<Bub> find_bubbles(const Graph& g, int maxlen, int NT) {
     return out;
 }
 
+// Unpack each wanted core and take its homopolymer-compressed length and its minimizers. ~225k
+// cores on the 21-sample graph, so one thread is ample -- this replaces a 2.4 TB read.
+void derive(const Graph& g, const std::vector<uint32_t>& nod, int k, int w,
+            std::vector<std::vector<uint64_t>>& mins_of, std::vector<uint32_t>& raw_of,
+            std::vector<uint32_t>& hpc_of) {
+    const size_t W = nod.size();
+    mins_of.assign(W, {}); raw_of.assign(W, 0); hpc_of.assign(W, 0);
+    std::string core, hs; std::vector<uint64_t> mins;
+    for (size_t i = 0; i < W; i++) {
+        seq_get(g, nod[i], core);
+        if (core.empty()) continue;
+        hpc_local(core.data(), (int)core.size(), hs);
+        minimizers(hs.data(), (int)hs.size(), k, w, mins);
+        mins_of[i] = mins;
+        raw_of[i] = (uint32_t)core.size();
+        hpc_of[i] = (uint32_t)hs.size();
+    }
+}
+
 void arm_mins(const Graph& g, const std::vector<uint32_t>& arm, const Want& want,
               const std::vector<std::vector<uint64_t>>& mins, std::vector<uint64_t>& out) {
     out.clear();
@@ -437,32 +382,33 @@ int cmd_bubbles(int argc, char** argv) {
     const Graph g = load_graph(gpath);
     if ((size_t)g.S != smp.size()) die("sheet and graph.bin disagree on the sample count");
     const std::vector<Bub> bubs = find_bubbles(g, MAXLEN, NT);
-    if (bubs.empty()) { std::fprintf(stderr, "[bubbles] temiz bubble yok\n"); return 0; }
+    if (bubs.empty()) std::fprintf(stderr, "[bubbles] temiz bubble yok\n");
 
+    // The arms' bytes come from graph.bin, which carries every surviving core's raw sequence. This
+    // used to be a scan of every read set to recover them: measured on the 21-sample simulation,
+    // 2.4 TB of reading to obtain 49 MB of sequence. The signature IS the hash of a core's
+    // homopolymer-compressed bytes, so whichever read first gave the graph this core, its
+    // compression and its minimizers are the ones any other read would have produced.
     Want want_s, want_g;
+    std::vector<uint32_t> nod_s, nod_g;
+    auto addn = [](Want& w, std::vector<uint32_t>& nod, uint64_t sig, uint32_t v) {
+        const uint32_t i = w.add(sig);
+        if (i >= nod.size()) nod.resize(i + 1);
+        nod[i] = v;
+    };
     for (const Bub& b : bubs) {
-        for (uint32_t v : b.som_arm) want_s.add(g.sig[v]);
-        for (uint32_t v : b.germ_arm) want_g.add(g.sig[v]);
+        for (uint32_t v : b.som_arm) addn(want_s, nod_s, g.sig[v], v);
+        for (uint32_t v : b.germ_arm) addn(want_g, nod_g, g.sig[v], v);
     }
     std::vector<std::vector<uint64_t>> mm_s, mm_g;
     std::vector<uint32_t> raw_s, hpc_s, raw_g, hpc_g;
-    // A somatic core is by definition absent from the normal, so only a TUMOUR file can supply its
-    // bytes -- and with N lines, any line that carries it will do: equal signature means equal
-    // homopolymer-compressed bytes, hence identical minimizers, whichever read wins the claim.
-    // Germline-arm cores are the mirror case and come from the normal.
-    double ov_sum = 0;
-    for (size_t i = 1; i < smp.size(); i++) {
-        double ov = OVERLAP;
-        collect(smp[i].path, want_s, NT, mm_s, raw_s, hpc_s, KMER, W, smp[i].name.c_str(), ov);
-        ov_sum += ov;
-    }
-    double ov_n = OVERLAP;
-    collect(smp[0].path, want_g, NT, mm_g, raw_g, hpc_g, KMER, W, smp[0].name.c_str(), ov_n);
-    // One arm's cores came from tumour reads and the other's from normal reads, so the correction
-    // that makes the two spans comparable is the mean of what each sample measured. At one tumour
-    // this is exactly the 0.5*(ov_t+ov_n) it replaces.
-    OVERLAP = (ov_sum + ov_n) / (double)smp.size();
-    std::fprintf(stderr, "[bubbles] kullanilan ortusme: %.1f bp\n", OVERLAP);
+    derive(g, nod_s, KMER, W, mm_s, raw_s, hpc_s);
+    derive(g, nod_g, KMER, W, mm_g, raw_g, hpc_g);
+    // graph measured the overlap over every read of every sample as it went; the mean is what makes
+    // two arms of different core count comparable in bases.
+    OVERLAP = g.ov_c ? (double)g.ov_s / (double)g.ov_c : OVERLAP;
+    std::fprintf(stderr, "[bubbles] %zu + %zu cekirdek grafdan cozuldu, ortusme %.1f bp (%llu cift)\n",
+                 nod_s.size(), nod_g.size(), OVERLAP, (unsigned long long)g.ov_c);
 
     // Both arms the same length and the somatic arm almost entirely colinear with the germline one:
     // a local edit, not a novel adjacency. Its cores never become a contig.
