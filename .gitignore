@@ -31,3 +31,10 @@ paper/*.synctex.gz
 
 # claude workspace (contains git worktrees)
 .claude
+
+# Assembly and read alignments plus the consensus workspace: BAMs of several GB each and the caller
+# outputs derived from them. All of it regenerates from scripts that ARE tracked, and `git add -A`
+# pulled the BAMs in once already, which is what this rule prevents.
+/asm2asm
+/readalign
+/consensus
