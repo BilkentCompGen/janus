@@ -22,12 +22,33 @@ extern "C" void extract2(const char* str, int len, int target_level,
                               int* nr, const uint64_t** str_, const uint64_t** enr, const uint64_t** sgr);
 uint64_t core_sig(const char* key, int len);
 
-// Shared graph-stage structs (survivor record + directed node-id edge), hoisted from
-// graph.cpp's anon namespace so other stages can read graph.bin without duplication.
-struct SigCount { uint64_t sig; uint32_t n, t; };
-// Counted directed edge, the graph.bin on-disk edge record: src->dst node ids with
-// per-colour traversal counts (ncov = #normal reads crossing the adjacency, tcov = #tumor reads).
-struct CEdge { uint32_t src, dst, ncov, tcov; };
+// Per-sample coverage count. WIDTH IS A MEASURED CHOICE, not a guess.
+//
+// A count's MAGNITUDE is read in exactly one place that reaches an output: the chunk VAF
+// (junctions.cpp). Everywhere else it is a zero test (`cov[0]==0` is somatic) or a floor test
+// (min_mult), and saturation at the top can change neither. The VAF in turn feeds
+// `keep[c] = vaf(c) >= min_vaf` with min_vaf defaulting to 0, so it drops nothing.
+//
+// MEASURED on the real hcc1954 graph (70.4 M nodes, 115,774 chunks), counts clipped at 255:
+//   somatic cores 207,948 -> 207,948   chunks 115,774 -> 115,774   no-anchor 968 -> 968
+// i.e. the chunk set, which is the ONLY thing that flows downstream, is unchanged. What does move
+// is the VAF histogram (VAF>=0.02: 58,601 -> 66,312), because the VAF's denominator is a germline
+// ANCHOR count -- local depth, not copy number -- and anchors in repeat-adjacent sequence pass 255.
+// That histogram is printed and discarded.
+//
+// It is kept at 8 bits because the study this is built for sequences clonally expanded SINGLE
+// CELLS: there is no within-line cell fraction for a VAF to estimate, and the between-line question
+// -- which lines carry the junction -- is answered exactly by the support pattern, with no ratio and
+// no denominator. 21 samples cost 4.2 GB of graph.bin at this width against 7.3 GB at 16 bits.
+using cov_t = uint8_t;
+constexpr cov_t COV_MAX = 255;
+
+// Survivor record: the sig IS the node identity; its S counts live in a separate flat arena at
+// stride S, which `slot` indexes. Putting the counts in the record (or in a hash map's value) would
+// either malloc per entry or pay a fixed MAX_SAMPLES per entry; this pays 4 bytes.
+struct SigCount { uint64_t sig; uint32_t slot; };
+// Directed adjacency, node ids, with its own slot into the edge count arena.
+struct CEdge { uint32_t src, dst; };      // no per-sample counts: nothing reads them
 
 // One reads input, FASTQ or .svb, walked sequentially. Defined in graph.cpp, which already had the
 // .svb reader, so that every stage that walks the reads uses the SAME one -- bubbles and junctions
@@ -38,8 +59,13 @@ struct Reads {
     FILE* f = nullptr;
     bool svb = false;
     uint64_t idx = 0;
+    std::string tag;                 // "" or "<sample>|", prepended to every name this reader hands out
 };
-Reads reads_open(const std::string& path);
+// `sample` is the line's name from the sheet, or "" for a reader whose names nothing downstream
+// distinguishes (pick's normal, bubbles' collect). With N tumour lines the tag is what stops two
+// .svb files' synthesised r0, r1, ... from colliding: a contig is named after the read it was cut
+// from, and `snape call` counts support by distinct contig name.
+Reads reads_open(const std::string& path, const std::string& sample);
 bool reads_next(Reads& r, std::string& seq, std::string* name);
 void reads_close(Reads& r);
 
