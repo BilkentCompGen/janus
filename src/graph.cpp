@@ -88,6 +88,36 @@ using EdgeSet = ankerl::unordered_dense::set<SEdge, EdgeHash>;
 
 // Counts saturate: no stage reads their magnitude, only zero / non-zero and the min_mult floor.
 static inline void bump(cov_t& c) { c += (c != COV_MAX); }
+
+// A surviving core's RAW bytes, 2-bit packed (A=00 C=01 G=10 T=11). bubbles needs a core's bytes to
+// measure an arm in bases and to derive its minimizers, and the only other place those bytes exist
+// is the reads -- which is why bubbles used to re-read every FASTQ: measured, 2.4 TB of scanning to
+// recover 49 MB of sequence. Carrying them in graph.bin costs ~3.7 GiB and turns that scan into a
+// 6 GiB read. The bytes and not the minimizers, so k and w stay parameters of bubbles.
+//
+// A core holding anything outside ACGT is stored verbatim instead, flagged in the high bit of `len`:
+// packing an N as an A would change the homopolymer compression and every minimizer downstream.
+struct SeqRef { uint64_t off = 0; uint32_t len = 0; };     // len == 0: nothing stored yet
+
+static inline int b2(char c) { return c == 'A' ? 0 : c == 'C' ? 1 : c == 'G' ? 2 : c == 'T' ? 3 : -1; }
+
+static SeqRef seq_put(std::vector<uint8_t>& a, const char* s, uint32_t n) {
+    SeqRef r; r.off = a.size(); r.len = n;
+    for (uint32_t i = 0; i < n; i++) if (b2(s[i]) < 0) { r.len |= SEQ_RAW; break; }
+    if (r.len & SEQ_RAW) { a.insert(a.end(), s, s + n); return r; }
+    a.resize(r.off + (n + 3) / 4, 0);
+    for (uint32_t i = 0; i < n; i++) a[r.off + (i >> 2)] |= (uint8_t)(b2(s[i]) << (6 - 2 * (i & 3)));
+    return r;
+}
+
+// Move an already-packed core between arenas: worker -> sample -> graph, each time only for cores
+// that have earned the space by clearing the gate.
+static SeqRef seq_copy(std::vector<uint8_t>& dst, const uint8_t* src, SeqRef r) {
+    SeqRef o; o.off = dst.size(); o.len = r.len;
+    const uint64_t nb = seq_bytes(r.len);
+    dst.insert(dst.end(), src + r.off, src + r.off + nb);
+    return o;
+}
 static inline void addsat(cov_t& d, cov_t v) { const uint32_t t = (uint32_t)d + v; d = t > COV_MAX ? COV_MAX : (cov_t)t; }
 
 static bool is_gz(const std::string& p) { return p.size() >= 3 && p.compare(p.size() - 3, 3, ".gz") == 0; }
@@ -266,25 +296,27 @@ namespace {
 // survive. With homopolymer normalisation the map fits -- distinct is 78.7 M per colour and the two
 // colours share one record.
 using SigNodeMap = ankerl::unordered_dense::map<uint64_t, uint32_t>;
-struct NodeTab { SigNodeMap m; std::vector<cov_t> a; };
+struct NodeTab { SigNodeMap m; std::vector<cov_t> a; std::vector<SeqRef> r; std::vector<uint8_t> s; };
 
 static inline cov_t* node_slot(NodeTab& t, uint64_t k, int S) {
     const auto r = t.m.try_emplace(k, (uint32_t)(t.a.size() / (size_t)S));
-    if (r.second) t.a.resize(t.a.size() + (size_t)S, 0);
+    if (r.second) { t.a.resize(t.a.size() + (size_t)S, 0); t.r.emplace_back(); }
     return t.a.data() + (size_t)r.first->second * (size_t)S;
 }
 
-// One sample's own tables: a count per signature, and the bare existence of an adjacency. No arena
-// and no colour, because inside one sample there is only one colour.
-using SigCntMap = ankerl::unordered_dense::map<uint64_t, cov_t>;
-struct Local { SigCntMap n; EdgeSet e; };
+// One sample's own tables: a count per signature, its bytes, and the bare existence of an adjacency.
+// No colour, because inside one sample there is only one colour.
+struct Core { cov_t n = 0; SeqRef s; };
+using SigCntMap = ankerl::unordered_dense::map<uint64_t, Core>;
+struct ShTab { SigCntMap m; std::vector<uint8_t> a; };
+struct Local { SigCntMap n; EdgeSet e; std::vector<uint8_t> a; };
 
 // One read -> its cores' counts AND its raw consecutive adjacencies, both strands, in a single walk.
 // Both strands come out of ONE extract2() call, so the read is homopolymer-compressed once instead
 // of twice and its reverse complement is never materialised. Cores within `margin` of either end of
 // their strand are dropped, exactly as the two-call version dropped them.
 void process_read_single(std::string& s, int level, int margin, Local& lo,
-                         uint64_t& cpu_ext, uint64_t& ncores) {
+                         uint64_t& cpu_ext, uint64_t& ncores, uint64_t& ov_s, uint64_t& ov_n) {
     // Reads arrive upper-cased: the FASTQ reader does it as it parses, the .svb decoder emits ACGT
     // and upper-cases the RAW records it does not decode.
     const uint64_t len = s.size();
@@ -294,19 +326,46 @@ void process_read_single(std::string& s, int level, int margin, Local& lo,
     extract2(s.data(), (int)len, level, &nf, &stf, &enf, &sgf, &nr, &strv, &enr, &sgr);
     cpu_ext += thr_ns() - te;
     const uint64_t mg = (uint64_t)margin;
-    auto chain = [&](int n, const uint64_t* st, const uint64_t* en, const uint64_t* sig) {
+    // extract2 gives the reverse strand's cores in the REVERSE COMPLEMENT's own frame, and never
+    // materialises it -- that is the point of doing both strands from one compression. Storing a
+    // core's bytes needs the string those offsets index, so the reverse complement is built once per
+    // read, and only when a reverse-strand core actually has to be stored. It is a linear pass at
+    // ~0.3 ns/base against extract2's ~15, so it does not show up next to the parse.
+    static thread_local std::string cb;                 // the core's own bytes, built per stored core
+    auto chain = [&](bool rev, int n, const uint64_t* st, const uint64_t* en, const uint64_t* sig) {
+        // Consecutive cores of one read overlap in that read's own bytes, so summing core lengths
+        // over an arm overcounts by (cores-1) x overlap. Measured here, where the read is in hand,
+        // and carried in the header: bubbles used to re-read every FASTQ to get this one number.
+        for (int i = 0; i + 1 < n; i++) if (en[i] > st[i + 1]) { ov_s += en[i] - st[i + 1]; ov_n++; }
         uint64_t prev = 0; bool have = false;
         for (int i = 0; i < n; i++) {
             if (st[i] < mg || en[i] + mg > len) continue;
             ncores++;
-            bump(lo.n[sig[i]]);
+            const auto r = lo.n.try_emplace(sig[i], Core{});
+            // The LAST core of a strand has no trustworthy `en`: extract's emit() reads one byte
+            // past the core, and for that one core it lands on whatever the buffer held before, so
+            // the span can even come out inverted. The count still goes in -- that stale `en` is
+            // what the margin test has always used -- but its BYTES are skipped, and at 18x another
+            // read carries the same core in its interior and supplies them.
+            if (r.second && en[i] > st[i] && en[i] <= len) {
+                const uint32_t w = (uint32_t)(en[i] - st[i]);
+                cb.assign(s, (size_t)st[i], w);
+                // The reverse strand's cores are spans of the FORWARD read whose sequence is that
+                // span reverse-complemented -- that is the string whose compression was hashed.
+                if (rev) {
+                    for (uint32_t a = 0, b = w - 1; a < b; a++, b--) std::swap(cb[a], cb[b]);
+                    for (char& c : cb) c = c == 'A' ? 'T' : c == 'C' ? 'G' : c == 'G' ? 'C' : c == 'T' ? 'A' : c;
+                }
+                r.first->second.s = seq_put(lo.a, cb.data(), w);
+            }
+            bump(r.first->second.n);
             // Every consecutive pair, survivor or not -- the mm gate fires when the sample ends.
             if (have && prev != sig[i]) lo.e.insert(SEdge(prev, sig[i]));
             prev = sig[i]; have = true;
         }
     };
-    chain(nf, stf, enf, sgf);
-    chain(nr, strv, enr, sgr);
+    chain(false, nf, stf, enf, sgf);
+    chain(true, nr, strv, enr, sgr);
 }
 
 // Survivor lookup. out_nodes is sorted by signature, so the top BITS bits of a signature index
@@ -340,10 +399,10 @@ constexpr int NSHARD = 64;
 // of extract2() does 65 Mbp/s. One reader feeds about 25 workers, so the old `threads/2` reader cap
 // left half the machine copying bytes: at --threads 32 it ran 16 readers and 16 workers and the
 // process sat at 1650% CPU on a 32-core box.
-void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads,
-                  SigCntMap* psn, EdgeSet* pse, std::mutex* nmtx, std::mutex* emtx,
+void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
+                  ShTab* psn, EdgeSet* pse, std::mutex* nmtx, std::mutex* emtx,
                   std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
-                  uint64_t& reads_here) {
+                  std::atomic<uint64_t>& ov_sum, std::atomic<uint64_t>& ov_cnt, uint64_t& reads_here) {
     const int nw = std::max(1, threads - 1);
     std::atomic<size_t> next{0};
     std::atomic<uint64_t> rcnt{0};
@@ -407,8 +466,9 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
         // too: a bigger table dedupes more repeats before the locked, cache-missing merge sees them.
         const char* fe = std::getenv("SNAPE_FLUSH");
         const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 20);
+        uint64_t ovs = 0, ovn = 0;
         Local lo; lo.n.reserve(1u << 20); lo.e.reserve(1u << 20);
-        std::vector<std::vector<std::pair<uint64_t, cov_t>>> bn(NSHARD);
+        std::vector<std::vector<std::pair<uint64_t, Core>>> bn(NSHARD);
         std::vector<std::vector<SEdge>> be(NSHARD);
         auto flush = [&]() {
             for (auto& v : bn) v.clear();
@@ -416,9 +476,16 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
             for (int sh = 0; sh < NSHARD; sh++) {
                 if (bn[sh].empty()) continue;
                 std::lock_guard<std::mutex> lk(nmtx[sh]);
-                for (const auto& kv : bn[sh]) addsat(psn[sh][kv.first], kv.second);
+                for (const auto& kv : bn[sh]) {
+                    Core& e = psn[sh].m[kv.first];
+                    addsat(e.n, kv.second.n);
+                    // The bytes are promoted the moment the count clears the gate, and never before:
+                    // half of a sample's distinct signatures are read errors and cost nothing here.
+                    if (e.s.len == 0 && (uint32_t)e.n >= (uint32_t)min_mult)
+                        e.s = seq_copy(psn[sh].a, lo.a.data(), kv.second.s);
+                }
             }
-            lo.n.clear();
+            lo.n.clear(); lo.a.clear();
             for (auto& v : be) v.clear();
             for (const auto& e : lo.e) be[EdgeHash{}(e) & (NSHARD - 1)].push_back(e);
             for (int sh = 0; sh < NSHARD; sh++) {
@@ -436,11 +503,11 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
                 if (q.empty()) break;
                 b = std::move(q.front()); q.pop(); cv_full.notify_one();
             }
-            for (std::string& s : b) process_read_single(s, level, margin, lo, ext, emis);
+            for (std::string& s : b) process_read_single(s, level, margin, lo, ext, emis, ovs, ovn);
             if (lo.n.size() >= FLUSH || lo.e.size() >= FLUSH) flush();
         }
         flush();
-        emissions += emis; extract_ns += ext;
+        emissions += emis; extract_ns += ext; ov_sum += ovs; ov_cnt += ovn;
     };
 
     { std::vector<std::thread> th;
@@ -450,16 +517,16 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
     reads_here = rcnt.load();
 }
 
-static inline bool survives(const SigCntMap* psn, uint64_t sig, int min_mult) {
-    const SigCntMap& m = psn[sig & (NSHARD - 1)];
+static inline bool survives(const ShTab* psn, uint64_t sig, int min_mult) {
+    const SigCntMap& m = psn[sig & (NSHARD - 1)].m;
     const auto it = m.find(sig);
-    return it != m.end() && (uint32_t)it->second >= (uint32_t)min_mult;
+    return it != m.end() && (uint32_t)it->second.n >= (uint32_t)min_mult;
 }
 
 // The mm gate, applied to ONE sample on that sample's own exact counts, and the merge into the
 // S-plane graph. Two phases, because phase 2 reads every shard of `psn` while phase 1 only writes
 // its own: freeing inside phase 1 would race with phase 2's lookups.
-void merge_sample(SigCntMap* psn, EdgeSet* pse, NodeTab* gnode, EdgeSet* gedge,
+void merge_sample(ShTab* psn, EdgeSet* pse, NodeTab* gnode, EdgeSet* gedge,
                   int col, int S, int min_mult, int threads, uint64_t& seen, uint64_t& kept) {
     const int nt = std::max(1, threads);
     std::atomic<uint64_t> nseen{0}, npass{0};
@@ -469,11 +536,16 @@ void merge_sample(SigCntMap* psn, EdgeSet* pse, NodeTab* gnode, EdgeSet* gedge,
         for (int i = 0; i < nt; i++) th.emplace_back([&]{
             for (int sh = next_sh.fetch_add(1); sh < NSHARD; sh = next_sh.fetch_add(1)) {
                 uint64_t a = 0, b = 0;
-                for (const auto& kv : psn[sh]) {
+                for (const auto& kv : psn[sh].m) {
                     a++;
-                    if ((uint32_t)kv.second < (uint32_t)min_mult) continue;   // read error in THIS sample
+                    if ((uint32_t)kv.second.n < (uint32_t)min_mult) continue;  // read error in THIS sample
                     b++;
-                    node_slot(gnode[sh], kv.first, S)[col] = kv.second;
+                    node_slot(gnode[sh], kv.first, S)[col] = kv.second.n;
+                    // The first sample to promote a core donates its bytes; the rest are the same
+                    // 217 bases of the same locus, so the graph keeps one copy.
+                    const uint32_t slot = gnode[sh].m.find(kv.first)->second;
+                    if (gnode[sh].r[slot].len == 0)
+                        gnode[sh].r[slot] = seq_copy(gnode[sh].s, psn[sh].a.data(), kv.second.s);
                 }
                 nseen += a; npass += b;
             }
@@ -493,7 +565,9 @@ void merge_sample(SigCntMap* psn, EdgeSet* pse, NodeTab* gnode, EdgeSet* gedge,
         });
         for (auto& t : th) t.join();
     }
-    for (int sh = 0; sh < NSHARD; sh++) { SigCntMap().swap(psn[sh]); EdgeSet().swap(pse[sh]); }
+    for (int sh = 0; sh < NSHARD; sh++) {
+        SigCntMap().swap(psn[sh].m); std::vector<uint8_t>().swap(psn[sh].a); EdgeSet().swap(pse[sh]);
+    }
     seen = nseen.load(); kept = npass.load();
 }
 
@@ -514,11 +588,13 @@ void merge_sample(SigCntMap* psn, EdgeSet* pse, NodeTab* gnode, EdgeSet* gedge,
 // evidence. The germline question is asked again, properly, on the normal's own alignment in `call`.
 void run_pool_single(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
                      int S, std::vector<SigCount>& out_nodes, std::vector<cov_t>& out_ncov,
-                     std::vector<CEdge>& out_edges, std::vector<uint64_t>& reads_per) {
+                     std::vector<CEdge>& out_edges, std::vector<SeqRef>& out_sref,
+                     std::vector<uint8_t>& out_seq, uint64_t& ov_s, uint64_t& ov_c,
+                     std::vector<uint64_t>& reads_per) {
     NodeTab gnode[NSHARD]; EdgeSet gedge[NSHARD];
-    SigCntMap psn[NSHARD]; EdgeSet pse[NSHARD];
+    ShTab psn[NSHARD]; EdgeSet pse[NSHARD];
     std::mutex nmtx[NSHARD], emtx[NSHARD];
-    std::atomic<uint64_t> emissions{0}, extract_ns{0};
+    std::atomic<uint64_t> emissions{0}, extract_ns{0}, ov_sum{0}, ov_cnt{0};
     reads_per.assign((size_t)S, 0);
     uint64_t distinct = 0, kept = 0;
 
@@ -526,7 +602,8 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
         std::vector<Shard> mine;
         for (const Shard& s : shards) if (s.col == col) mine.push_back(s);
         uint64_t rd = 0, seen = 0, pass = 0;
-        count_sample(mine, level, margin, threads, psn, pse, nmtx, emtx, emissions, extract_ns, rd);
+        count_sample(mine, level, margin, threads, min_mult, psn, pse, nmtx, emtx, emissions,
+                     extract_ns, ov_sum, ov_cnt, rd);
         merge_sample(psn, pse, gnode, gedge, col, S, min_mult, threads, seen, pass);
         reads_per[col] = rd;
         distinct += seen; kept += pass;
@@ -540,6 +617,7 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
     {
         std::vector<std::vector<SigCount>> part(NSHARD);
         std::vector<std::vector<cov_t>> pcov(NSHARD);
+        std::vector<std::vector<SeqRef>> pref(NSHARD);
         std::atomic<int> next_sh{0};
         std::vector<std::thread> th;
         for (int i = 0, nt = std::max(1, threads); i < nt; i++) th.emplace_back([&]{
@@ -549,9 +627,11 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
                     const cov_t* c = gnode[sh].a.data() + (size_t)kv.second * (size_t)S;
                     part[sh].push_back({kv.first, (uint32_t)(pcov[sh].size() / (size_t)S)});
                     pcov[sh].insert(pcov[sh].end(), c, c + S);
+                    pref[sh].push_back(gnode[sh].r[kv.second]);
                 }
                 SigNodeMap().swap(gnode[sh].m);
                 std::vector<cov_t>().swap(gnode[sh].a);
+                std::vector<SeqRef>().swap(gnode[sh].r);
             }
         });
         for (auto& t : th) t.join();
@@ -559,12 +639,19 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
         for (int sh = 0; sh < NSHARD; sh++) K += part[sh].size();
         out_nodes.clear(); out_nodes.reserve(K);
         out_ncov.clear(); out_ncov.reserve(K * (size_t)S);
+        out_sref.clear(); out_sref.reserve(K);
+        out_seq.clear();
         for (int sh = 0; sh < NSHARD; sh++) {
             const uint32_t base = (uint32_t)(out_ncov.size() / (size_t)S);
+            const uint64_t sbase = out_seq.size();
             for (SigCount c : part[sh]) { c.slot += base; out_nodes.push_back(c); }
+            for (SeqRef r : pref[sh]) { r.off += sbase; out_sref.push_back(r); }
             out_ncov.insert(out_ncov.end(), pcov[sh].begin(), pcov[sh].end());
+            out_seq.insert(out_seq.end(), gnode[sh].s.begin(), gnode[sh].s.end());
             std::vector<SigCount>().swap(part[sh]);
             std::vector<cov_t>().swap(pcov[sh]);
+            std::vector<SeqRef>().swap(pref[sh]);
+            std::vector<uint8_t>().swap(gnode[sh].s);
         }
     }
     psort(out_nodes, threads, [](const SigCount& a, const SigCount& b){ return a.sig < b.sig; });
@@ -600,9 +687,12 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
                  emissions.load() / 1e6, extract_ns.load() / 1e9);
     std::fprintf(stderr, "[graph1] per-sample distinct sigs=%.3f M -> passed mm=%d: %.3f M (%.2f%%)\n",
                  distinct / 1e6, min_mult, kept / 1e6, distinct ? 100.0 * kept / distinct : 0.0);
+    ov_s = ov_sum.load(); ov_c = ov_cnt.load();
     std::fprintf(stderr, "[graph1] merged nodes=%.3f M | raw adjacencies=%.3f M -> kept=%.3f M (%.2f%%)\n",
                  out_nodes.size() / 1e6, eraw / 1e6, out_edges.size() / 1e6,
                  eraw ? 100.0 * out_edges.size() / eraw : 0.0);
+    std::fprintf(stderr, "[graph1] core sequence=%.3f GiB, ardisik cekirdek ortusme %.1f bp\n",
+                 out_seq.size() / 1073741824.0, ov_c ? (double)ov_s / (double)ov_c : 0.0);
 }
 
 
@@ -611,9 +701,16 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
 
 // ---- the stage: reads -> counted cores and adjacencies -> self-contained graph.bin ----
 // graph.bin v2 schema (little-endian throughout):
-//   char[4] "SNPG" | u32 version=3 | u32 S | u32 reserved
+//   char[4] "SNPG" | u32 version=4 | u32 S | u32 reserved | u64 ov_sum | u64 ov_cnt
 //   u64 K | u64 sig[K] | cov_t cov[S][K]
+//   u64 sbytes | u32 slen[K] | u8 seq[sbytes]
 //   u64 E | u32 esrc[E] | u32 edst[E]
+//
+//   slen[i]  the core's RAW length, high bit set when its bytes are stored verbatim rather than
+//            2-bit packed (a core holding an N). seq[] is those bytes, concatenated in node order.
+//   ov_*     the summed overlap of consecutive cores within a read, and how many pairs it came
+//            from. bubbles needs the mean to compare arms of different core counts, and used to
+//            re-read every FASTQ to measure it.
 //
 // v1 had NO magic and NO version -- it began with K -- so a v1 file and a v2 file were
 // indistinguishable except by size arithmetic, and `run` resumes on nothing but the presence of the
@@ -647,7 +744,9 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     // ---- the build: ONE pass over the reads, exact maps, nodes and edges together ----
     std::vector<SigCount> nodes; std::vector<CEdge> ce;
     std::vector<cov_t> ncov; std::vector<uint64_t> nreads;
-    run_pool_single(shards_all, level, margin, threads, min_mult, S, nodes, ncov, ce, nreads);
+    std::vector<SeqRef> sref; std::vector<uint8_t> sbuf; uint64_t ov_s = 0, ov_c = 0;
+    run_pool_single(shards_all, level, margin, threads, min_mult, S, nodes, ncov, ce, sref, sbuf,
+                    ov_s, ov_c, nreads);
     const uint64_t K = nodes.size();
     const Snap P1 = snap();
     tic.mark("pool_both");
@@ -668,8 +767,9 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     // building the whole SoA block first, would hold a second 3.5 GB copy.
     const std::string gp = dir + "/graph.bin";
     FILE* fg = xopen(gp + ".tmp", "wb");
-    const uint32_t ver = 3, Sw = (uint32_t)S, resv = 0;
+    const uint32_t ver = 4, Sw = (uint32_t)S, resv = 0;
     wr(fg, "SNPG", 4); wr(fg, &ver, 4); wr(fg, &Sw, 4); wr(fg, &resv, 4);
+    wr(fg, &ov_s, 8); wr(fg, &ov_c, 8);
     uint64_t Kw = K; wr(fg, &Kw, 8);
     { std::vector<uint64_t> sig(K);
       for (uint64_t i = 0; i < K; i++) sig[i] = nodes[i].sig;
@@ -679,7 +779,24 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
         for (uint64_t i = 0; i < K; i++) plane[i] = ncov[(size_t)nodes[i].slot * (size_t)S + j];
         wr(fg, plane.data(), K * sizeof(cov_t));
     }
+    // Core sequence, in node order, WHILE `nodes` is still alive -- it is released just below, and
+    // gathering through its slots afterwards is what a first version of this did and segfaulted on.
+    // Written through a buffer: one fwrite per core would be K of them, and K is 68 million.
+    { std::vector<uint32_t> sl(K);
+      uint64_t tot = 0;
+      for (uint64_t i = 0; i < K; i++) { sl[i] = sref[nodes[i].slot].len; tot += seq_bytes(sl[i]); }
+      wr(fg, &tot, 8);
+      wr(fg, sl.data(), K * 4);
+      std::vector<uint8_t> buf; buf.reserve(1u << 22);
+      for (uint64_t i = 0; i < K; i++) {
+          const SeqRef& r = sref[nodes[i].slot];
+          const uint64_t nb = seq_bytes(r.len);
+          buf.insert(buf.end(), sbuf.data() + r.off, sbuf.data() + r.off + nb);
+          if (buf.size() >= (1u << 22)) { wr(fg, buf.data(), buf.size()); buf.clear(); }
+      }
+      if (!buf.empty()) wr(fg, buf.data(), buf.size()); }
     std::vector<SigCount>().swap(nodes); std::vector<cov_t>().swap(ncov);
+    std::vector<SeqRef>().swap(sref); std::vector<uint8_t>().swap(sbuf);
     const uint64_t E = ce.size(); wr(fg, &E, 8);
     { std::vector<uint32_t> col(E);
       for (uint64_t i = 0; i < E; i++) col[i] = ce[i].src;

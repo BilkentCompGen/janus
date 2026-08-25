@@ -86,9 +86,12 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
     char mg[4]; uint32_t ver = 0, S = 0, resv = 0;
     if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin (bad magic)");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 3) die("graph.bin version is not 3 -- rebuild it");
+    if (std::fread(&ver, 4, 1, f) != 1 || ver != 4) die("graph.bin version is not 4 -- rebuild it");
     if (std::fread(&S, 4, 1, f) != 1 || S < 2 || S > 64) die("graph.bin sample count out of range");
     if (std::fread(&resv, 4, 1, f) != 1) die("read header");
+    uint64_t ov_s = 0, ov_c = 0;                        // v4: core-overlap measurement, for bubbles
+    if (std::fread(&ov_s, 8, 1, f) != 1 || std::fread(&ov_c, 8, 1, f) != 1) die("read overlap");
+    (void)ov_s; (void)ov_c;
     const uint32_t L = S - 1;                                     // tumour lines
     if (std::fread(&K, 8, 1, f) != 1) die("read K");
     std::vector<uint64_t> sig(K);
@@ -101,6 +104,9 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
     std::vector<cov_t> tc((size_t)K * L);
     if (L && std::fread(tc.data(), sizeof(cov_t), (size_t)K * L, f) != (size_t)K * L) die("read tumour planes");
     uint64_t E = 0;
+    uint64_t sbytes = 0;                                // v4: core sequence, for bubbles only
+    if (std::fread(&sbytes, 8, 1, f) != 1) die("read core sequence size");
+    if (std::fseek(f, (long)((size_t)K * 4 + sbytes), SEEK_CUR) != 0) die("seek past core sequence");
     if (std::fread(&E, 8, 1, f) != 1) die("read E");
     std::vector<uint32_t> es(E), ed(E);                           // SoA: two columns, not a stride
     if (std::fread(es.data(), 4, E, f) != E) die("read esrc");
