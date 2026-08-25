@@ -5,3 +5,8 @@
 [M::mm_idx_stat] kmer size: 19; skip: 19; is_hpc: 0; #seq: 23
 [M::mm_idx_stat::33.766*1.81] distinct minimizers: 214116401 (92.33% are singletons); average occurrences: 1.433; average spacing: 9.957; total length: 3054815472
 [M::worker_pipeline::55.604*4.73] mapped 29130 sequences
+[M::worker_pipeline::69.784*5.81] mapped 29119 sequences
+[M::worker_pipeline::87.085*6.64] mapped 29112 sequences
+[M::worker_pipeline::104.101*7.19] mapped 29066 sequences
+[M::worker_pipeline::120.371*7.57] mapped 29066 sequences
+[M::worker_pipeline::136.572*7.86] mapped 29105 sequences
