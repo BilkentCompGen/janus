@@ -425,7 +425,8 @@ constexpr int NSHARD = 64;
 void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
                   ShTab* psn, EdgeSet* pse, std::mutex* nmtx, std::mutex* emtx,
                   std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
-                  std::atomic<uint64_t>& ov_sum, std::atomic<uint64_t>& ov_cnt, uint64_t& reads_here) {
+                  std::atomic<uint64_t>& ov_sum, std::atomic<uint64_t>& ov_cnt,
+                  std::atomic<uint64_t>& flush_ns, uint64_t& reads_here) {
     const int nw = std::max(1, threads - 1);
     std::atomic<size_t> next{0};
     std::atomic<uint64_t> rcnt{0};
@@ -494,6 +495,11 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
         std::vector<std::vector<std::pair<uint64_t, Core>>> bn(NSHARD);
         std::vector<std::vector<SEdge>> be(NSHARD);
         auto flush = [&]() {
+            // Time spent in the merge, lock included. graph went 31:27 -> 46:42 when it began
+            // carrying core sequence and only a sixth of that is the packing arithmetic; the
+            // untested suspect is seq_copy lengthening the per-shard critical section. This says
+            // whether that is where the time went, and costs one clock read per million entries.
+            const uint64_t tf = thr_ns();
             for (auto& v : bn) v.clear();
             for (const auto& kv : lo.n) bn[kv.first & (NSHARD - 1)].push_back(kv);
             for (int sh = 0; sh < NSHARD; sh++) {
@@ -517,6 +523,7 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
                 for (const auto& e : be[sh]) pse[sh].insert(e);
             }
             lo.e.clear();
+            flush_ns += thr_ns() - tf;
         };
         while (true) {
             std::vector<std::string> b;
@@ -617,7 +624,7 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
     NodeTab gnode[NSHARD]; EdgeSet gedge[NSHARD];
     ShTab psn[NSHARD]; EdgeSet pse[NSHARD];
     std::mutex nmtx[NSHARD], emtx[NSHARD];
-    std::atomic<uint64_t> emissions{0}, extract_ns{0}, ov_sum{0}, ov_cnt{0};
+    std::atomic<uint64_t> emissions{0}, extract_ns{0}, ov_sum{0}, ov_cnt{0}, flush_ns{0};
     reads_per.assign((size_t)S, 0);
     uint64_t distinct = 0, kept = 0;
 
@@ -626,7 +633,7 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
         for (const Shard& s : shards) if (s.col == col) mine.push_back(s);
         uint64_t rd = 0, seen = 0, pass = 0;
         count_sample(mine, level, margin, threads, min_mult, psn, pse, nmtx, emtx, emissions,
-                     extract_ns, ov_sum, ov_cnt, rd);
+                     extract_ns, ov_sum, ov_cnt, flush_ns, rd);
         merge_sample(psn, pse, gnode, gedge, col, S, min_mult, threads, seen, pass);
         reads_per[col] = rd;
         distinct += seen; kept += pass;
@@ -706,8 +713,8 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
             std::vector<CEdge>().swap(part[sh]);
         }
     }
-    std::fprintf(stderr, "[graph1] core emissions=%.3f M, of which %.1f CPU-s in extract\n",
-                 emissions.load() / 1e6, extract_ns.load() / 1e9);
+    std::fprintf(stderr, "[graph1] core emissions=%.3f M, of which %.1f CPU-s in extract, %.1f CPU-s in flush\n",
+                 emissions.load() / 1e6, extract_ns.load() / 1e9, flush_ns.load() / 1e9);
     std::fprintf(stderr, "[graph1] per-sample distinct sigs=%.3f M -> passed mm=%d: %.3f M (%.2f%%)\n",
                  distinct / 1e6, min_mult, kept / 1e6, distinct ? 100.0 * kept / distinct : 0.0);
     ov_s = ov_sum.load(); ov_c = ov_cnt.load();
