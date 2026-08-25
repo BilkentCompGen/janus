@@ -101,6 +101,13 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
     // The tumour planes are held whole because the VAF is a max over a chunk's cores AND a max over
     // its germline neighbours, which are two scattered gathers per line. At one tumour this is half
     // what v1's u32 tcov cost; at twenty it is 2.8 GB, against the 1.2 GB of edges v1 also held.
+    //
+    // PLANE-MAJOR: graph.cpp writes plane l whole, then plane l+1 (graph.cpp:800-804), so line l's
+    // count for node i is tc[l*K + i]. This read it as tc[i*L + l] -- node-major -- which is the
+    // same address only when L == 1, so every per-line gather below was reading another line's
+    // bytes as soon as a second tumour existed. It reached no output today because min_vaf ships at
+    // 0 and vaf() cannot then reject anything, but the printed VAF histogram was wrong and the
+    // filter would have selected the wrong chunks the moment it was switched on.
     std::vector<cov_t> tc((size_t)K * L);
     if (L && std::fread(tc.data(), sizeof(cov_t), (size_t)K * L, f) != (size_t)K * L) die("read tumour planes");
     uint64_t E = 0;
@@ -154,7 +161,7 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
         if (!som[i]) continue;
         const size_t c = cid[i];
         for (uint32_t l = 0; l < L; l++) {
-            const cov_t v = tc[(size_t)i * L + l];
+            const cov_t v = tc[(size_t)l * K + i];
             if (v) carry[c] |= (1ull << l);
             if (v > num[c * L + l]) num[c * L + l] = v;
         }
@@ -165,7 +172,7 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
         const uint32_t sm = som[a] ? a : b, o = som[a] ? b : a;
         const size_t c = cid[sm];
         for (uint32_t l = 0; l < L; l++) {
-            const cov_t v = tc[(size_t)o * L + l];
+            const cov_t v = tc[(size_t)l * K + o];
             if (v > den[c * L + l]) den[c * L + l] = v;
         }
     }
