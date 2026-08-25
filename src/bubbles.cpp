@@ -1,4 +1,4 @@
-// snape bubbles <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]
+// snape bubbles <graph.bin> <normal> <tumour> [threads=16] [k=21] [w=22] [maxlen=40] [max_dbp=50] [max_unmatched=20]
 //
 // Most of the somatic material in the graph is not a junction. It is SNVs and sub-SV edits, and each
 // one still becomes a chunk, a contig, and a minute of alignment. This stage names those cores before
@@ -22,10 +22,29 @@
 //   junction         : different sequence. Minimizers may still be shared, but they do not stay in
 //                      order, and the LCS collapses.
 //
-// Hence the two thresholds: `max_dlen` bounds the arm length difference in minimizers and
-// `max_unmatched` how many somatic minimizers may fall outside the LCS. Measured on `hard`: 12/20
-// drops 83% of the somatic cores and 84% of the contigs for 2 junctions of recall.
+// Two clauses, and they measure orthogonal things: HOW MUCH sequence changed, and whether what is
+// there is the same sequence rearranged. Both are needed -- a balanced junction changes no length at
+// all, and only the collapsing LCS separates it from an SNV.
+//
+// The length clause is in BASES, not in minimizers, and that is the whole of it. A minimizer is one
+// sample per ~16.6 raw bases (measured, hcc1954: median arm 31 minimizers over 508 bases), so the old
+// `max_dlen = 12` minimizers admitted everything up to ~200 bp into the "local edit, delete it" class
+// -- four times the 50 bp the caller reports from. That is where the insertion and deletion recall
+// went: over four CASTLE panels the gap to Severus is +33 recall at 50-100 bp and ~0 by 500 bp.
+//
+// An arm's length in bases is the sum of its cores' lengths minus the overlap consecutive cores of one
+// read share, which is 122.5 bp at level 5 -- measured over 1.97e9 consecutive pairs on hcc1954 and
+// 2.02e9 on h2009, identical to a decimal, because it is a property of the decomposition and not of
+// the sample. So `max_dbp` is comparable with an SV length, and the value to give it is not a free
+// parameter any more: it is the caller's own floor, `min_sv`. Below that a difference is not an event
+// we would report even if we kept it.
+//
+// Measured against the truth loci (hcc1954, 188 INS/DEL loci carrying a somatic core), at equal
+// recovery of the events the shipped pipeline misses, the base rule keeps far fewer cores than the
+// minimizer rule -- 20/22 missed deletions for 32.9k cores against 39.6k, 21/22 for 42.6k against
+// 57.0k, 22/22 for 53.2k against 78.2k. Same recall, a quarter to a third less to align.
 #include "bubbles.h"
+#include "samples.h"
 
 #include "snape.h"
 #include "unordered_dense.h"
@@ -39,6 +58,7 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <condition_variable>
 #include <memory>
@@ -54,6 +74,17 @@ namespace {
 
 int LEVEL = 5;                                 // runtime, from SNAPE_LEVEL
 constexpr int MARGIN = 10;                     // MUST match the graph build
+// Consecutive cores of one read overlap, so an arm of n cores spans sum(len) - overlap*(n-1) bases.
+// MEASURED on this run's own reads rather than taken as a constant -- `collect` counts it over every
+// consecutive pair it parses (1.97e9 pairs on hcc1954, 2.02e9 on h2009; both give 122.5 bp, because it
+// is a property of the level-5 decomposition and not of the sample). The fallback is only for a run
+// that parsed nothing.
+double OVERLAP = 122.5;
+
+// SNAPE_BUBBLE_TSV=<path>: dump one line per bubble with every statistic the drop rule could be
+// built from, so a rule can be calibrated offline against the truth loci instead of by re-running
+// this stage once per candidate threshold. Off by default and it changes nothing about drop.sigs.
+const char* DUMP = nullptr;
 
 inline uint64_t mix64(uint64_t x) {
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33;
@@ -122,9 +153,12 @@ struct Want {
 //  took a global map mutex twice per hit. Measured on hcc1954: 21.9 M voluntary context switches
 //  and 732% of the 1600% the run was given.]
 void collect(const std::string& path, const Want& want, int NT,
-             std::vector<std::vector<uint64_t>>& mins_of, int k, int w, const char* tag) {
+             std::vector<std::vector<uint64_t>>& mins_of, std::vector<uint32_t>& raw_of,
+             std::vector<uint32_t>& hpc_of, int k, int w, const char* tag, double& overlap) {
     const size_t W = want.size();
     mins_of.assign(W, {});
+    raw_of.assign(W, 0);
+    hpc_of.assign(W, 0);
     std::unique_ptr<std::atomic<uint8_t>[]> seen(new std::atomic<uint8_t>[W ? W : 1]);
     for (size_t i = 0; i < W; i++) seen[i].store(0, std::memory_order_relaxed);
 
@@ -133,9 +167,13 @@ void collect(const std::string& path, const Want& want, int NT,
     std::queue<std::vector<std::string>> q;
     bool eof = false;
     std::atomic<uint64_t> nread{0}, ncov{0};
+    // Consecutive cores of one read overlap in that read's own bytes, so summing core lengths over an
+    // arm overcounts by (cores-1) x overlap. Measure the overlap here rather than assume it: without
+    // it, an arm length in bases cannot be compared between arms of different core count.
+    std::atomic<uint64_t> ov_sum{0}, ov_n{0};
 
     auto reader = [&]() {
-        Reads in = reads_open(path);
+        Reads in = reads_open(path, "");
         std::vector<std::string> batch; batch.reserve(BATCH);
         std::string seq;
         auto push = [&]() {
@@ -169,13 +207,24 @@ void collect(const std::string& path, const Want& want, int NT,
                 nread++;
                 int n; const uint64_t *st, *en, *sg;
                 extract(seq.data(), (int)seq.size(), 0, LEVEL, &n, &st, &en, &sg);
+                if (n > 1) {
+                    uint64_t s = 0, c = 0;
+                    for (int i = 0; i + 1 < n; i++)
+                        if (en[i] > st[i + 1]) { s += en[i] - st[i + 1]; c++; }
+                    ov_sum += s; ov_n += c;
+                }
                 for (int i = 0; i < n; i++) {
                     if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > seq.size()) continue;
                     const uint32_t id = want.find(sg[i]);
                     if (id == UINT32_MAX || seen[id].load(std::memory_order_relaxed)) continue;
                     hpc_local(seq.data() + st[i], (int)(en[i] - st[i]), hs);
                     minimizers(hs.data(), (int)hs.size(), k, w, mins);
-                    if (seen[id].exchange(1, std::memory_order_acq_rel) == 0) { mins_of[id] = mins; ncov++; }
+                    if (seen[id].exchange(1, std::memory_order_acq_rel) == 0) {
+                        mins_of[id] = mins;
+                        raw_of[id] = (uint32_t)(en[i] - st[i]);
+                        hpc_of[id] = (uint32_t)hs.size();
+                        ncov++;
+                    }
                 }
             }
         }
@@ -187,6 +236,11 @@ void collect(const std::string& path, const Want& want, int NT,
     for (auto& t : th) t.join();
     std::fprintf(stderr, "[bubbles] %s: %llu okuma -> %zu/%zu cekirdek kapsandi\n",
                  tag, (unsigned long long)nread.load(), (size_t)ncov.load(), W);
+    if (ov_n.load()) {
+        overlap = (double)ov_sum.load() / (double)ov_n.load();
+        std::fprintf(stderr, "[bubbles] %s: ardisik cekirdek ortalama ortusme %.1f bp (%llu cift)\n",
+                     tag, overlap, (unsigned long long)ov_n.load());
+    }
 }
 
 size_t lcs(const std::vector<uint64_t>& a, const std::vector<uint64_t>& b) {
@@ -207,48 +261,68 @@ struct Graph {
     std::vector<uint8_t> som;
     std::vector<uint64_t> oo, io;               // directed CSR: a bubble is a DIRECTED structure
     std::vector<uint32_t> on, in;
+    int S = 0;
+    std::vector<uint32_t> tc;                   // per-node tumour count, kept only under SNAPE_BUBBLE_TSV
 };
 
-// graph.bin, streamed: the edge section is read twice in 1 M-edge chunks (degrees, then fill)
-// instead of being materialised as one CEdge array. That array was 1.2 GB on hcc1954 and every byte
-// of it was thrown away once the CSR existed. The per-colour counts go the same way -- they exist
-// only to decide `som`, so they are consumed a chunk at a time and never all held at once.
+// graph.bin v2, streamed: nothing is materialised that the CSR replaces. The count planes are
+// SoA now, so only plane 0 (the normal) is read at all -- `som` is exactly "the normal never saw
+// this core", and survival already guarantees some sample did. The edge endpoints are two separate
+// SoA columns, so each chunk costs two seeks instead of holding a 1.2 GB AoS array.
 Graph load_graph(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
     Graph g;
+    char mg[4]; uint32_t ver = 0, S = 0, resv = 0;
+    if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin (bad magic)");
+    if (std::fread(&ver, 4, 1, f) != 1 || ver != 3) die("graph.bin version is not 3 -- rebuild it");
+    if (std::fread(&S, 4, 1, f) != 1 || S < 2 || S > 64) die("graph.bin sample count out of range");
+    if (std::fread(&resv, 4, 1, f) != 1) die("read header");
+    g.S = (int)S;
     if (std::fread(&g.K, 8, 1, f) != 1) die("read K");
     g.sig.resize(g.K);
     if (std::fread(g.sig.data(), 8, g.K, f) != g.K) die("read sigs");
 
     g.som.assign(g.K, 0);
     constexpr size_t CH = 1u << 20;
-    std::vector<uint32_t> buf(CH);
-    for (uint64_t done = 0; done < g.K; ) {                       // ncov: som candidate iff 0
+    std::vector<cov_t> buf(CH);
+    for (uint64_t done = 0; done < g.K; ) {                       // plane 0 = normal: somatic iff 0
         const size_t m = (size_t)std::min<uint64_t>(CH, g.K - done);
-        if (std::fread(buf.data(), 4, m, f) != m) die("read ncov");
+        if (std::fread(buf.data(), sizeof(cov_t), m, f) != m) die("read normal plane");
         for (size_t i = 0; i < m; i++) g.som[done + i] = (buf[i] == 0);
         done += m;
     }
-    for (uint64_t done = 0; done < g.K; ) {                       // tcov: and only if tumour saw it
-        const size_t m = (size_t)std::min<uint64_t>(CH, g.K - done);
-        if (std::fread(buf.data(), 4, m, f) != m) die("read tcov");
-        for (size_t i = 0; i < m; i++) g.som[done + i] = (uint8_t)(g.som[done + i] & (buf[i] > 0));
-        done += m;
+    if (DUMP) {                                                   // diagnostic only: max over lines
+        g.tc.assign(g.K, 0);
+        for (uint32_t j = 1; j < S; j++)
+            for (uint64_t done = 0; done < g.K; ) {
+                const size_t m = (size_t)std::min<uint64_t>(CH, g.K - done);
+                if (std::fread(buf.data(), sizeof(cov_t), m, f) != m) die("read tumour plane");
+                for (size_t i = 0; i < m; i++) g.tc[done + i] = std::max(g.tc[done + i], (uint32_t)buf[i]);
+                done += m;
+            }
+    } else if (std::fseek(f, (long)((size_t)(S - 1) * g.K * sizeof(cov_t)), SEEK_CUR) != 0) {
+        die("seek past tumour planes");
     }
 
     uint64_t E = 0;
     if (std::fread(&E, 8, 1, f) != 1) die("read E");
     // The fill cursors below are 32-bit, which halves what they cost on a 75 M-edge graph. Node ids
-    // are 32-bit anyway (CEdge), so a graph this loader could not take is one nothing else could
-    // read either -- but say so rather than truncate.
+    // are 32-bit anyway, so a graph this loader could not take is one nothing else could read
+    // either -- but say so rather than truncate.
     if (E > 0xffffffffull) die("graph.bin has more than 2^32 edges");
-    const long epos = std::ftell(f);
+    const long spos = std::ftell(f), dpos = spos + (long)(E * 4);
     std::vector<uint32_t> od(g.K + 1, 0), idg(g.K + 1, 0);
-    std::vector<CEdge> ce(CH);
+    std::vector<uint32_t> bs(CH), bd(CH);
+    auto edge_chunk = [&](uint64_t done, size_t m) {
+        if (std::fseek(f, spos + (long)(done * 4), SEEK_SET) != 0) die("seek esrc");
+        if (std::fread(bs.data(), 4, m, f) != m) die("read esrc");
+        if (std::fseek(f, dpos + (long)(done * 4), SEEK_SET) != 0) die("seek edst");
+        if (std::fread(bd.data(), 4, m, f) != m) die("read edst");
+    };
     for (uint64_t done = 0; done < E; ) {                         // pass 1: degrees
         const size_t m = (size_t)std::min<uint64_t>(CH, E - done);
-        if (std::fread(ce.data(), sizeof(CEdge), m, f) != m) die("read edges");
-        for (size_t i = 0; i < m; i++) { od[ce[i].src]++; idg[ce[i].dst]++; }
+        edge_chunk(done, m);
+        for (size_t i = 0; i < m; i++) { od[bs[i]]++; idg[bd[i]]++; }
         done += m;
     }
     g.oo.assign(g.K + 1, 0); g.io.assign(g.K + 1, 0);
@@ -256,11 +330,10 @@ Graph load_graph(const std::string& path) {
     std::vector<uint32_t>().swap(od); std::vector<uint32_t>().swap(idg);
     g.on.resize(g.oo[g.K]); g.in.resize(g.io[g.K]);
     std::vector<uint32_t> c1(g.oo.begin(), g.oo.end()), c2(g.io.begin(), g.io.end());
-    if (std::fseek(f, epos, SEEK_SET) != 0) die("seek edges");
     for (uint64_t done = 0; done < E; ) {                         // pass 2: fill
         const size_t m = (size_t)std::min<uint64_t>(CH, E - done);
-        if (std::fread(ce.data(), sizeof(CEdge), m, f) != m) die("read edges");
-        for (size_t i = 0; i < m; i++) { g.on[c1[ce[i].src]++] = ce[i].dst; g.in[c2[ce[i].dst]++] = ce[i].src; }
+        edge_chunk(done, m);
+        for (size_t i = 0; i < m; i++) { g.on[c1[bs[i]]++] = bd[i]; g.in[c2[bd[i]]++] = bs[i]; }
         done += m;
     }
     std::fclose(f);
@@ -344,20 +417,25 @@ void arm_mins(const Graph& g, const std::vector<uint32_t>& arm, const Want& want
 
 int cmd_bubbles(int argc, char** argv) {
     if (argc < 4) {
-        std::fprintf(stderr, "usage: snape bubbles <graph.bin> <normal> <tumour> [threads=16] [k=21] "
-                             "[w=22] [maxlen=40] [max_dlen=12] [max_unmatched=20]\n");
+        std::fprintf(stderr, "usage: snape bubbles <graph.bin> <sheet.tsv> [threads=16] [k=21] "
+                             "[w=22] [maxlen=40] [max_dbp=50] [max_unmatched=20]\n");
         return 2;
     }
-    const std::string gpath = argv[1], npath = argv[2], tpath = argv[3];
-    const int NT = argc > 4 ? std::atoi(argv[4]) : 16;
-    const int KMER = argc > 5 ? std::atoi(argv[5]) : 21;
-    const int W = argc > 6 ? std::atoi(argv[6]) : 22;
-    const int MAXLEN = argc > 7 ? std::atoi(argv[7]) : 40;
-    const int MAX_DLEN = argc > 8 ? std::atoi(argv[8]) : 12;
-    const int MAX_UNM = argc > 9 ? std::atoi(argv[9]) : 20;
+    const std::string gpath = argv[1], spath = argv[2];
+    const int NT = argc > 3 ? std::atoi(argv[3]) : 16;
+    const int KMER = argc > 4 ? std::atoi(argv[4]) : 21;
+    const int W = argc > 5 ? std::atoi(argv[5]) : 22;
+    const int MAXLEN = argc > 6 ? std::atoi(argv[6]) : 40;
+    // 50 and not a swept number: it is `snape call`'s own min_sv. Two arms that differ by
+    // less than the smallest event we would report differ by nothing we would report.
+    const int MAX_DBP = argc > 7 ? std::atoi(argv[7]) : 50;
+    const int MAX_UNM = argc > 8 ? std::atoi(argv[8]) : 20;
     if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
+    DUMP = std::getenv("SNAPE_BUBBLE_TSV");
 
+    const std::vector<Sample> smp = samples_read(spath);
     const Graph g = load_graph(gpath);
+    if ((size_t)g.S != smp.size()) die("sheet and graph.bin disagree on the sample count");
     const std::vector<Bub> bubs = find_bubbles(g, MAXLEN, NT);
     if (bubs.empty()) { std::fprintf(stderr, "[bubbles] temiz bubble yok\n"); return 0; }
 
@@ -367,30 +445,89 @@ int cmd_bubbles(int argc, char** argv) {
         for (uint32_t v : b.germ_arm) want_g.add(g.sig[v]);
     }
     std::vector<std::vector<uint64_t>> mm_s, mm_g;
-    collect(tpath, want_s, NT, mm_s, KMER, W, "tumor");
-    collect(npath, want_g, NT, mm_g, KMER, W, "normal");
+    std::vector<uint32_t> raw_s, hpc_s, raw_g, hpc_g;
+    // A somatic core is by definition absent from the normal, so only a TUMOUR file can supply its
+    // bytes -- and with N lines, any line that carries it will do: equal signature means equal
+    // homopolymer-compressed bytes, hence identical minimizers, whichever read wins the claim.
+    // Germline-arm cores are the mirror case and come from the normal.
+    double ov_sum = 0;
+    for (size_t i = 1; i < smp.size(); i++) {
+        double ov = OVERLAP;
+        collect(smp[i].path, want_s, NT, mm_s, raw_s, hpc_s, KMER, W, smp[i].name.c_str(), ov);
+        ov_sum += ov;
+    }
+    double ov_n = OVERLAP;
+    collect(smp[0].path, want_g, NT, mm_g, raw_g, hpc_g, KMER, W, smp[0].name.c_str(), ov_n);
+    // One arm's cores came from tumour reads and the other's from normal reads, so the correction
+    // that makes the two spans comparable is the mean of what each sample measured. At one tumour
+    // this is exactly the 0.5*(ov_t+ov_n) it replaces.
+    OVERLAP = (ov_sum + ov_n) / (double)smp.size();
+    std::fprintf(stderr, "[bubbles] kullanilan ortusme: %.1f bp\n", OVERLAP);
 
     // Both arms the same length and the somatic arm almost entirely colinear with the germline one:
     // a local edit, not a novel adjacency. Its cores never become a contig.
+    FILE* dmp = nullptr;
+    if (DUMP) {
+        dmp = std::fopen(DUMP, "w");
+        if (!dmp) die("open SNAPE_BUBBLE_TSV");
+        std::fprintf(dmp, "ns\tng\tms\tmg\tlcs\tsraw\tgraw\tshpc\tghpc\tsmiss\tgmiss\ttmin\ttmax\tdrop\tsigs\n");
+    }
+    // Sum an arm's core lengths, and count the cores no read gave us bytes for.
+    auto arm_len = [&](const std::vector<uint32_t>& arm, const Want& want,
+                       const std::vector<uint32_t>& raw, const std::vector<uint32_t>& hpc,
+                       uint64_t& sraw, uint64_t& shpc, uint64_t& miss) {
+        sraw = shpc = miss = 0;
+        for (uint32_t v : arm) {
+            const uint32_t id = want.find(g.sig[v]);
+            if (id == UINT32_MAX || raw[id] == 0) { miss++; continue; }
+            sraw += raw[id]; shpc += hpc[id];
+        }
+    };
+
     ankerl::unordered_dense::set<uint64_t> drop;
-    uint64_t nbub = 0;
+    uint64_t nbub = 0, nomiss = 0;
     std::vector<uint64_t> ms, mg;
     for (const Bub& b : bubs) {
         arm_mins(g, b.som_arm, want_s, mm_s, ms);
         arm_mins(g, b.germ_arm, want_g, mm_g, mg);
-        if (ms.empty() || mg.empty() || ms.size() > 400 || mg.size() > 400) continue;
-        if (std::llabs((long long)ms.size() - (long long)mg.size()) > MAX_DLEN) continue;
-        if ((long long)(ms.size() - lcs(ms, mg)) > MAX_UNM) continue;
-        for (uint32_t v : b.som_arm) drop.insert(g.sig[v]);
-        nbub++;
+        uint64_t sraw, shpc, smiss, graw, ghpc, gmiss;
+        arm_len(b.som_arm, want_s, raw_s, hpc_s, sraw, shpc, smiss);
+        arm_len(b.germ_arm, want_g, raw_g, hpc_g, graw, ghpc, gmiss);
+        // A core no read gave us bytes for has no length, so this arm's span is not measurable and
+        // the bubble is kept rather than judged on a number that is short by a whole core.
+        const bool sized = !ms.empty() && !mg.empty() && ms.size() <= 400 && mg.size() <= 400 &&
+                           smiss == 0 && gmiss == 0;
+        nomiss += (smiss || gmiss);
+        const double dspan = std::fabs(((double)sraw - (double)graw) -
+                                       OVERLAP * ((double)b.som_arm.size() - (double)b.germ_arm.size()));
+        const bool dropped = sized && dspan <= (double)MAX_DBP &&
+            (long long)(ms.size() - lcs(ms, mg)) <= MAX_UNM;
+        if (dropped) {
+            for (uint32_t v : b.som_arm) drop.insert(g.sig[v]);
+            nbub++;
+        }
+        if (!dmp) continue;
+        uint32_t tmin = UINT32_MAX, tmax = 0;
+        for (uint32_t v : b.som_arm) { tmin = std::min(tmin, g.tc[v]); tmax = std::max(tmax, g.tc[v]); }
+        std::fprintf(dmp, "%zu\t%zu\t%zu\t%zu\t%zu\t%llu\t%llu\t%llu\t%llu\t%llu\t%llu\t%u\t%u\t%d\t",
+                     b.som_arm.size(), b.germ_arm.size(), ms.size(), mg.size(),
+                     sized ? lcs(ms, mg) : (size_t)0, (unsigned long long)sraw, (unsigned long long)graw,
+                     (unsigned long long)shpc, (unsigned long long)ghpc, (unsigned long long)smiss,
+                     (unsigned long long)gmiss, tmin == UINT32_MAX ? 0 : tmin, tmax, (int)dropped);
+        for (size_t i = 0; i < b.som_arm.size(); i++)
+            std::fprintf(dmp, "%s%llu", i ? "," : "", (unsigned long long)g.sig[b.som_arm[i]]);
+        std::fputc('\n', dmp);
     }
+    if (dmp) { std::fclose(dmp); std::fprintf(stderr, "[bubbles] bubble istatistikleri -> %s\n", DUMP); }
 
     const size_t cut = gpath.find_last_of('/');
     const std::string out = (cut == std::string::npos ? std::string(".") : gpath.substr(0, cut)) + "/drop.sigs";
     FILE* f = std::fopen(out.c_str(), "w"); if (!f) die("open drop.sigs");
     for (uint64_t s : drop) std::fprintf(f, "%llu\n", (unsigned long long)s);
     std::fclose(f);
-    std::fprintf(stderr, "[bubbles] |dlen|<=%d & eslesmeyen<=%d -> %llu/%zu bubble, %zu cekirdek -> %s\n",
-                 MAX_DLEN, MAX_UNM, (unsigned long long)nbub, bubs.size(), drop.size(), out.c_str());
+    std::fprintf(stderr, "[bubbles] |dspan|<=%dbp & eslesmeyen<=%d -> %llu/%zu bubble, %zu cekirdek "
+                 "(%llu bubble olculemedi, tutuldu) -> %s\n",
+                 MAX_DBP, MAX_UNM, (unsigned long long)nbub, bubs.size(), drop.size(),
+                 (unsigned long long)nomiss, out.c_str());
     return 0;
 }

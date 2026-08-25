@@ -4,11 +4,13 @@ _Project-specific guidance. Global behavioural rules + cross-project map: `/home
 
 ---
 
-`snape` — a somatic SV caller that makes the somatic decision **before** alignment. Normal and tumour
-HiFi reads go into one 2-colour LCP-core graph; a core the tumour carries and the normal never does
-is somatic by construction, with no reference and no assembly involved. Those cores are cut out of
-the reads that carry them as junction contigs, and only the contigs (plus the ~1.5% of normal reads
-that answer the germline question) are ever aligned. C++17, one binary, one Makefile, no CI.
+`snape` — a somatic SV caller that makes the somatic decision **before** alignment. One normal and N
+tumour HiFi read sets go into one (N+1)-colour LCP-core graph; a core no tumour-free sample carries
+is somatic by construction, with no reference and no assembly involved, and which tumour lines carry
+it is read straight off the count planes. Those cores are cut out of the reads that carry them as
+junction contigs, per line, and only the contigs (plus the ~1.5% of normal reads that answer the
+germline question) are ever aligned — the normal once, however many tumours there are. C++17, one
+binary, one Makefile, no CI.
 
     ./snape run <normal.svb|fq> <tumour.svb|fq> <ref.fa> <dir> --threads 16
 
@@ -41,15 +43,20 @@ that answer the germline question) are ever aligned. C++17, one binary, one Make
 ## The graph, in one box
 
 ```
-u64 K | u64 sig[K] | u32 ncov[K] | u32 tcov[K] | u64 E | CEdge{u32 src,dst,ncov,tcov}[E]
+"SNPG" | u32 ver=2 | u32 S | u32 resv | u64 K | u64 sig[K] | u8 cov[S][K]
+                                     | u64 E | u32 esrc[E] | u32 edst[E] | u8 ecov[S][E]
 ```
 
 - `sig` = MurmurHash64A over the core's **homopolymer-compressed** bytes. The mixer and the
   compression are both part of the on-disk contract — change either and every sig-keyed artifact
   (`graph.bin`, `drop.sigs`) has to be rebuilt together or they silently match nothing.
-- **Colour is derived, never stored:** `ncov==0 && tcov>0` somatic, `tcov==0 && ncov>0` normal-only,
-  both shared.
-- Node id = index into the sig-sorted survivor array. Edges carry per-colour traversal counts.
+- **Colour is derived, never stored:** plane 0 is the normal, so `cov[0][i]==0` is somatic and the
+  non-zero tumour planes ARE the support pattern — which lines carry the variant, with no coordinate
+  involved. S <= 64, checked at the CLI boundary.
+- **Counts saturate at 255.** No stage reads their magnitude: three of four uses are zero tests or a
+  floor test, the fourth is behind a filter that ships disabled. Measured on hcc1954, clipping at
+  255 leaves the surviving core set and the chunk set identical. One typedef, `cov_t` in `snape.h`.
+- Node id = index into the sig-sorted survivor array. Edges carry per-sample traversal counts.
 - Both strands of every read go in — the parse is not RC-symmetric, so each locus has a mirror twin
   with a different signature and no core in common. A large inversion's interior is therefore
   *shared*, not somatic; what is callable is its two breakpoint junctions.
@@ -58,8 +65,12 @@ u64 K | u64 sig[K] | u32 ncov[K] | u32 tcov[K] | u64 E | CEdge{u32 src,dst,ncov,
 
 - **Real data**: Minda, the Severus paper's own tool at the paper's settings —
   `minda truthset --base hifi/<pair>/truth_clean.vcf --vcfs <calls>.vcf --min_size 50 --tolerance 500`.
-  Severus is scored the same way from its **published** output, so the comparison is symmetric. Use
-  the `minda_4_2` ensemble; the looser ones exist only for hcc1954.
+  Severus is scored the same way from its **published** output. Use the `minda_4_2` ensemble; the
+  looser ones exist only for hcc1954. That is the same *command* on both sides but **not a symmetric
+  comparison**: four of the compared callers are members of the ensemble and a Severus vote is in
+  93.9–97.3% of the records. For a head-to-head, score both sides against `truth_no_<other>` from
+  `/home/yuio/tmp/loo/` (built by `loo_truth.py` from the ensemble's own SUPP_VEC); snape is in no
+  ensemble, so that is the only construction in which neither side helped build the event set.
 - **Simulation**: `scripts/severus_bp_eval.py`, junction-level against insilicoSV's own
   `adjacencies.bed` (a deletion is one junction, an inversion two).
 - Truvari is **not** used any more, in either place.

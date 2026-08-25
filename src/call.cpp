@@ -36,6 +36,31 @@ namespace {
 
 [[noreturn]] void die(const char* m) { std::fprintf(stderr, "[call] FATAL: %s\n", m); std::exit(1); }
 
+struct Ctg { std::string name, bam; };
+
+// argv[1] is one BAM path, or a comma-separated list of <name>=<bam>. A bare path becomes one line
+// named "t" -- the sample column this VCF has always carried -- so one line and twenty run the same
+// code and one line prints what it always printed. Validated here because this is the CLI boundary.
+std::vector<Ctg> parse_ctg(const char* arg) {
+    std::vector<Ctg> v;
+    const std::string in(arg);
+    for (size_t i = 0; i <= in.size();) {
+        const size_t c = std::min(in.find(',', i), in.size());
+        const std::string f = in.substr(i, c - i);
+        if (f.empty()) die("empty contig-set entry");
+        const size_t e = f.find('=');
+        if (e == std::string::npos) v.push_back({"t", f});
+        else v.push_back({f.substr(0, e), f.substr(e + 1)});
+        if (v.back().name.empty() || v.back().bam.empty()) die("contig set needs <name>=<bam>");
+        i = c + 1;
+    }
+    if (v.size() > 64) die("at most 64 contig sets");
+    for (size_t i = 1; i < v.size(); i++)
+        for (size_t j = 0; j < i; j++)
+            if (v[i].name == v[j].name) die("duplicate contig-set name");
+    return v;
+}
+
 struct Seg {                                   // one surviving alignment of one contig
     uint32_t q;                                // contig id
     int32_t tid;
@@ -57,7 +82,7 @@ struct Ins { int32_t c; hts_pos_t p; int32_t len; uint32_t q; double rep; };
 
 struct Stats {
     uint64_t rec = 0, unmapped = 0, secondary = 0, lowq = 0, shortaln = 0, highmm = 0, germ = 0;
-    uint64_t seg = 0, split = 0, cigar_del = 0, cigar_ins = 0;
+    uint64_t seg = 0, split = 0, cigar_del = 0, cigar_ins = 0, ins_split = 0;
 };
 
 double qident(const uint8_t* s, int32_t a, int32_t b, int32_t len) {
@@ -110,6 +135,11 @@ bool tandem(const bam1_t* b, int32_t qp, int len, hts_pos_t rp, int32_t tid, uin
     const double bef = qp - len >= 0 ? qident(sq, qp, qp - len, len) : 0;
     if (std::max(aft, bef) < 0.85) return false;
     const double rep = rep_before(b, qp);
+    // [Tried: breaking a near-tie between the two sides towards a fixed frame, on the theory that
+    //  the two branches place the interval `len` apart and a tandem array decides between them on a
+    //  handful of bases, splitting one event's support across two clusters. Measured on h2009 at the
+    //  shipped guards: TP 812 both ways, one extra false call. The split is not happening at a rate
+    //  that matters, so the more accurate interval is kept.]
     if (aft >= bef) jn.push_back({tid, tid, rp + 1, rp + 1 + len, -1, 1, q, rep});
     else            jn.push_back({tid, tid, rp - len + 1, rp + 1, -1, 1, q, rep});
     return true;
@@ -294,55 +324,126 @@ bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_po
 
 // Read the BAM once. Coordinate order scatters a contig's alignments, so segments are bucketed per
 // contig name and chained only after the file is done.
-void collect(const char* bam, int min_mapq, hts_pos_t min_aln, int min_sv, std::vector<Jn>& jn,
-             std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin, hts_pos_t win, double max_mm,
-             double max_rep, std::vector<std::string>& qname) {
+// Every contig set was aligned to the same reference; different reference lists mean the tids do
+// not agree and every coordinate after this point is quietly wrong. Checked once per BAM.
+void same_refs(sam_hdr_t* a, sam_hdr_t* b) {
+    bool ok = sam_hdr_nref(a) == sam_hdr_nref(b);
+    for (int i = 0; ok && i < sam_hdr_nref(a); i++)
+        ok = std::strcmp(sam_hdr_tid2name(a, i), sam_hdr_tid2name(b, i)) == 0 &&
+             sam_hdr_tid2len(a, i) == sam_hdr_tid2len(b, i);
+    if (!ok) die("contig BAMs were aligned to different references");
+}
+
+// One BAM, appending to the shared junction and insertion lists. A contig id indexes `qname`, which
+// spans every line, and `qline` says which line each contig came from -- so one cluster can be
+// tallied per line without the clustering rule knowing lines exist.
+void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int min_sv,
+             std::vector<Jn>& jn, std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin,
+             hts_pos_t win, double max_mm, double max_rep, std::vector<std::string>& qname,
+             std::vector<uint8_t>& qline) {
     samFile* fp = sam_open(bam, "r");
     if (!fp) die("open bam");
-    *hdr = sam_hdr_read(fp);
-    if (!*hdr) die("read bam header");
+    sam_hdr_t* h = sam_hdr_read(fp);
+    if (!h) die("read bam header");
+    if (!*hdr) *hdr = h; else same_refs(*hdr, h);
     bam1_t* b = bam_init1();
     ankerl::unordered_dense::map<std::string, uint32_t> qid;
     std::vector<std::vector<Seg>> byq;
-    while (sam_read1(fp, *hdr, b) >= 0) {
+    const uint32_t base = (uint32_t)qname.size();
+    while (sam_read1(fp, h, b) >= 0) {
         if (!keep(b, min_mapq, min_aln, max_mm, st)) continue;
         const char* nm = bam_get_qname(b);
         auto it = qid.find(nm);
         if (it == qid.end()) {
-            it = qid.emplace(nm, (uint32_t)byq.size()).first; byq.emplace_back(); qname.emplace_back(nm);
+            it = qid.emplace(nm, (uint32_t)byq.size()).first; byq.emplace_back();
+            qname.emplace_back(nm); qline.push_back(line);
         }
-        Seg s{it->second, b->core.tid, b->core.pos, 0, 0, 0,
+        Seg s{base + it->second, b->core.tid, b->core.pos, 0, 0, 0,
               (uint8_t)((b->core.flag & BAM_FREVERSE) != 0), 1.0, 1.0};
         const size_t before = jn.size();
-        walk(b, it->second, min_sv, s, jn, ins, nmin, win, max_rep);
+        walk(b, base + it->second, min_sv, s, jn, ins, nmin, win, max_rep);
         st.cigar_del += jn.size() - before;
         byq[it->second].push_back(s);
         st.seg++;
     }
     bam_destroy1(b);
     sam_close(fp);
+    if (h != *hdr) sam_hdr_destroy(h);
     st.cigar_ins = ins.size();
+    // Two segments of one contig that RESUME THE REFERENCE where the previous one left off, with
+    // query bases stranded in between, are an insertion of those bases -- not two junctions.
+    //
+    // Most short insertions in a genome are not novel sequence; they are another copy of sequence the
+    // genome already has. minimap2 is free to place that copy at its source locus instead of writing
+    // it as a CIGAR insertion, and then the contig arrives as three segments whose OUTER two are
+    // adjacent in the reference. Chaining consecutive pairs turns that into two breakends pointing at
+    // the source locus, and the event is scored missed at its own coordinates while the contig
+    // contained it exactly. Skipping the middle segment recovers the insertion's own position and its
+    // length -- which is every query base between the two anchors, so a middle segment the MAPQ gate
+    // already dropped is handled by the same rule.
+    auto resumes = [&](const Seg& a, const Seg& c, hts_pos_t& pos) {
+        if (a.tid != c.tid || a.rev != c.rev) return false;
+        pos = a.rev ? a.rs + 1 : a.re;
+        return std::llabs((long long)(a.rev ? a.rs - c.re : c.rs - a.re)) < min_sv;
+    };
     for (auto& v : byq) {
         std::sort(v.begin(), v.end(), [](const Seg& x, const Seg& y) { return x.qs < y.qs; });
-        for (size_t i = 1; i < v.size(); i++) jn.push_back(chain(v[i - 1], v[i]));
         st.split += v.size() ? v.size() - 1 : 0;
+        size_t i = 1;
+        while (i < v.size()) {
+            hts_pos_t pos;
+            if (i + 1 < v.size() && resumes(v[i - 1], v[i + 1], pos) &&
+                v[i + 1].qs - v[i - 1].qe >= min_sv) {
+                ins.push_back({v[i - 1].tid, pos, v[i + 1].qs - v[i - 1].qe, v[i - 1].q,
+                               std::max(v[i - 1].rep_e, v[i + 1].rep_s)});
+                st.ins_split++;
+                i += 2;
+                continue;
+            }
+            if (resumes(v[i - 1], v[i], pos) && v[i].qs - v[i - 1].qe >= min_sv) {
+                ins.push_back({v[i - 1].tid, pos, v[i].qs - v[i - 1].qe, v[i - 1].q,
+                               std::max(v[i - 1].rep_e, v[i].rep_s)});
+                st.ins_split++;
+                i += 1;
+                continue;
+            }
+            jn.push_back(chain(v[i - 1], v[i]));
+            i += 1;
+        }
     }
 }
 
-struct Cl { Jn j; hts_pos_t p1, p2; uint32_t supp; double rep; };
+// `slot` indexes the per-line support arena, L entries per surviving cluster. The counts live
+// outside the struct for the same reason the graph's do: one contiguous block instead of a
+// heap allocation per cluster, and the struct stays a POD.
+struct Cl { Jn j; hts_pos_t p1, p2; uint32_t supp, slot; double rep; };
 
-uint32_t distinct(std::vector<uint32_t>& q) {
+// Distinct supporting contigs overall, and per line into `cnt`. Exactly the one sort and unique
+// the single-line caller has always run; the per-line tally walks the unique prefix afterwards, so
+// the returned total is the number that has always been in the SUPP field.
+uint32_t distinct(std::vector<uint32_t>& q, const std::vector<uint8_t>& qline, uint32_t* cnt, int L) {
     std::sort(q.begin(), q.end());
-    return (uint32_t)(std::unique(q.begin(), q.end()) - q.begin());
+    const size_t n = (size_t)(std::unique(q.begin(), q.end()) - q.begin());
+    for (int l = 0; l < L; l++) cnt[l] = 0;
+    for (size_t i = 0; i < n; i++) cnt[qline[q[i]]]++;
+    return (uint32_t)n;
+}
+
+uint32_t best_of(const uint32_t* cnt, int L) {
+    uint32_t b = 0;
+    for (int l = 0; l < L; l++) if (cnt[l] > b) b = cnt[l];
+    return b;
 }
 
 // Junctions within `tol` on BOTH sides, with the same contig pair and the same direction pair, are
 // one event. The cluster's position is the median, which cannot be dragged by a single ragged end.
-std::vector<Cl> cluster(std::vector<Jn>& jn, hts_pos_t tol, uint32_t min_supp) {
+std::vector<Cl> cluster(std::vector<Jn>& jn, const std::vector<uint8_t>& qline, hts_pos_t tol,
+                        uint32_t min_supp, int L, std::vector<uint32_t>& sup) {
     std::sort(jn.begin(), jn.end(), [](const Jn& a, const Jn& b) {
         return std::tie(a.c1, a.c2, a.d1, a.d2, a.p1, a.p2) < std::tie(b.c1, b.c2, b.d1, b.d2, b.p1, b.p2);
     });
     std::vector<Cl> out;
+    std::vector<uint32_t> cnt((size_t)L);
     for (size_t i = 0; i < jn.size();) {
         size_t k = i + 1;
         while (k < jn.size() && jn[k].c1 == jn[i].c1 && jn[k].c2 == jn[i].c2 && jn[k].d1 == jn[i].d1 &&
@@ -351,29 +452,41 @@ std::vector<Cl> cluster(std::vector<Jn>& jn, hts_pos_t tol, uint32_t min_supp) {
         for (size_t m = i; m < k; m++) {
             q.push_back(jn[m].q); a.push_back(jn[m].p1); c.push_back(jn[m].p2); rp.push_back(jn[m].rep);
         }
-        const uint32_t s = distinct(q);
+        const uint32_t s = distinct(q, qline, cnt.data(), L);
         std::sort(a.begin(), a.end()); std::sort(c.begin(), c.end()); std::sort(rp.begin(), rp.end());
-        if (s >= min_supp) out.push_back({jn[i], a[a.size() / 2], c[c.size() / 2], s, rp[rp.size() / 2]});
+        // Discovery is per line: five contigs from ONE line, not five spread over five lines. At
+        // L=1 the best line IS the total, so this is the floor the single-tumour caller has run.
+        if (best_of(cnt.data(), L) >= min_supp) {
+            out.push_back({jn[i], a[a.size() / 2], c[c.size() / 2], s,
+                           (uint32_t)(sup.size() / (size_t)L), rp[rp.size() / 2]});
+            sup.insert(sup.end(), cnt.begin(), cnt.end());
+        }
         i = k;
     }
     return out;
 }
 
-struct ClIns { Ins v; int32_t len; uint32_t supp; double rep; };
+struct ClIns { Ins v; int32_t len; uint32_t supp, slot; double rep; };
 
-std::vector<ClIns> cluster_ins(std::vector<Ins>& ins, hts_pos_t tol, uint32_t min_supp) {
+std::vector<ClIns> cluster_ins(std::vector<Ins>& ins, const std::vector<uint8_t>& qline, hts_pos_t tol,
+                               uint32_t min_supp, int L, std::vector<uint32_t>& sup) {
     std::sort(ins.begin(), ins.end(), [](const Ins& a, const Ins& b) {
         return std::tie(a.c, a.p) < std::tie(b.c, b.p);
     });
     std::vector<ClIns> out;
+    std::vector<uint32_t> cnt((size_t)L);
     for (size_t i = 0; i < ins.size();) {
         size_t k = i + 1;
         while (k < ins.size() && ins[k].c == ins[i].c && ins[k].p - ins[i].p <= tol) k++;
-        std::vector<uint32_t> q; std::vector<int32_t> L; std::vector<double> rp;
-        for (size_t m = i; m < k; m++) { q.push_back(ins[m].q); L.push_back(ins[m].len); rp.push_back(ins[m].rep); }
-        const uint32_t s = distinct(q);
-        std::sort(L.begin(), L.end()); std::sort(rp.begin(), rp.end());
-        if (s >= min_supp) out.push_back({ins[i], L[L.size() / 2], s, rp[rp.size() / 2]});
+        std::vector<uint32_t> q; std::vector<int32_t> Ln; std::vector<double> rp;
+        for (size_t m = i; m < k; m++) { q.push_back(ins[m].q); Ln.push_back(ins[m].len); rp.push_back(ins[m].rep); }
+        const uint32_t s = distinct(q, qline, cnt.data(), L);
+        std::sort(Ln.begin(), Ln.end()); std::sort(rp.begin(), rp.end());
+        if (best_of(cnt.data(), L) >= min_supp) {
+            out.push_back({ins[i], Ln[Ln.size() / 2], s, (uint32_t)(sup.size() / (size_t)L),
+                           rp[rp.size() / 2]});
+            sup.insert(sup.end(), cnt.begin(), cnt.end());
+        }
         i = k;
     }
     return out;
@@ -393,9 +506,25 @@ std::string bnd_alt(const Cl& c, sam_hdr_t* h) {
     return c.j.d1 > 0 ? "N" + br : br + "N";
 }
 
+// One GT:DV field per line, in sheet order. A line is present when it clears the assignment floor;
+// with one line that floor can never bite, because discovery already demanded more.
+void fmt_cols(FILE* f, const std::vector<uint32_t>& sup, uint32_t slot, int L, uint32_t assign, int only) {
+    for (int l = 0; l < L; l++) {
+        if (only >= 0 && l != only) continue;
+        const uint32_t d = sup[(size_t)slot * (size_t)L + (size_t)l];
+        std::fprintf(f, "\t%s:%u", d >= assign ? "0/1" : "0/0", d);
+    }
+    std::fputc('\n', f);
+}
+
+// `only` < 0 writes every line as its own sample column; `only` >= 0 writes that line's projection,
+// keeping only the records it carries. Written to <path>.tmp and renamed, so a killed run leaves
+// either the previous VCF or nothing -- never half of one.
 void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const std::vector<ClIns>& ci,
-               const std::vector<std::string>& qname) {
-    FILE* f = std::fopen(path, "w");
+               const std::vector<std::string>& qname, const std::vector<Ctg>& sets,
+               const std::vector<uint32_t>& sup, int L, uint32_t assign, int only) {
+    const std::string tmp = std::string(path) + ".tmp";
+    FILE* f = std::fopen(tmp.c_str(), "w");
     if (!f) die("open out.vcf");
     std::fprintf(f, "##fileformat=VCFv4.2\n##source=snape call\n");
     for (int i = 0; i < sam_hdr_nref(h); i++)
@@ -408,33 +537,44 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
                     "##INFO=<ID=REP,Number=1,Type=Float,Description=\"Tandem-repeat fraction of the anchor\">\n"
                     "##INFO=<ID=CTG,Number=1,Type=String,Description=\"One junction contig supporting this call; `snape pick` reads the normal at ITS anchors\">\n"
                     "##ALT=<ID=DEL,Description=\"Deletion\">\n##ALT=<ID=DUP,Description=\"Duplication\">\n"
-                    "##ALT=<ID=INV,Description=\"Inversion\">\n"
-                    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tt\n");
+                    "##ALT=<ID=INV,Description=\"Inversion\">\n##ALT=<ID=INS,Description=\"Insertion\">\n"
+                    "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n"
+                    "##FORMAT=<ID=DV,Number=1,Type=Integer,Description=\"Supporting contigs from this line\">\n");
+    std::fprintf(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
+    for (int l = 0; l < L; l++) if (only < 0 || l == only) std::fprintf(f, "\t%s", sets[(size_t)l].name.c_str());
+    std::fputc('\n', f);
     int n = 0;
     for (const Cl& c : cl) {
+        if (only >= 0 && sup[(size_t)c.slot * (size_t)L + (size_t)only] < assign) { n++; continue; }
         const char* t = svtype(c);
         const std::string alt = c.j.c1 == c.j.c2 ? "<" + std::string(t) + ">" : bnd_alt(c, h);
         std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_%s%d\tN\t%s\t.\tPASS\tSVTYPE=%s;", sam_hdr_tid2name(h, c.j.c1),
                      c.p1, t, n++, alt.c_str(), t);
         if (c.j.c1 == c.j.c2)
             std::fprintf(f, "SVLEN=%" PRIhts_pos ";END=%" PRIhts_pos ";", c.p2 - c.p1, c.p2);
-        std::fprintf(f, "STRANDS=%c%c;SUPP=%u;REP=%.3f;CTG=%s\tGT:DV\t0/1:%u\n",
+        std::fprintf(f, "STRANDS=%c%c;SUPP=%u;REP=%.3f;CTG=%s\tGT:DV",
                      c.j.d1 > 0 ? '+' : '-', c.j.d2 > 0 ? '+' : '-', c.supp, c.rep,
-                     qname[c.j.q].c_str(), c.supp);
+                     qname[c.j.q].c_str());
+        fmt_cols(f, sup, c.slot, L, assign, only);
     }
-    for (const ClIns& c : ci)
-        std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_INS%d\tN\t<INS>\t.\tPASS\tSVTYPE=INS;SVLEN=%d;SUPP=%u;CTG=%s\tGT:DV\t0/1:%u\n",
-                     sam_hdr_tid2name(h, c.v.c), c.v.p, n++, c.len, c.supp, qname[c.v.q].c_str(), c.supp);
+    for (const ClIns& c : ci) {
+        if (only >= 0 && sup[(size_t)c.slot * (size_t)L + (size_t)only] < assign) { n++; continue; }
+        std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_INS%d\tN\t<INS>\t.\tPASS\tSVTYPE=INS;SVLEN=%d;SUPP=%u;CTG=%s\tGT:DV",
+                     sam_hdr_tid2name(h, c.v.c), c.v.p, n++, c.len, c.supp, qname[c.v.q].c_str());
+        fmt_cols(f, sup, c.slot, L, assign, only);
+    }
     std::fclose(f);
+    if (std::rename(tmp.c_str(), path) != 0) die("rename out.vcf");
 }
 
 }  // namespace
 
 int cmd_call(int argc, char** argv) {
     if (argc < 4) {
-        std::fprintf(stderr, "usage: snape call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] "
-                             "[min_sv=50] [cluster=50] [min_supp=5] [shred_n=6] [shred_win=300] [max_mm=0.01] "
-                             "[shred_rep=0.40] [anchor_rep=0.50] [normal_dirty=0.25]\n");
+        std::fprintf(stderr, "usage: snape call <ctg.bam|name=bam,name=bam,...> <normal.bam|-> <out.vcf> "
+                             "[min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5] [shred_n=6] "
+                             "[shred_win=300] [max_mm=0.01] [shred_rep=0.40] [anchor_rep=0.50] "
+                             "[normal_dirty=0.25] [supp_assign=3]\n");
         return 2;
     }
     const int min_mapq   = argc >  4 ? std::atoi(argv[4])  : 10;
@@ -455,15 +595,24 @@ int cmd_call(int argc, char** argv) {
     // to win back, so every step down is pure loss there and pure gain on real reads.
     const double max_rep   = argc > 13 ? std::atof(argv[13]) : 0.50;
     const double dirty_f   = argc > 14 ? std::atof(argv[14]) : 0.25;
+    // Discovery needs `min_supp` contigs from ONE line; assignment then calls the event present in
+    // every line that reaches this lower floor. With one line assignment cannot bite -- discovery
+    // already demanded more -- so the one-line caller genotypes exactly as it always has.
+    const uint32_t assign = argc > 15 ? (uint32_t)std::atoi(argv[15]) : 3;
 
+    const std::vector<Ctg> sets = parse_ctg(argv[1]);
+    const int L = (int)sets.size();
     std::vector<Jn> jn; std::vector<Ins> ins; sam_hdr_t* hdr = nullptr; Stats st;
-    std::vector<std::string> qname;
-    collect(argv[1], min_mapq, min_aln, min_sv, jn, ins, &hdr, st, shred_n, shred_win, max_mm, shred_rep, qname);
+    std::vector<std::string> qname; std::vector<uint8_t> qline;
+    for (int l = 0; l < L; l++)
+        collect(sets[(size_t)l].bam.c_str(), (uint8_t)l, min_mapq, min_aln, min_sv, jn, ins, &hdr, st,
+                shred_n, shred_win, max_mm, shred_rep, qname, qline);
     // A same-contig junction shorter than the SV floor is a local alignment artefact, not an event.
     jn.erase(std::remove_if(jn.begin(), jn.end(), [&](const Jn& j) {
         return j.c1 == j.c2 && j.p2 - j.p1 < min_sv; }), jn.end());
-    std::vector<Cl> cl = cluster(jn, tol, min_supp);
-    std::vector<ClIns> ci = cluster_ins(ins, tol, min_supp);
+    std::vector<uint32_t> sup;                       // L counts per surviving cluster, by Cl::slot
+    std::vector<Cl> cl = cluster(jn, qline, tol, min_supp, L, sup);
+    std::vector<ClIns> ci = cluster_ins(ins, qline, tol, min_supp, L, sup);
 
     // The normal, at the reference locus: the one question the graph could not ask.
     // A breakpoint whose anchor is a tandem repeat is where an aligner puts an indel that is not an
@@ -493,15 +642,23 @@ int cmd_call(int argc, char** argv) {
         std::fprintf(stderr, "[call] normalde de bulundugu icin elenen: %llu (%zu junction + %zu insertion kaldi)\n",
                      (unsigned long long)st.germ, cl.size(), ci.size());
     }
-    write_vcf(argv[3], hdr, cl, ci, qname);
+    write_vcf(argv[3], hdr, cl, ci, qname, sets, sup, L, assign, -1);
+    // Per-line projections beside it: the same clusters and the same thresholds, one column each.
+    std::string base(argv[3]);
+    if (base.size() > 4 && base.compare(base.size() - 4, 4, ".vcf") == 0) base.resize(base.size() - 4);
+    for (int l = 0; l < L; l++)
+        write_vcf((base + "." + sets[(size_t)l].name + ".vcf").c_str(), hdr, cl, ci, qname, sets,
+                  sup, L, assign, l);
 
     std::fprintf(stderr, "[call] kayit %llu | atlanan: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu, mismatch>%.0f%% %llu\n",
                  (unsigned long long)st.rec, (unsigned long long)st.unmapped, (unsigned long long)st.secondary,
                  min_mapq, (unsigned long long)st.lowq, (long long)min_aln, (unsigned long long)st.shortaln,
                  100*max_mm, (unsigned long long)st.highmm);
-    std::fprintf(stderr, "[call] segment %llu -> split %llu + CIGAR DEL %llu | INS %llu\n",
+    std::fprintf(stderr, "[call] segment %llu -> split %llu + CIGAR DEL %llu | INS %llu "
+                 "(bunun %llu tanesi referansi kaldigi yerden suren iki segment arasindan)\n",
                  (unsigned long long)st.seg, (unsigned long long)st.split,
-                 (unsigned long long)st.cigar_del, (unsigned long long)st.cigar_ins);
+                 (unsigned long long)st.cigar_del, (unsigned long long)st.cigar_ins,
+                 (unsigned long long)st.ins_split);
     std::fprintf(stderr, "[call] aday %zu junction + %zu insertion -> supp>=%u: %zu + %zu -> %s\n",
                  jn.size(), ins.size(), min_supp, cl.size(), ci.size(), argv[3]);
     sam_hdr_destroy(hdr);

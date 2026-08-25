@@ -121,7 +121,7 @@ size_t anchor_cores(const char* fa, const ankerl::unordered_dense::set<std::stri
 
 int cmd_pick(int argc, char** argv) {
     if (argc < 5) {
-        std::fprintf(stderr, "usage: snape pick <ctg.fa> <calls.vcf> <normal reads> <out.fastq> "
+        std::fprintf(stderr, "usage: snape pick <ctg.fa[,ctg.fa...]> <calls.vcf> <normal reads> <out.fastq> "
                              "[threads=16] [min_shared=5]\n");
         return 2;
     }
@@ -136,13 +136,20 @@ int cmd_pick(int argc, char** argv) {
 
     const auto want = wanted_contigs(vcf.c_str());
     if (want.empty()) { std::fprintf(stderr, "[pick] adayda CTG= yok, secilecek bir sey yok\n"); return 1; }
+    // One FASTA per tumour line, comma-separated: the anchors are a union, because a candidate can
+    // be reached by contigs from more than one line and the normal reads are picked once for all.
     ankerl::unordered_dense::set<uint64_t> sigs;
-    const size_t nctg = anchor_cores(fa.c_str(), want, sigs);
+    size_t nctg = 0;
+    for (size_t i = 0; i <= fa.size();) {
+        const size_t c = std::min(fa.find(',', i), fa.size());
+        nctg += anchor_cores(fa.substr(i, c - i).c_str(), want, sigs);
+        i = c + 1;
+    }
     std::fprintf(stderr, "[pick] %zu aday contig -> %zu contig bulundu -> %zu cipa cekirdegi\n",
                  want.size(), nctg, sigs.size());
     if (sigs.empty()) die("no anchor cores");
 
-    Reads in = reads_open(reads);
+    Reads in = reads_open(reads, "");
     FILE* fo = std::fopen((out + ".tmp").c_str(), "w"); if (!fo) die("open out");
     std::mutex out_mu;
     std::atomic<uint64_t> seen{0}, kept{0};
