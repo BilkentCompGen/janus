@@ -38,3 +38,6 @@ paper/*.synctex.gz
 /asm2asm
 /readalign
 /consensus
+/asm_somatic
+/castle_delly
+/tmp
