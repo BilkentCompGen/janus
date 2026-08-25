@@ -58,8 +58,12 @@ constexpr size_t BATCH = 2000;
 struct Chunks {
     std::vector<uint64_t> carry;           // per chunk: bit l set iff tumour line l carries a core of it
     int lines = 0;
-    std::vector<uint64_t> sig;             // sorted somatic signatures
-    std::vector<uint32_t> chunk;           // parallel: which component each belongs to
+    // signature -> component. This was a sig-sorted array plus a parallel chunk array, looked up
+    // with std::lower_bound: ~19 dependent, cache-missing steps per lookup, and there are ~171
+    // lookups per read because every kept core of every read is asked. Measured on the 21-sample
+    // chunk set (454,513 signatures) against real reads: lower_bound 1.47 ns/base, the hash 0.46,
+    // against extract()'s 9.41 -- 16% of the parse against 5%, so 9.3% off the stage. Same hits.
+    ankerl::unordered_dense::map<uint64_t, uint32_t> of;
     size_t n = 0;                          // number of components
 };
 
@@ -209,20 +213,18 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
     c.carry.assign(nk, 0);
     for (uint64_t i = 0; i < K; i++) {
         if (!som[i] || keep[cid[i]] == UINT32_MAX) continue;
-        c.sig.push_back(sig[i]); c.chunk.push_back(keep[cid[i]]);
+        c.of.emplace(sig[i], keep[cid[i]]);
         c.carry[keep[cid[i]]] = carry[cid[i]];
     }
-    nsom = c.sig.size();
+    nsom = c.of.size();
     c.n = nk;
     c.lines = (int)L;
-    // sig[] came out of graph.bin already sorted, so the parallel arrays are sorted with it
     return c;
 }
 
 int32_t chunk_of(const Chunks& c, uint64_t s) {
-    const auto it = std::lower_bound(c.sig.begin(), c.sig.end(), s);
-    if (it == c.sig.end() || *it != s) return -1;
-    return (int32_t)c.chunk[(size_t)(it - c.sig.begin())];
+    const auto it = c.of.find(s);
+    return it == c.of.end() ? -1 : (int32_t)it->second;
 }
 
 // ---- reads ----
