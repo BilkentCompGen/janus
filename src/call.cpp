@@ -574,7 +574,7 @@ int cmd_call(int argc, char** argv) {
         std::fprintf(stderr, "usage: snape call <ctg.bam|name=bam,name=bam,...> <normal.bam|-> <out.vcf> "
                              "[min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5] [shred_n=6] "
                              "[shred_win=300] [max_mm=0.01] [shred_rep=0.40] [anchor_rep=0.50] "
-                             "[normal_dirty=0.25] [supp_assign=3]\n");
+                             "[normal_dirty=0.25] [supp_assign=2]\n");
         return 2;
     }
     const int min_mapq   = argc >  4 ? std::atoi(argv[4])  : 10;
@@ -596,9 +596,15 @@ int cmd_call(int argc, char** argv) {
     const double max_rep   = argc > 13 ? std::atof(argv[13]) : 0.50;
     const double dirty_f   = argc > 14 ? std::atof(argv[14]) : 0.25;
     // Discovery needs `min_supp` contigs from ONE line; assignment then calls the event present in
-    // every line that reaches this lower floor. With one line assignment cannot bite -- discovery
-    // already demanded more -- so the one-line caller genotypes exactly as it always has.
-    const uint32_t assign = argc > 15 ? (uint32_t)std::atoi(argv[15]) : 3;
+    // every line that reaches this lower floor. The floor is 2 and not 3 because 3 was measured to
+    // drop real carriers: on the 20-line simulation, of the 300 calls whose support pattern was one
+    // line short of a true clade, 148 had that line sitting at exactly DV=2 -- one read below the
+    // bar -- while across 95,917 true NON-carrier (line, call) pairs only 60 reached DV>=2. Moving
+    // the floor to 2 took internal-branch recall from 0.91 to 0.97 and root recall from 0.55 to
+    // 0.72, and cut spurious splits from 316 to 208, with the call set unchanged. With one line
+    // assignment cannot bite -- discovery already demanded more -- so the one-line caller genotypes
+    // exactly as it always has, and no single-tumour result moves.
+    const uint32_t assign = argc > 15 ? (uint32_t)std::atoi(argv[15]) : 2;
 
     const std::vector<Ctg> sets = parse_ctg(argv[1]);
     const int L = (int)sets.size();

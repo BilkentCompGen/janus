@@ -42,7 +42,7 @@ static void usage() {
     std::fprintf(stderr,
         "usage:\n"
         "  snape run       --samples <sheet.tsv> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10]\n"
-        "                  [--min-mult 3] [--supp-discover 5] [--supp-assign 3]\n"
+        "                  [--min-mult 3] [--supp-discover 5] [--supp-assign 2]\n"
         "  snape graph     --samples <sheet.tsv> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
         "\n"
         "  the sheet is a three-column TSV, one row per read set:\n"
@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
     if (cmd == "pack")      return cmd_pack(argc - 1, argv + 1);
     if (cmd == "dump")      return cmd_dump(argc - 1, argv + 1);
 
-    int level = 5, margin = 10, min_mult = 3, threads = 16, supp_discover = 5, supp_assign = 3;
+    int level = 5, margin = 10, min_mult = 3, threads = 16, supp_discover = 5, supp_assign = 2;
     std::string sheet;
     std::vector<std::string> pos;
     for (int i = 2; i < argc; i++) {
