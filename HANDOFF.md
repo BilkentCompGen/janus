@@ -22,18 +22,21 @@ Her figürün altında kaynak notu var: hangi dosyadan, hangi yöntemle, ölçü
 
 ## Başlıca sayılar
 
-**Deney 2 — CASTLE.** `minda_4_2_ws` CASTLE'ın kendi dosyası ve **"without Severus"** demek
-(iki `minda.log`'un `cmd:` satırından doğrulandı).
+**Deney 2 — CASTLE.** İki gerçek küme (`minda_4_2` 11 çağırıcı, `minda_4_2_ws` 9 çağırıcı, ikisi de
+CASTLE'ın kendi dosyası), her biri snape konsensüs dışında ve içinde.
 
 | konfig | hcc1954 | hcc1937 |
 |---|---|---|
 | A `minda_4_2`, snape dışarıda | 3/12, F1 0.8704 | 4/12, F1 0.7649 |
-| B `minda_4_2_ws`, snape dışarıda | **1/12**, 0.8616 | 4/12, 0.7740 |
+| B `minda_4_2_ws`, snape dışarıda | 1/12, 0.8616 *(2. sıra 0.8607 — berabere)* | 4/12, 0.7740 |
 | C `minda_4_2` + snape üye | **1/12**, 0.8851 | 4/12, 0.7819 |
 | D `_ws` + snape üye | **1/10**, 0.8874 | 2/10, 0.8061 |
 
-hcc1954'te Severus'un oyları gerçek kümeden çıkınca snape 3.'lükten 1.'liğe geçiyor.
-**hcc1937'de bu olmuyor — snape orada 4. sırada.** İki çift aynı yönde değil.
+Okunacak şey A/B ile C/D arasındaki fark: snape oylamaya katılmadığında katıldığındakinden düşük
+skorluyor (hcc1954'te 0.017–0.026, hcc1937'de 0.017–0.032). Rakiplerin hepsi A/B'de bu avantajı
+taşıyor, snape hiçbirinde taşımıyor.
+
+**İki çift aynı yönde değil:** hcc1954'te snape üst sırada, hcc1937'de dört koşulun üçünde 4.
 
 **Deney 3 — filogeni.** `greedy-split` gerçek topolojiyi **birebir** kuruyor (RF = 0, kapsam ve
 kesinlik 1.000). Klad oranı %88.0 (null %70.7); bilgilendirici örüntülerde %59.6 (null **%1.0**).
@@ -59,6 +62,8 @@ Graf 4–32 arasında %76–85 paralel verim koruyor. **1→2 çekirdek hiçbir 
    CASTLE'da ~0.015. Sebep konsensüsün küçük olması (7–8 çağırıcı, ≥3 oy).
 3. hcc1937'nin sonucu hcc1954'ünkiyle aynı yönde değil. Paper'da "comparable" iddiası bu iki
    çiftin ikisini de göstermeli.
+4. hcc1954/B'de snape 1. sırada ama 2. sıradan **0.0009** farkla — sıra yazılırken marj da
+   yazılmalı, yoksa yanıltıcı.
 
 ## Ne denendi ve bırakıldı
 
