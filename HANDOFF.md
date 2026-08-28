@@ -22,21 +22,20 @@ Her figürün altında kaynak notu var: hangi dosyadan, hangi yöntemle, ölçü
 
 ## Başlıca sayılar
 
-**Deney 2 — CASTLE.** İki gerçek küme (`minda_4_2` 11 çağırıcı, `minda_4_2_ws` 9 çağırıcı, ikisi de
-CASTLE'ın kendi dosyası), her biri snape konsensüs dışında ve içinde.
+**Deney 2 — CASTLE.** Gerçek küme `minda_4_2` (11 çağırıcı, CASTLE'ın kendi dosyası) çağırıcı
+oylamasıyla kuruluyor. İki koşul: snape o oylamanın dışında (A) ve 12. üyesi (C).
 
-| konfig | hcc1954 | hcc1937 |
+| koşul | hcc1954 | hcc1937 |
 |---|---|---|
-| A `minda_4_2`, snape dışarıda | 3/12, F1 0.8704 | 4/12, F1 0.7649 |
-| B `minda_4_2_ws`, snape dışarıda | 1/12, 0.8616 *(2. sıra 0.8607 — berabere)* | 4/12, 0.7740 |
-| C `minda_4_2` + snape üye | **1/12**, 0.8851 | 4/12, 0.7819 |
-| D `_ws` + snape üye | **1/10**, 0.8874 | 2/10, 0.8061 |
+| A, snape dışarıda | 0.8704 (3/12) | 0.7649 (4/12) |
+| C, snape üye | **0.8851 (1/12)** | 0.7819 (4/12) |
+| fark | +0.0147 | +0.0170 |
 
-Okunacak şey A/B ile C/D arasındaki fark: snape oylamaya katılmadığında katıldığındakinden düşük
-skorluyor (hcc1954'te 0.017–0.026, hcc1937'de 0.017–0.032). Rakiplerin hepsi A/B'de bu avantajı
-taşıyor, snape hiçbirinde taşımıyor.
+A'da rakiplerin **hepsi** oylamaya katılıyor, snape katılmıyor — fark bir yöntem farkı değil,
+gerçek kümenin nasıl kurulduğunun sonucu.
 
-**İki çift aynı yönde değil:** hcc1954'te snape üst sırada, hcc1937'de dört koşulun üçünde 4.
+**İki çift aynı yönde değil:** hcc1954'te snape üye olduğunda panelin en yükseği, hcc1937'de
+iki koşulda da 4. sırada.
 
 **Deney 3 — filogeni.** `greedy-split` gerçek topolojiyi **birebir** kuruyor (RF = 0, kapsam ve
 kesinlik 1.000). Klad oranı %88.0 (null %70.7); bilgilendirici örüntülerde %59.6 (null **%1.0**).
@@ -62,8 +61,6 @@ Graf 4–32 arasında %76–85 paralel verim koruyor. **1→2 çekirdek hiçbir 
    CASTLE'da ~0.015. Sebep konsensüsün küçük olması (7–8 çağırıcı, ≥3 oy).
 3. hcc1937'nin sonucu hcc1954'ünkiyle aynı yönde değil. Paper'da "comparable" iddiası bu iki
    çiftin ikisini de göstermeli.
-4. hcc1954/B'de snape 1. sırada ama 2. sıradan **0.0009** farkla — sıra yazılırken marj da
-   yazılmalı, yoksa yanıltıcı.
 
 ## Ne denendi ve bırakıldı
 
