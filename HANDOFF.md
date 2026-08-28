@@ -39,7 +39,7 @@ hcc1954'te Severus'un oyları gerçek kümeden çıkınca snape 3.'lükten 1.'li
 kesinlik 1.000). Klad oranı %88.0 (null %70.7); bilgilendirici örüntülerde %59.6 (null **%1.0**).
 39/39 klad tanıklandı. 17 kladın 13'ü %100 bootstrap.
 
-**Deney 4 — süre.** Ortak graf 21 örnek **1.93 sa**; ikili ×20 3.19 sa (1.65×);
+**Deney 4 — süre.** (C kolu **ölçeklendi**, 21 genom gerçekten hizalanmadı.) Ortak graf 21 örnek **1.93 sa**; ikili ×20 3.19 sa (1.65×);
 21×minimap2 + 20×severus 13.08 sa (**6.76×**); +sniffles2 9.83 sa (5.08×); +nanomonsv 21.11 sa.
 
 **Deney 5.** Ortak graf 20 hatta ikiliden %10.7 daha çok çağrı (+2.641), kaybettiği 367.

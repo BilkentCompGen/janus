@@ -44,6 +44,30 @@ kısmını eliyor, dolayısıyla graf sonrası aşamalar tam koşudakinden çok 
 Ölçülen şey **ölçeklenmenin şekli**: her aşamanın çekirdek sayısıyla nasıl hızlandığı ve
 belleğin çekirdekle nasıl değiştiği. Paper'a girerse bu etiketle girmeli.
 
-## Sonuçlar
+## Sonuçlar (5 nokta; t=1 koşuyor)
 
-`results/exp1_sweep.tsv` ve `figs/exp1_core_sweep.{pdf,png}` — koşu bittikçe dolduruluyor.
+| çekirdek | toplam | graf | graf paralelliği | graf verimi | tepe RSS |
+|---|---|---|---|---|---|
+| 2 | 35.5 dk | 11.3 dk | 1.04 | %52 | 15.8 GB |
+| 4 | 16.5 dk | 4.0 dk | 3.02 | %76 | 18.0 GB |
+| 8 | 6.7 dk | 1.9 dk | 6.76 | %85 | 18.4 GB |
+| 16 | 4.0 dk | 1.0 dk | 13.56 | **%85** | 20.5 GB |
+| 32 | 3.6 dk | 0.8 dk | 25.13 | %79 | 24.8 GB |
+
+İki okunabilir şey var:
+
+1. **Graf aşaması 4'ten 32 çekirdeğe kadar %76–85 paralel verim koruyor.** 2 çekirdekte %52'ye
+   düşüyor: girdi örnek başına parçalanıyor (1 normal + 1 tümör = 2 parça), yani 2 çekirdekte
+   paralellik ölçülen 1.04'te takılıyor — iki parça birbirini bekliyor. Bu, altörnekleme
+   distorsiyonundan en az etkilenen ölçüm — graf aşaması bütün okumaları işliyor, kapsam düşük
+   olsa da iş gerçek.
+2. **Tepe RSS çekirdek sayısıyla büyüyor**: 18.0 → 24.8 GB (4 → 32). Bellek bütçesi olan bir
+   makinede çekirdek sayısı ücretsiz değil.
+
+Toplam süre 4→32'de yalnız 4.6× hızlanıyor (graf 5.0×) çünkü minimap2'nin indeks yükleme gibi
+sabit maliyetleri ölçeklenmiyor; altörneklenmiş girdide bu sabit pay orantısız büyük.
+
+**Düzeltme:** snape'in log'a yazdığı `eff` yüzdesi sabit 32 çekirdeğe bölünüyor, yani
+"makinenin ne kadarı kullanıldı" demek, çekirdek başına verim değil. Ham haliyle 4 çekirdekte
+%9, 32'de %79 görünüyordu — verimin çekirdekle artması imkânsız olduğu için yakalandı.
+Tabloda gerçek verim `(CPU/duvar)/çekirdek` olarak hesaplandı.
