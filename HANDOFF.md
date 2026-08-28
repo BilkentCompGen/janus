@@ -45,6 +45,11 @@ kesinlik 1.000). Klad oranı %88.0 (null %70.7); bilgilendirici örüntülerde %
 **Deney 5.** Ortak graf 20 hatta ikiliden %10.7 daha çok çağrı (+2.641), kaybettiği 367.
 Konsensüste snape dışarıda 0.773–0.820 (3/8), içeride 0.900–0.928 (6/7 yaprakta 1/8).
 
+**Deney 1 (altörneklenmiş).** Uçtan uca hızlanma 1→32 çekirdek **10.2×**, graf aşamasında 14.4×.
+Graf 4–32 arasında %76–85 paralel verim koruyor. **1→2 çekirdek hiçbir şey kazandırmıyor**
+(36.6 → 35.5 dk): girdi örnek başına parçalanıyor, 2 parça birbirini bekliyor. Tepe RSS
+çekirdekle büyüyor: 15.7 → 24.8 GB.
+
 ## Sabah yapılması gerekenler
 
 1. **`git push --force origin changes`** — yerel `.git` temizlendi (141 GB → 7.6 MB) ama uzak hâlâ
@@ -57,9 +62,10 @@ Konsensüste snape dışarıda 0.773–0.820 (3/8), içeride 0.900–0.928 (6/7 
 
 ## Ne denendi ve bırakıldı
 
-- **Deney 1 tam ölçekte**: disk %91 dolu (protokol eşiği %85), CASTLE'ın normal FASTQ'su yok,
-  6 çekirdek ayarında tam koşu ~10+ saat. Altörneklenmiş sürüm koşuluyor (600k okuma/örnek,
-  ~3× kapsam) ve **öyle etiketlenecek** — mutlak RAM'i tam ölçekte vermez.
+- **Deney 1 tam ölçekte**: disk %93 dolu (protokol eşiği %85), CASTLE'ın normal FASTQ'su yok,
+  6 çekirdek ayarında tam koşu ~10+ saat. Altörneklenmiş sürüm **koşuldu ve bitti** (600k
+  okuma/örnek, ~3× kapsam, 06:14→07:57), altı noktanın hepsi elde; mutlak RAM'i tam ölçekte
+  vermez, ölçeklenmenin şeklini verir.
 - **h2009**: tümör `.svb`'si diskte yok (`t.svb.tmp` yarım kalmış). **h1437**: koşulabilirdi,
   zaman yetmedi.
 - **delly** deney 4'ten çıkarıldı: koşuları zaman boşluğuyla ayrılamıyor, ölçüm güvenilmez.

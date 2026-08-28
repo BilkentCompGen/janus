@@ -44,10 +44,11 @@ kısmını eliyor, dolayısıyla graf sonrası aşamalar tam koşudakinden çok 
 Ölçülen şey **ölçeklenmenin şekli**: her aşamanın çekirdek sayısıyla nasıl hızlandığı ve
 belleğin çekirdekle nasıl değiştiği. Paper'a girerse bu etiketle girmeli.
 
-## Sonuçlar (5 nokta; t=1 koşuyor)
+## Sonuçlar (6 nokta, tamamlandı 07:57)
 
 | çekirdek | toplam | graf | graf paralelliği | graf verimi | tepe RSS |
 |---|---|---|---|---|---|
+| 1 | 36.6 dk | 11.5 dk | 1.02 | — | 15.7 GB |
 | 2 | 35.5 dk | 11.3 dk | 1.04 | %52 | 15.8 GB |
 | 4 | 16.5 dk | 4.0 dk | 3.02 | %76 | 18.0 GB |
 | 8 | 6.7 dk | 1.9 dk | 6.76 | %85 | 18.4 GB |
@@ -64,8 +65,13 @@ belleğin çekirdekle nasıl değiştiği. Paper'a girerse bu etiketle girmeli.
 2. **Tepe RSS çekirdek sayısıyla büyüyor**: 18.0 → 24.8 GB (4 → 32). Bellek bütçesi olan bir
    makinede çekirdek sayısı ücretsiz değil.
 
-Toplam süre 4→32'de yalnız 4.6× hızlanıyor (graf 5.0×) çünkü minimap2'nin indeks yükleme gibi
-sabit maliyetleri ölçeklenmiyor; altörneklenmiş girdide bu sabit pay orantısız büyük.
+3. **1'den 2 çekirdeğe geçmek hiçbir şey kazandırmıyor**: 36.6 → 35.5 dk, paralellik 1.02 → 1.04.
+   Girdi örnek başına parçalanıyor ve 1 normal + 1 tümör = 2 parça; iki parça birbirini beklediği
+   için ikinci çekirdek boşta kalıyor. Kazanç 4 çekirdekten itibaren başlıyor.
+
+Uçtan uca hızlanma 1→32 arasında **10.2×** (graf aşamasında 14.4×). Aradaki fark minimap2'nin
+indeks yükleme gibi sabit maliyetlerinden; altörneklenmiş girdide bu sabit pay orantısız büyük,
+yani tam ölçekte toplam hızlanma buradakinden **daha iyi** olur.
 
 **Düzeltme:** snape'in log'a yazdığı `eff` yüzdesi sabit 32 çekirdeğe bölünüyor, yani
 "makinenin ne kadarı kullanıldı" demek, çekirdek başına verim değil. Ham haliyle 4 çekirdekte

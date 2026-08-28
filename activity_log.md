@@ -31,3 +31,13 @@ Kural: her satır `date '+%Y-%m-%d %H:%M:%S'` çıktısıyla başlar. Boşluklar
 2026-08-28 06:23:02  KISIT DENETIMI: 03:55 sonrasi /home/yuio/snape disinda benim yazdigim/sildigim dosya YOK. Denetimde cikan uc sey bana ait degil: (1) /home/yuio/payloadtest-venv ve /home/yuio/tmp/bioritma_insights_service -- baska bir claude oturumu (kutuda 3 claude prosesi daha kosuyor); (2) /home/yuio/.claude.json ve .bash_history -- harness/kabuk; (3) /home/yuio/trash dizini 04:00:51 mtime ile BOS -- benim oraya son yazmam kisittan ONCEYDI (paper/old, symlinkler, eski main.tex), icerigini ben silmedim, 03:57 sonrasi hicbir komutum trash a dokunmadi.
 2026-08-28 06:47:23  deney 1 ara sonuc (4 nokta): graf asamasi paralel verimi %76-85 (4-32 cekirdek), tepe RSS cekirdekle buyuyor 18.0->24.8 GB, toplam 16.5->3.6 dk. DUZELTME: snape'in yazdigi eff sabit 32'ye boluyor (makine kullanimi), cekirdek basina verim degil; gercek verim (CPU/wall)/threads olarak yeniden hesaplandi.
 2026-08-28 07:21:54  deney 1: 5 nokta hazir (2,4,8,16,32). t=2 toplam 35.5 dk graf verimi %52 (2 parca birbirini bekliyor); 32 cekirdekte toplam 3.6 dk. t=1 kosuyor.
+2026-08-28 07:59:04  deney 1 TAMAM (6 nokta, 06:14->07:57): 1->32 cekirdek 10.2x hizlanma (graf 14.4x); graf verimi 4-32 arasi %76-85; 1->2 cekirdek kazanc YOK (36.6->35.5 dk, 2 parca birbirini bekliyor); tepe RSS 15.7->24.8 GB.
+
+## Kapanış
+
+2026-08-28 07:58 — beş deneyin hepsi bitti. Teslim listesi doğrulandı:
+PLAN.md, activity_log.md, file-removals.txt, benchmarks_gaps.md, HANDOFF.md,
+experiments/ (5 dosya), review_rounds/ (2 tur), figs/ (7 PDF + 7 PNG),
+results/ (özet TSV/JSON + gece_raporu.html).
+
+Açık kalan tek iş kullanıcının onayını gerektiriyor: `git push --force origin changes`.
