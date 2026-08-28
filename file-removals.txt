@@ -1,0 +1,25 @@
+==============================================================================
+2026-08-28 04:03:53  git cop paketlerinin silinmesi
+NEDEN: 25 Agustos'ta yarida kalmis git gc/repack islerinden kalan, hicbir ref
+       tarafindan erisilmeyen gecici paketler. 'git count-objects -v' bunlari
+       'warning: garbage found' olarak bildiriyor. Tarihce ETKILENMEZ.
+KOMUT: bash /home/yuio/snape/tmp/night/rm_garbage_packs.sh
+SILINEN DOSYALAR (zaman, boyut, yol):
+2026-08-28 04:03:53         27G  .git/objects/pack/tmp_pack_BT6QDr
+2026-08-28 04:03:53         20G  .git/objects/pack/tmp_pack_dTGEnF
+2026-08-28 04:03:53        8.4G  .git/objects/pack/tmp_pack_IurQoA
+2026-08-28 04:03:53         56G  .git/objects/pack/tmp_pack_l3D9mx
+2026-08-28 04:03:53         14G  .git/objects/pack/tmp_pack_RKWnkb
+
+==============================================================================
+2026-08-28 04:07:38  GIT TARIHCESI YENIDEN YAZILDI (icerik bozma)
+NEDEN: .git paketi 16 GB. Olculdu: asm2asm 8.94 GB, asm_somatic 6.51 GB,
+       overnight 905 MB, tools 40 MB (derlenmis rakip binary'ler), lab 1.69 MB,
+       tests 0.42 MB. Hicbiri kaynak degil.
+ETKI : Bu alti dizin tum commit'lerden cikarildi; tum commit SHA'lari degisti.
+       Diskteki dosyalara DOKUNULMADI (tmp/ altinda duruyorlar).
+GERI DONUS: onceki ref'ler ve SHA'lari tmp/night/refs-before-rewrite.txt icinde.
+KOMUT: tmp/.venv/bin/git-filter-repo --force --invert-paths --path asm2asm/
+       --path asm_somatic/ --path overnight/ --path tools/ --path lab/ --path tests/
+       --strip-blobs-bigger-than 5M
+
