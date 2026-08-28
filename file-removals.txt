@@ -23,3 +23,12 @@ KOMUT: tmp/.venv/bin/git-filter-repo --force --invert-paths --path asm2asm/
        --path asm_somatic/ --path overnight/ --path tools/ --path lab/ --path tests/
        --strip-blobs-bigger-than 5M
 
+==============================================================================
+2026-08-28 05:18:56  UCUNCU TARAF PAKET YAMASI (dosya icerigi degistirildi)
+DOSYA: tmp/.venv/lib/python3.14/site-packages/minda/decompose.py  (satir 357)
+NEDEN: Minda sayisal VCF ID'lerinde cokuyor -- _write_removed_records id listesini
+       str sanip join ediyor: TypeError: sequence item 0: expected str instance, int found.
+       Simulasyon yapraklarinin bazi cagirici VCF'lerinde ID'ler sayisal.
+DEGISIKLIK: join(id_difference_list) -> join(str(_x) for _x in id_difference_list)
+YEDEK: tmp/night/minda_decompose.py.orig
+
