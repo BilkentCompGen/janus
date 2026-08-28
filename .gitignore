@@ -2,6 +2,8 @@
 .DS_Store
 .vscode
 .venv
+.venv-callers
+.venv-svision
 __pycache__
 
 # the binary and its objects
@@ -39,5 +41,10 @@ paper/*.synctex.gz
 /readalign
 /consensus
 /asm_somatic
+/castle_res
 /castle_delly
+/overnight
+
+# Buyuk ara ciktilar tmp/ altinda toplaniyor. Eski konumlarinda birer symlink var ki
+# overnight/ altindaki betikler yollarini degistirmeden calissin.
 /tmp
