@@ -1,24 +1,3 @@
-// snape call <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5]
-//
-// Breakpoints from the aligned junction contigs -- the stage after minimap2, in snape instead of
-// Severus. It is the part of Severus that was doing work on this input and nothing else: a MAPQ and
-// aligned-length gate, split alignments chained in QUERY order, CIGAR indels at or above the SV
-// floor, clustering, and a support floor. What Severus carries besides that is idle here by
-// construction -- phasing (one haplotype-free contig), coverage histograms and VAF (a contig is not
-// a read pileup), multi-sample subtraction (the somatic decision was already made in the graph).
-//
-// A junction is two reference sides plus the direction each side leaves the reference in: d=+1 the
-// alignment ENDS there going right, d=-1 it STARTS there going left. That pair is the entire type
-// vocabulary -- (+,-) deletion, (-,+) duplication, equal signs inversion, two contigs a breakend --
-// so the caller never needs to know what an SV is in order to type one.
-//
-// Support counts DISTINCT contig names, so a contig that reaches the same junction twice (once
-// through its CIGAR, once through a split) still supports it once, and `snape junctions` naming its
-// records <read>_<n> keeps that equal to one supporting READ.
-//
-// Positions are 1-based from the moment a junction is built (a 0-based exclusive reference end is
-// already the 1-based coordinate of the last aligned base; a 0-based start needs the +1), so the VCF
-// writer converts nothing.
 #include "call.h"
 
 #include "unordered_dense.h"
@@ -38,9 +17,6 @@ namespace {
 
 struct Ctg { std::string name, bam; };
 
-// argv[1] is one BAM path, or a comma-separated list of <name>=<bam>. A bare path becomes one line
-// named "t" -- the sample column this VCF has always carried -- so one line and twenty run the same
-// code and one line prints what it always printed. Validated here because this is the CLI boundary.
 std::vector<Ctg> parse_ctg(const char* arg) {
     std::vector<Ctg> v;
     const std::string in(arg);
@@ -61,21 +37,21 @@ std::vector<Ctg> parse_ctg(const char* arg) {
     return v;
 }
 
-struct Seg {                                   // one surviving alignment of one contig
-    uint32_t q;                                // contig id
+struct Seg {
+    uint32_t q;
     int32_t tid;
-    hts_pos_t rs, re;                          // reference span, 0-based half-open
-    int32_t qs, qe;                            // query span in the CONTIG's own orientation
+    hts_pos_t rs, re;
+    int32_t qs, qe;
     uint8_t rev;
-    double rep_s, rep_e;                       // how repetitive the anchor is at each end
+    double rep_s, rep_e;
 };
 
 struct Jn {
     int32_t c1, c2;
-    hts_pos_t p1, p2;                          // 1-based
+    hts_pos_t p1, p2;
     int8_t d1, d2;
     uint32_t q;
-    double rep;                                // the more repetitive of the two anchors
+    double rep;
 };
 
 struct Ins { int32_t c; hts_pos_t p; int32_t len; uint32_t q; double rep; };
@@ -91,12 +67,9 @@ double qident(const uint8_t* s, int32_t a, int32_t b, int32_t len) {
     return (double)m / len;
 }
 
-// The largest share of any base agreeing with the base `p` before it, over periods 1..6: how much of
-// this stretch is a tandem repeat. Random sequence sits near 0.25 (one base in four agrees by
-// chance) and a VNTR runs far above it.
 double repeat_score(const uint8_t* sq, int32_t a, int32_t b) {
     const int32_t n = b - a;
-    if (n < 12) return 1.0;                       // too short to judge: treat as repeat, i.e. refuse
+    if (n < 12) return 1.0;
     double best = 0;
     for (int p = 1; p <= 6 && p < n; p++) {
         int m = 0;
@@ -106,11 +79,6 @@ double repeat_score(const uint8_t* sq, int32_t a, int32_t b) {
     return best;
 }
 
-// The same measurement at a junction, taken on the ANCHOR side only. Those bases are aligned to the
-// reference at under 1% mismatch, so they ARE the reference at that locus and no FASTA is needed.
-// Measured on hcc1954 against the 2-support ensemble, over the calls nothing else corroborates:
-// 27.2% of them sit above 0.4 against 2.9% of the true calls, and above 0.6 it is 11.0% against
-// 0.2%. A breakpoint whose flank is a VNTR is where an aligner puts an indel that is not an event.
 constexpr int32_t REP_WIN = 300;
 
 double rep_before(const bam1_t* b, int32_t q) {
@@ -123,11 +91,6 @@ double rep_after(const bam1_t* b, int32_t q) {
     return e > q ? repeat_score(bam_get_seq(b), q, e) : 1.0;
 }
 
-// A short tandem duplication does not reach the aligner as a split: minimap2 writes the second copy
-// as an insertion and the event silently becomes an INS. The copy it duplicates is right there in the
-// contig, on one side or the other of the inserted bases, and those flanking bases are aligned -- so
-// they ARE the reference sequence at that locus. Comparing the two needs no reference of our own.
-// Which side matches says which copy the aligner kept, and that fixes the duplicated interval.
 bool tandem(const bam1_t* b, int32_t qp, int len, hts_pos_t rp, int32_t tid, uint32_t q,
             std::vector<Jn>& jn) {
     const uint8_t* sq = bam_get_seq(b);
@@ -135,27 +98,12 @@ bool tandem(const bam1_t* b, int32_t qp, int len, hts_pos_t rp, int32_t tid, uin
     const double bef = qp - len >= 0 ? qident(sq, qp, qp - len, len) : 0;
     if (std::max(aft, bef) < 0.85) return false;
     const double rep = rep_before(b, qp);
-    // [Tried: breaking a near-tie between the two sides towards a fixed frame, on the theory that
-    //  the two branches place the interval `len` apart and a tandem array decides between them on a
-    //  handful of bases, splitting one event's support across two clusters. Measured on h2009 at the
-    //  shipped guards: TP 812 both ways, one extra false call. The split is not happening at a rate
-    //  that matters, so the more accurate interval is kept.]
+
     if (aft >= bef) jn.push_back({tid, tid, rp + 1, rp + 1 + len, -1, 1, q, rep});
     else            jn.push_back({tid, tid, rp - len + 1, rp + 1, -1, 1, q, rep});
     return true;
 }
 
-// An inversion shorter than the contig does not split-align either: the aligner walks straight
-// through it and pays for the inverted bases with a dense run of tiny indels. Measured on `hard`, a
-// 194 bp inversion produced the same ~15-operation shred in every contig carrying it, and not one
-// operation of it reached the 50 bp floor. A reference window that shredded is a breakpoint pair
-// whatever the aligner called the pieces; the type is read from the directions like any other.
-//
-// On real HiFi the same rule fires on tandem repeats, where a dense run of small indels is what a
-// VNTR looks like and not what an inversion looks like: measured on hcc1954 it produced 41 false
-// calls and not one true one, while on `hard` it is worth 4 inversions in the 50-1000 bp band. The
-// difference is visible in the contig's own bases without a reference, so the window is asked whether
-// it is repetitive before it is allowed to be a breakpoint.
 void shred(const std::vector<std::pair<hts_pos_t, int32_t>>& ops, const bam1_t* b, int32_t tid,
            uint32_t q, int min_sv, int nmin, hts_pos_t win, double max_rep, std::vector<Jn>& jn) {
     const uint8_t* sq = bam_get_seq(b);
@@ -172,15 +120,12 @@ void shred(const std::vector<std::pair<hts_pos_t, int32_t>>& ops, const bam1_t* 
     }
 }
 
-// One CIGAR walk: the segment's query offsets and reference end, plus every indel big enough to be
-// an SV on its own. Leading/trailing clips are query positions the aligner did not place, and they
-// are what makes two segments of the same contig orderable.
 void walk(const bam1_t* b, uint32_t q, int min_sv, Seg& s, std::vector<Jn>& jn, std::vector<Ins>& ins,
           int nmin, hts_pos_t win, double max_rep) {
     const uint32_t* cg = bam_get_cigar(b);
     hts_pos_t rp = b->core.pos;
     int32_t lead = 0, qaln = 0, qtot = 0, qp = 0;
-    std::vector<std::pair<hts_pos_t, int32_t>> small;      // reference position, contig position
+    std::vector<std::pair<hts_pos_t, int32_t>> small;
     for (uint32_t i = 0; i < b->core.n_cigar; i++) {
         const int op = bam_cigar_op(cg[i]), len = (int)bam_cigar_oplen(cg[i]);
         const int t = bam_cigar_type(op);
@@ -201,13 +146,11 @@ void walk(const bam1_t* b, uint32_t q, int min_sv, Seg& s, std::vector<Jn>& jn, 
     s.re = rp;
     s.qs = b->core.flag & BAM_FREVERSE ? qtot - lead - qaln : lead;
     s.qe = s.qs + qaln;
-    // The bases the aligner placed, at each end of what it placed: the anchor a split leaves from.
+
     s.rep_s = rep_after(b, s.qs);
     s.rep_e = rep_before(b, s.qe);
 }
 
-// Two consecutive pieces of one contig: where each leaves the reference, ordered so that the same
-// junction seen from either side lands in the same cluster.
 Jn chain(const Seg& a, const Seg& b) {
     Jn j{a.tid, b.tid, a.rev ? a.rs + 1 : a.re, b.rev ? b.re : b.rs + 1,
          a.rev ? (int8_t)-1 : (int8_t)1, b.rev ? (int8_t)1 : (int8_t)-1, a.q,
@@ -218,16 +161,6 @@ Jn chain(const Seg& a, const Seg& b) {
     return j;
 }
 
-// An alignment carrying far more mismatch than the reads can contain is not this locus. Measured on
-// hcc1954 real HiFi (read error 0.018%): the alignments that carry a TRUE call sit at 0.08% mismatch
-// across their germline anchors, the ones that carry a FALSE call at 8.35%, and 89% of the false ones
-// are above 1%. The cause is that 47% of those contigs have no match anywhere in hg38 better than 2%
-// -- the copy they came from is missing from the reference or is one of a dozen -- and MAPQ cannot
-// warn about it, because with a single candidate the aligner is confident and simply wrong.
-// SUBSTITUTIONS only. NM counts inserted and deleted bases as well, so using it raw would score a
-// contig that carries a real 400 bp deletion at 8% and throw away exactly the events we are looking
-// for -- measured: it took the simulation from 542/600 junctions to 310. Subtracting the indel bases
-// leaves the quantity that actually says "this is not the locus I came from".
 double mm_rate(const bam1_t* b) {
     const uint8_t* nm = bam_aux_get(b, "NM");
     if (!nm) return 0;
@@ -242,14 +175,6 @@ double mm_rate(const bam1_t* b) {
     return aln > 0 && sub > 0 ? (double)sub / (double)aln : 0;
 }
 
-// min_aln defaults to 0 because a length floor on a SEGMENT is the wrong shape. A deletion needs one
-// surviving alignment of a contig and a breakend needs two, so a breakend pays the floor twice -- and
-// worse, dropping a contig's MIDDLE segment chains the two that remain, which fabricates a junction
-// between pieces that were never adjacent. Measured on hcc1954 with everything else held: 1000 bp
-// gives 0.749/0.718, 600 gives 0.761/0.762, 400 gives 0.771/0.797, and 200 gives 0.798/0.863 -- both
-// precision AND recall improve as the floor comes off, and false positives fall from 266 to 241.
-// Below 200 the numbers are identical to three digits at 150, 100, 50 and 0, because minimap2 does not
-// emit anything shorter here; on `hard` 0 costs nothing and recovers 2 duplications.
 bool keep(const bam1_t* b, int min_mapq, hts_pos_t min_aln, double max_mm, Stats& st) {
     st.rec++;
     if (b->core.flag & (BAM_FUNMAP | BAM_FQCFAIL | BAM_FDUP)) { st.unmapped++; return false; }
@@ -260,15 +185,6 @@ bool keep(const bam1_t* b, int min_mapq, hts_pos_t min_aln, double max_mm, Stats
     return true;
 }
 
-// ---- the normal, read at the reference locus ----
-//
-// The graph decides somatic BEFORE alignment, by exact core sequence, and in a repeat that is not the
-// same question as somatic. Measured on hcc1954: of the calls this caller gets wrong in the 50-1000 bp
-// band, 93.1% have an indel of the same size sitting in the NORMAL reads at the same locus (against
-// 2.9% of the calls it gets right, size-matched), at a normal allele fraction of 0.75. They are
-// germline. The tumour and normal reads simply do not spell that locus with the same 217 bp core --
-// different stutter, a different paralogous copy sampled -- so ncov == 0 is true of the STRING while
-// the VARIANT is shared. Nothing before alignment can see that; this can.
 struct Normal {
     samFile* fp = nullptr;
     hts_idx_t* idx = nullptr;
@@ -289,13 +205,6 @@ Normal open_normal(const char* path) {
     return n;
 }
 
-// Same event in the normal, or a locus the normal cannot place either: both mean not somatic.
-//
-// The second clause is why this also runs on breakends, which it did not before. Measured on
-// hcc1954 against the 2-support ensemble: of the calls nothing corroborates, 7.4% sit at a locus
-// where a quarter or more of the normal reads are above 2% mismatch, against 0.0% of the true calls
-// -- and 27 of those 136 were breakends, which the same-chromosome guard was letting past
-// unexamined.
 bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_pos_t win, double dirty_f) {
     if (!n.on()) return false;
     const int tid = sam_hdr_name2tid(n.hdr, chrom);
@@ -322,10 +231,6 @@ bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_po
     return same || (seen >= 4 && (double)dirty >= dirty_f * seen);
 }
 
-// Read the BAM once. Coordinate order scatters a contig's alignments, so segments are bucketed per
-// contig name and chained only after the file is done.
-// Every contig set was aligned to the same reference; different reference lists mean the tids do
-// not agree and every coordinate after this point is quietly wrong. Checked once per BAM.
 void same_refs(sam_hdr_t* a, sam_hdr_t* b) {
     bool ok = sam_hdr_nref(a) == sam_hdr_nref(b);
     for (int i = 0; ok && i < sam_hdr_nref(a); i++)
@@ -334,9 +239,6 @@ void same_refs(sam_hdr_t* a, sam_hdr_t* b) {
     if (!ok) die("contig BAMs were aligned to different references");
 }
 
-// One BAM, appending to the shared junction and insertion lists. A contig id indexes `qname`, which
-// spans every line, and `qline` says which line each contig came from -- so one cluster can be
-// tallied per line without the clustering rule knowing lines exist.
 void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int min_sv,
              std::vector<Jn>& jn, std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin,
              hts_pos_t win, double max_mm, double max_rep, std::vector<std::string>& qname,
@@ -370,17 +272,7 @@ void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int
     sam_close(fp);
     if (h != *hdr) sam_hdr_destroy(h);
     st.cigar_ins = ins.size();
-    // Two segments of one contig that RESUME THE REFERENCE where the previous one left off, with
-    // query bases stranded in between, are an insertion of those bases -- not two junctions.
-    //
-    // Most short insertions in a genome are not novel sequence; they are another copy of sequence the
-    // genome already has. minimap2 is free to place that copy at its source locus instead of writing
-    // it as a CIGAR insertion, and then the contig arrives as three segments whose OUTER two are
-    // adjacent in the reference. Chaining consecutive pairs turns that into two breakends pointing at
-    // the source locus, and the event is scored missed at its own coordinates while the contig
-    // contained it exactly. Skipping the middle segment recovers the insertion's own position and its
-    // length -- which is every query base between the two anchors, so a middle segment the MAPQ gate
-    // already dropped is handled by the same rule.
+
     auto resumes = [&](const Seg& a, const Seg& c, hts_pos_t& pos) {
         if (a.tid != c.tid || a.rev != c.rev) return false;
         pos = a.rev ? a.rs + 1 : a.re;
@@ -413,14 +305,8 @@ void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int
     }
 }
 
-// `slot` indexes the per-line support arena, L entries per surviving cluster. The counts live
-// outside the struct for the same reason the graph's do: one contiguous block instead of a
-// heap allocation per cluster, and the struct stays a POD.
 struct Cl { Jn j; hts_pos_t p1, p2; uint32_t supp, slot; double rep; };
 
-// Distinct supporting contigs overall, and per line into `cnt`. Exactly the one sort and unique
-// the single-line caller has always run; the per-line tally walks the unique prefix afterwards, so
-// the returned total is the number that has always been in the SUPP field.
 uint32_t distinct(std::vector<uint32_t>& q, const std::vector<uint8_t>& qline, uint32_t* cnt, int L) {
     std::sort(q.begin(), q.end());
     const size_t n = (size_t)(std::unique(q.begin(), q.end()) - q.begin());
@@ -435,8 +321,6 @@ uint32_t best_of(const uint32_t* cnt, int L) {
     return b;
 }
 
-// Junctions within `tol` on BOTH sides, with the same contig pair and the same direction pair, are
-// one event. The cluster's position is the median, which cannot be dragged by a single ragged end.
 std::vector<Cl> cluster(std::vector<Jn>& jn, const std::vector<uint8_t>& qline, hts_pos_t tol,
                         uint32_t min_supp, int L, std::vector<uint32_t>& sup) {
     std::sort(jn.begin(), jn.end(), [](const Jn& a, const Jn& b) {
@@ -454,8 +338,7 @@ std::vector<Cl> cluster(std::vector<Jn>& jn, const std::vector<uint8_t>& qline, 
         }
         const uint32_t s = distinct(q, qline, cnt.data(), L);
         std::sort(a.begin(), a.end()); std::sort(c.begin(), c.end()); std::sort(rp.begin(), rp.end());
-        // Discovery is per line: five contigs from ONE line, not five spread over five lines. At
-        // L=1 the best line IS the total, so this is the floor the single-tumour caller has run.
+
         if (best_of(cnt.data(), L) >= min_supp) {
             out.push_back({jn[i], a[a.size() / 2], c[c.size() / 2], s,
                            (uint32_t)(sup.size() / (size_t)L), rp[rp.size() / 2]});
@@ -498,16 +381,12 @@ const char* svtype(const Cl& c) {
     return c.j.d1 > 0 ? "DEL" : "DUP";
 }
 
-// A breakend names its partner in the ALT field; the bracket says which side of the partner the
-// sequence continues on, and whether N leads or trails says the same for this side.
 std::string bnd_alt(const Cl& c, sam_hdr_t* h) {
     const std::string m = std::string(sam_hdr_tid2name(h, c.j.c2)) + ":" + std::to_string(c.p2);
     const std::string br = c.j.d2 < 0 ? "[" + m + "[" : "]" + m + "]";
     return c.j.d1 > 0 ? "N" + br : br + "N";
 }
 
-// One GT:DV field per line, in sheet order. A line is present when it clears the assignment floor;
-// with one line that floor can never bite, because discovery already demanded more.
 void fmt_cols(FILE* f, const std::vector<uint32_t>& sup, uint32_t slot, int L, uint32_t assign, int only) {
     for (int l = 0; l < L; l++) {
         if (only >= 0 && l != only) continue;
@@ -517,9 +396,6 @@ void fmt_cols(FILE* f, const std::vector<uint32_t>& sup, uint32_t slot, int L, u
     std::fputc('\n', f);
 }
 
-// `only` < 0 writes every line as its own sample column; `only` >= 0 writes that line's projection,
-// keeping only the records it carries. Written to <path>.tmp and renamed, so a killed run leaves
-// either the previous VCF or nothing -- never half of one.
 void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const std::vector<ClIns>& ci,
                const std::vector<std::string>& qname, const std::vector<Ctg>& sets,
                const std::vector<uint32_t>& sup, int L, uint32_t assign, int only) {
@@ -567,7 +443,7 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
     if (std::rename(tmp.c_str(), path) != 0) die("rename out.vcf");
 }
 
-}  // namespace
+}
 
 int cmd_call(int argc, char** argv) {
     if (argc < 4) {
@@ -581,29 +457,16 @@ int cmd_call(int argc, char** argv) {
     const hts_pos_t min_aln = argc > 5 ? std::atoll(argv[5]) : 0;
     const int min_sv     = argc >  6 ? std::atoi(argv[6])  : 50;
     const hts_pos_t tol  = argc >  7 ? std::atoll(argv[7]) : 50;
-    // 5, swept on all four pairs through the whole shipped pipeline (F1): 3 is worse than 4
-    // everywhere, and between 4 and 5 the split is two pairs each -- but 4 wins hcc1954 by 0.002 and
-    // hcc1937 by 0.003 while 5 wins h2009 by 0.014 and h1437 by 0.028, so 5 has the better mean
-    // (0.808 against 0.799). 6 gives back more recall than it buys.
+
     const uint32_t min_supp = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 5;
     const int shred_n    = argc >  9 ? std::atoi(argv[9])  : 6;
     const hts_pos_t shred_win = argc > 10 ? std::atoll(argv[10]) : 300;
     const double max_mm  = argc > 11 ? std::atof(argv[11]) : 0.01;
     const double shred_rep = argc > 12 ? std::atof(argv[12]) : 0.40;
-    // 0.50 and not 0.45: the knee is between 0.45 and 0.40, where 33 true calls go at once, and the
-    // simulation pays 12 of 600 junctions for 0.50 already -- `hard` has no VNTR-driven false calls
-    // to win back, so every step down is pure loss there and pure gain on real reads.
+
     const double max_rep   = argc > 13 ? std::atof(argv[13]) : 0.50;
     const double dirty_f   = argc > 14 ? std::atof(argv[14]) : 0.25;
-    // Discovery needs `min_supp` contigs from ONE line; assignment then calls the event present in
-    // every line that reaches this lower floor. The floor is 2 and not 3 because 3 was measured to
-    // drop real carriers: on the 20-line simulation, of the 300 calls whose support pattern was one
-    // line short of a true clade, 148 had that line sitting at exactly DV=2 -- one read below the
-    // bar -- while across 95,917 true NON-carrier (line, call) pairs only 60 reached DV>=2. Moving
-    // the floor to 2 took internal-branch recall from 0.91 to 0.97 and root recall from 0.55 to
-    // 0.72, and cut spurious splits from 316 to 208, with the call set unchanged. With one line
-    // assignment cannot bite -- discovery already demanded more -- so the one-line caller genotypes
-    // exactly as it always has, and no single-tumour result moves.
+
     const uint32_t assign = argc > 15 ? (uint32_t)std::atoi(argv[15]) : 2;
 
     const std::vector<Ctg> sets = parse_ctg(argv[1]);
@@ -613,17 +476,13 @@ int cmd_call(int argc, char** argv) {
     for (int l = 0; l < L; l++)
         collect(sets[(size_t)l].bam.c_str(), (uint8_t)l, min_mapq, min_aln, min_sv, jn, ins, &hdr, st,
                 shred_n, shred_win, max_mm, shred_rep, qname, qline);
-    // A same-contig junction shorter than the SV floor is a local alignment artefact, not an event.
+
     jn.erase(std::remove_if(jn.begin(), jn.end(), [&](const Jn& j) {
         return j.c1 == j.c2 && j.p2 - j.p1 < min_sv; }), jn.end());
-    std::vector<uint32_t> sup;                       // L counts per surviving cluster, by Cl::slot
+    std::vector<uint32_t> sup;
     std::vector<Cl> cl = cluster(jn, qline, tol, min_supp, L, sup);
     std::vector<ClIns> ci = cluster_ins(ins, qline, tol, min_supp, L, sup);
 
-    // The normal, at the reference locus: the one question the graph could not ask.
-    // A breakpoint whose anchor is a tandem repeat is where an aligner puts an indel that is not an
-    // event. Applied to the CALL, not just inside shred(), because the same population reaches the
-    // caller through CIGAR indels and splits as well.
     if (max_rep < 1.0) {
         const size_t bj = cl.size(), bi = ci.size();
         cl.erase(std::remove_if(cl.begin(), cl.end(), [&](const Cl& c) { return c.rep > max_rep; }), cl.end());
@@ -632,8 +491,6 @@ int cmd_call(int argc, char** argv) {
                      (bj - cl.size()) + (bi - ci.size()), cl.size(), ci.size());
     }
 
-    // The normal, at the reference locus: the one question the graph could not ask. A breakend is
-    // checked at BOTH of its ends, and it has no length to match, so only the placement clause bites.
     Normal nrm = open_normal(argv[2]);
     if (nrm.on()) {
         const size_t before_j = cl.size(), before_i = ci.size();
@@ -649,7 +506,7 @@ int cmd_call(int argc, char** argv) {
                      (unsigned long long)st.germ, cl.size(), ci.size());
     }
     write_vcf(argv[3], hdr, cl, ci, qname, sets, sup, L, assign, -1);
-    // Per-line projections beside it: the same clusters and the same thresholds, one column each.
+
     std::string base(argv[3]);
     if (base.size() > 4 && base.compare(base.size() - 4, 4, ".vcf") == 0) base.resize(base.size() - 4);
     for (int l = 0; l < L; l++)

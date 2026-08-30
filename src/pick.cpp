@@ -1,25 +1,3 @@
-// snape pick <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads=16] [min_shared=5]
-//
-// Which normal reads are worth aligning.
-//
-// `snape call` asks the normal reads at the reference locus whether a call is germline, and that one
-// question is the largest single source of precision in the pipeline: hcc1954's contigs alone produce
-// 1601 calls at 0.587/0.849, and asking the normal at each of their loci removes 554 of them -- 552
-// false, 2 true -- for 0.895/0.847. But answering it by aligning the WHOLE normal makes the aligner the
-// dominant cost of a caller whose entire premise is that the graph replaces alignment -- two hours
-// against about forty minutes for every other stage put together.
-//
-// It also aligns far more than the question needs. The question is only ever asked at the loci the
-// candidate calls sit on: about 2,400 of them, a few kilobases each. The reads that answer it are the
-// normal reads carrying that same sequence, and the graph already has a way to recognise those
-// without a reference -- they share LCP cores with the contig the call came from.
-//
-// So: take the contig each candidate names (`CTG=` in the VCF), take its GERMLINE ANCHORS -- the
-// flanks, which are sequence the normal has too, as opposed to the somatic middle, which it does not
-// -- parse them into cores, and emit every normal read sharing at least `min_shared` of them. What
-// comes out is 1.56% of the normal on hcc1954, and it answers the question as well as the whole
-// sample does: 0.887/0.858 against 0.891/0.858, eleven and a half minutes of alignment against two
-// hours.
 #include "pick.h"
 
 #include "snape.h"
@@ -43,13 +21,11 @@ extern "C" {
 
 namespace {
 
-int LEVEL = 5;                                 // runtime, from SNAPE_LEVEL
-constexpr int MARGIN = 10;                     // MUST match the graph build
+int LEVEL = 5;
+constexpr int MARGIN = 10;
 
 [[noreturn]] void die(const char* m) { std::fprintf(stderr, "[pick] FATAL: %s\n", m); std::exit(1); }
 
-// The contigs the candidates name. One per call, which is all that is needed: any contig that
-// reaches the locus carries the same anchors.
 ankerl::unordered_dense::set<std::string> wanted_contigs(const char* vcf) {
     ankerl::unordered_dense::set<std::string> w;
     FILE* f = std::fopen(vcf, "r"); if (!f) die("open calls.vcf");
@@ -67,9 +43,6 @@ ankerl::unordered_dense::set<std::string> wanted_contigs(const char* vcf) {
     return w;
 }
 
-// A junction contig is [germline anchor | somatic run | germline anchor], and the header says how
-// long each anchor is. Only the anchors go in: the somatic middle is by construction absent from the
-// normal, so cores from it would select nothing and cost a lookup per read.
 size_t anchor_cores(const char* fa, const ankerl::unordered_dense::set<std::string>& want,
                     ankerl::unordered_dense::set<uint64_t>& sigs) {
     FILE* f = std::fopen(fa, "r"); if (!f) die("open ctg.fa");
@@ -117,7 +90,7 @@ size_t anchor_cores(const char* fa, const ankerl::unordered_dense::set<std::stri
     return nctg;
 }
 
-}  // namespace
+}
 
 int cmd_pick(int argc, char** argv) {
     if (argc < 5) {
@@ -127,17 +100,13 @@ int cmd_pick(int argc, char** argv) {
     }
     const std::string fa = argv[1], vcf = argv[2], reads = argv[3], out = argv[4];
     const int NT = argc > 5 ? std::atoi(argv[5]) : 16;
-    // 5 shared cores, not 1: a read that really covers the locus shares dozens, while a single
-    // shared core is what a repetitive anchor collects from all over the genome. Measured on
-    // hcc1954: 1 picks 405,604 reads (3.58%), 5 picks 176,912 (1.56%), and the calls that come out
-    // are identical to the record -- TP 949, FP 121 either way.
+
     const int MINSH = argc > 6 ? std::atoi(argv[6]) : 5;
     if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
 
     const auto want = wanted_contigs(vcf.c_str());
     if (want.empty()) { std::fprintf(stderr, "[pick] adayda CTG= yok, secilecek bir sey yok\n"); return 1; }
-    // One FASTA per tumour line, comma-separated: the anchors are a union, because a candidate can
-    // be reached by contigs from more than one line and the normal reads are picked once for all.
+
     ankerl::unordered_dense::set<uint64_t> sigs;
     size_t nctg = 0;
     for (size_t i = 0; i <= fa.size();) {
@@ -154,10 +123,6 @@ int cmd_pick(int argc, char** argv) {
     std::mutex out_mu;
     std::atomic<uint64_t> seen{0}, kept{0};
 
-    // One reader fills batches, the workers take whole batches. The loop this replaces took the
-    // input mutex once per read and copied the read AND its name while holding it, so every thread
-    // queued behind every other thread's memcpy -- the same shape bubbles' collect had, where it
-    // cost more than half the machine.
     constexpr size_t Q_CAP = 128, BATCH = 32;
     struct Rd { std::string name, seq; };
     std::mutex qmtx; std::condition_variable cv_full, cv_empty;

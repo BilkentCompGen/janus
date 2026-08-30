@@ -1,34 +1,3 @@
-// snape junctions <graph.bin> <reads> <out.fa> [threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]
-//
-// Junction contigs instead of whole reads: only the sequence around each somatic run, and only from
-// as many reads as the breakpoint caller actually needs.
-//
-// A CHUNK is a connected component of the graph's somatic subgraph (ncov == 0, tcov > 0) -- one
-// junction candidate, found without a reference. The reads are then scanned once and, for each chunk,
-// the first `per_chunk` reads that carry it are cut down to
-//
-//     [ start of the (first somatic core - pad_cores) , end of the (last somatic core + pad_cores) ]
-//
-// which is the novel sequence plus about a kilobase of normal anchor either side. No assembly and no
-// overlap merging is needed to get there: consecutive LCP cores of ONE read are already adjacent and
-// overlapping in that read's own bytes, so the span between two core boundaries IS the sequence. The
-// only case that would need merging across reads is a chunk no single read spans with anchor to
-// spare, and `min_flank` counts exactly those instead of assuming there are none.
-//
-// A record is named <read>_<n> so that the caller downstream still counts one supporting READ per
-// record, while a read that carries two different junctions cannot inflate either one's support.
-//
-// `drop.sigs` beside the graph -- written by `snape bubbles` -- lists somatic cores to exclude before
-// chunks are built: a core whose bubble has two arms of equal length that agree minimizer-for-
-// minimizer is an SNV or a sub-SV edit, not a junction, and carving it out here means no contig is
-// ever emitted for it. Absent file, no filter.
-//
-// `min_vaf` drops a chunk whose tumour support is too thin a fraction of the local depth. The
-// denominator cannot come from the somatic subgraph -- a somatic core has ncov == 0 by definition, so
-// tcov/(ncov+tcov) is identically 1 -- it comes from the germline cores the chunk hangs off, whose
-// tcov counts every tumour read through that locus, variant-carrying or not. That ratio is the same
-// quantity a caller's VAF measures, and unlike a flat tcov floor it is blind neither to a
-// low-coverage region nor to a repeat whose counts are inflated.
 #include "junctions.h"
 #include "samples.h"
 #include <sys/stat.h>
@@ -48,23 +17,18 @@
 #include <vector>
 
 namespace {
-int LEVEL = 5;                             // runtime, from SNAPE_LEVEL; echoed in the banner
-constexpr int MARGIN = 10;                 // MUST match the graph build
+int LEVEL = 5;
+constexpr int MARGIN = 10;
 constexpr size_t BATCH = 2000;
 
 [[noreturn]] void die(const char* m) { std::fprintf(stderr, "[jcontigs] FATAL: %s\n", m); std::exit(1); }
 
-// ---- somatic subgraph -> chunks ----
 struct Chunks {
-    std::vector<uint64_t> carry;           // per chunk: bit l set iff tumour line l carries a core of it
+    std::vector<uint64_t> carry;
     int lines = 0;
-    // signature -> component. This was a sig-sorted array plus a parallel chunk array, looked up
-    // with std::lower_bound: ~19 dependent, cache-missing steps per lookup, and there are ~171
-    // lookups per read because every kept core of every read is asked. Measured on the 21-sample
-    // chunk set (454,513 signatures) against real reads: lower_bound 1.47 ns/base, the hash 0.46,
-    // against extract()'s 9.41 -- 16% of the parse against 5%, so 9.3% off the stage. Same hits.
+
     ankerl::unordered_dense::map<uint64_t, uint32_t> of;
-    size_t n = 0;                          // number of components
+    size_t n = 0;
 };
 
 uint32_t findp(std::vector<uint32_t>& p, uint32_t x) {
@@ -72,7 +36,6 @@ uint32_t findp(std::vector<uint32_t>& p, uint32_t x) {
     return x;
 }
 
-// `snape bubbles` output, if that stage has run: the somatic cores it identified as sub-SV edits
 ankerl::unordered_dense::set<uint64_t> load_drop(const std::string& graph) {
     ankerl::unordered_dense::set<uint64_t> d;
     const size_t cut = graph.find_last_of('/');
@@ -90,46 +53,36 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
     char mg[4]; uint32_t ver = 0, S = 0, resv = 0;
     if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin (bad magic)");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 4) die("graph.bin version is not 4 -- rebuild it");
+    if (std::fread(&ver, 4, 1, f) != 1 || ver != 5) die("graph.bin version is not 5 -- rebuild it");
     if (std::fread(&S, 4, 1, f) != 1 || S < 2 || S > 64) die("graph.bin sample count out of range");
     if (std::fread(&resv, 4, 1, f) != 1) die("read header");
-    uint64_t ov_s = 0, ov_c = 0;                        // v4: core-overlap measurement, for bubbles
+    uint64_t ov_s = 0, ov_c = 0;
     if (std::fread(&ov_s, 8, 1, f) != 1 || std::fread(&ov_c, 8, 1, f) != 1) die("read overlap");
     (void)ov_s; (void)ov_c;
-    const uint32_t L = S - 1;                                     // tumour lines
+    const uint32_t L = S - 1;
     if (std::fread(&K, 8, 1, f) != 1) die("read K");
     std::vector<uint64_t> sig(K);
     if (std::fread(sig.data(), 8, K, f) != K) die("read sigs");
     std::vector<cov_t> nc(K);
     if (std::fread(nc.data(), sizeof(cov_t), K, f) != K) die("read normal plane");
-    // The tumour planes are held whole because the VAF is a max over a chunk's cores AND a max over
-    // its germline neighbours, which are two scattered gathers per line. At one tumour this is half
-    // what v1's u32 tcov cost; at twenty it is 2.8 GB, against the 1.2 GB of edges v1 also held.
-    //
-    // PLANE-MAJOR: graph.cpp writes plane l whole, then plane l+1 (graph.cpp:800-804), so line l's
-    // count for node i is tc[l*K + i]. This read it as tc[i*L + l] -- node-major -- which is the
-    // same address only when L == 1, so every per-line gather below was reading another line's
-    // bytes as soon as a second tumour existed. It reached no output today because min_vaf ships at
-    // 0 and vaf() cannot then reject anything, but the printed VAF histogram was wrong and the
-    // filter would have selected the wrong chunks the moment it was switched on.
+
     std::vector<cov_t> tc((size_t)K * L);
     if (L && std::fread(tc.data(), sizeof(cov_t), (size_t)K * L, f) != (size_t)K * L) die("read tumour planes");
     uint64_t E = 0;
-    uint64_t sbytes = 0;                                // v4: core sequence, for bubbles only
+    uint64_t sbytes = 0;
     if (std::fread(&sbytes, 8, 1, f) != 1) die("read core sequence size");
     if (std::fseek(f, (long)((size_t)K * 4 + sbytes), SEEK_CUR) != 0) die("seek past core sequence");
     if (std::fread(&E, 8, 1, f) != 1) die("read E");
-    std::vector<uint32_t> es(E), ed(E);                           // SoA: two columns, not a stride
+    std::vector<uint32_t> es(E), ed(E);
     if (std::fread(es.data(), 4, E, f) != E) die("read esrc");
     if (std::fread(ed.data(), 4, E, f) != E) die("read edst");
-    std::fclose(f);                                               // edge count planes are read by nothing
+    std::fclose(f);
 
     const auto drop = load_drop(path);
     std::vector<uint8_t> som(K, 0);
     uint64_t ndrop = 0;
     for (uint64_t i = 0; i < K; i++) {
-        // Survival already guarantees some sample reached min_mult, so "the normal never saw it" is
-        // the whole somatic test -- at one tumour this is exactly v1's (nc==0 && tc>0).
+
         som[i] = (nc[i] == 0);
         if (som[i] && drop.contains(sig[i])) { som[i] = 0; ndrop++; }
     }
@@ -153,14 +106,8 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
     }
     const size_t NC = id.size();
 
-    // Numerator: the best-supported somatic core in the chunk -- every read over the junction emits
-    // most of the chunk's cores, so these counts sit close together and the max is the cleanest read
-    // of "how many tumour reads saw this junction". Denominator: the highest-coverage germline
-    // neighbour, which is the conservative choice (a bigger denominator only ever lowers the VAF).
-    // Both are PER LINE now, so a chunk one line carries at depth and another barely touches is two
-    // different VAFs rather than one blended number.
     std::vector<uint32_t> num((size_t)NC * L, 0), den((size_t)NC * L, 0);
-    std::vector<uint64_t> carry(NC, 0);                           // which lines carry the chunk at all
+    std::vector<uint64_t> carry(NC, 0);
     for (uint64_t i = 0; i < K; i++) {
         if (!som[i]) continue;
         const size_t c = cid[i];
@@ -180,9 +127,7 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
             if (v > den[c * L + l]) den[c * L + l] = v;
         }
     }
-    // No germline neighbour at all means no denominator to judge by, so the chunk is kept rather than
-    // guessed at; min_flank is what catches those anyway. A chunk passes on its BEST line: an event
-    // real in one line must not be dropped because a sister line barely carries it.
+
     auto vaf = [&](size_t c) {
         double best = 0;
         for (uint32_t l = 0; l < L; l++) {
@@ -227,19 +172,15 @@ int32_t chunk_of(const Chunks& c, uint64_t s) {
     return it == c.of.end() ? -1 : (int32_t)it->second;
 }
 
-// ---- reads ----
 struct Read { std::string name, seq; };
-}  // namespace
+}
 
 int cmd_junctions(int argc, char** argv) {
     if (argc < 4) { std::fprintf(stderr, "usage: snape junctions <graph.bin> <sheet.tsv> <outdir> "
                                  "[threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"); return 2; }
     const std::string gpath = argv[1], spath = argv[2], odir = argv[3];
     const int NT = argc > 4 ? std::atoi(argv[4]) : 16;
-    // 50 cores of anchor each side, not 10: half of what hcc1954 missed was a placement failure and
-    // not a detection one, and a bigger pad cannot cost a contig -- the window is clamped to the
-    // read's own cores and min_flank tests the flank ACHIEVED. Measured at 15/25/50/75; 50 dominates
-    // 25 at every support level and 75 gives back what it gains.
+
     const int PAD = argc > 5 ? std::atoi(argv[5]) : 50;
     const uint32_t PER = argc > 6 ? (uint32_t)std::atoi(argv[6]) : 5;
     const int64_t MINF = argc > 7 ? std::atoll(argv[7]) : 300;
@@ -248,9 +189,7 @@ int cmd_junctions(int argc, char** argv) {
 
     const std::vector<Sample> smp = samples_read(spath);
     uint64_t K = 0; size_t nsom = 0;
-    // ONE chunk set for the whole case: a junction several lines carry is ONE connected component
-    // and gets ONE chunk id, so it is discovered once no matter how many lines carry it. What is per
-    // line is only the EVIDENCE -- each line cuts its own contigs, from its own reads, below.
+
     const Chunks C = build_chunks(gpath, K, nsom, MINVAF);
     const size_t L = (size_t)C.lines;
     if ((size_t)smp.size() != L + 1) die("sheet and graph.bin disagree on the sample count");
@@ -258,13 +197,11 @@ int cmd_junctions(int argc, char** argv) {
                  "<=%u reads/chunk/line, min flank %lld bp, min VAF %.2f, level=%d, %d threads\n",
                  gpath.c_str(), (unsigned long long)K, nsom, C.n, L, PAD, PER, (long long)MINF, MINVAF, LEVEL, NT);
     if (!C.n) die("no somatic chunks");
-    // The cap is per (chunk, LINE). One counter per chunk would let whichever line is scanned first
-    // eat all PER slots, so a junction three lines carry could come out with contigs from one -- and
-    // per-line support is exactly what the caller then has to count.
+
     mkdir(odir.c_str(), 0755);
     std::vector<std::atomic<uint32_t>> taken(C.n * L);
     for (auto& t : taken) t.store(0);
-    std::vector<std::atomic<uint8_t>> touched(C.n * L); // a read carried it, whatever the flanks were
+    std::vector<std::atomic<uint8_t>> touched(C.n * L);
     for (auto& t : touched) t.store(0);
 
     uint64_t sf_total = 0;
@@ -279,7 +216,7 @@ int cmd_junctions(int argc, char** argv) {
 
     auto worker = [&]() {
         std::vector<Read> batch; std::string chunk_out;
-        std::vector<int> ci; std::vector<int32_t> cc;      // reused across reads
+        std::vector<int> ci; std::vector<int32_t> cc;
         for (;;) {
             batch.clear();
             {
@@ -296,7 +233,7 @@ int cmd_junctions(int argc, char** argv) {
                 sbp += r.seq.size();
                 int n; const uint64_t *st, *en_, *sg;
                 extract(r.seq.data(), (int)r.seq.size(), 0, LEVEL, &n, &st, &en_, &sg);
-                // the cores this read keeps, and which chunk each belongs to
+
                 ci.clear(); cc.clear();
                 for (int i = 0; i < n; i++) {
                     if (st[i] < (uint64_t)MARGIN || en_[i] + MARGIN > r.seq.size()) continue;
@@ -306,11 +243,7 @@ int cmd_junctions(int argc, char** argv) {
                 for (size_t a = 0; a < ci.size();) {
                     if (cc[a] < 0) { a++; continue; }
                     size_t b = a;
-                    // Maximal somatic run, joining runs closer than the padding would put them
-                    // anyway. A mobile-element insertion is only somatic at its two JOINS -- its
-                    // interior is an Alu or a L1 the reference already has -- so the two ends arrive
-                    // as separate runs, and cutting them into separate windows means no contig ever
-                    // contains the insertion. Merged, one window spans join to join.
+
                     for (;;) {
                         while (b + 1 < ci.size() && cc[b + 1] >= 0) b++;
                         size_t nxt = b + 1;

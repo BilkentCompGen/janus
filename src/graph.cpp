@@ -1,9 +1,8 @@
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE 1   // expose sched_getaffinity under strict -std=c++17
+#define _GNU_SOURCE 1
 #endif
 #include "graph.h"
 #include "samples.h"
-// extract is declared in snape.h (provided by src/extract.cpp over biolcp).
 
 #include <sys/stat.h>
 #include <sys/resource.h>
@@ -23,22 +22,16 @@
 #include <queue>
 #include <string>
 #include <thread>
-#include "unordered_dense.h"   // ankerl::unordered_dense: open-addressing flat hash map/set keyed by u64
-                               // (replaces node-based std::unordered_map/set — kills per-entry malloc + pointer-chase)
+#include "unordered_dense.h"
+
 #include <utility>
 #include <vector>
 
-// ---- fail-fast binary checkpoint IO (declared in snape.h) ----
 FILE* xopen(const std::string& p, const char* m) { FILE* f = std::fopen(p.c_str(), m); if (!f) { std::fprintf(stderr, "[FATAL] fopen %s\n", p.c_str()); std::abort(); } return f; }
 void wr(FILE* f, const void* p, size_t n) { if (n && std::fwrite(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] fwrite\n"); std::abort(); } }
 void rd(FILE* f, void* p, size_t n) { if (n && std::fread(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] truncated checkpoint\n"); std::abort(); } }
-void atomic_close(FILE* f, const std::string& tmp, const std::string& dst) { std::fclose(f); if (std::rename(tmp.c_str(), dst.c_str())) { std::fprintf(stderr, "[FATAL] rename %s\n", dst.c_str()); std::abort(); } }   // never leave a half-written checkpoint resume would trust
+void atomic_close(FILE* f, const std::string& tmp, const std::string& dst) { std::fclose(f); if (std::rename(tmp.c_str(), dst.c_str())) { std::fprintf(stderr, "[FATAL] rename %s\n", dst.c_str()); std::abort(); } }
 
-// ---- CPU-seconds accounting (for the per-component cost/efficiency breakdown) ----
-// thr_ns(): on-CPU time of the CALLING thread only (advances only while scheduled, so
-// blocked/idle time is excluded -> true CPU-seconds, contention-immune).
-// self_cpu_s(): kernel-accounted user+sys CPU for all in-process threads. With the input read
-// directly there are no child processes left to account for.
 static inline uint64_t thr_ns() { struct timespec ts; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec; }
 static double self_cpu_s()  { struct rusage r; getrusage(RUSAGE_SELF, &r);     return r.ru_utime.tv_sec + r.ru_utime.tv_usec / 1e6 + r.ru_stime.tv_sec + r.ru_stime.tv_usec / 1e6; }
 static double peak_gb()     { struct rusage r; getrusage(RUSAGE_SELF, &r);     return r.ru_maxrss / 1048576.0; }
@@ -51,19 +44,8 @@ static double rss_gb() {
 }
 
 namespace {
-using SEdge = std::pair<uint64_t, uint64_t>;        // an adjacency, keyed by its two signatures
+using SEdge = std::pair<uint64_t, uint64_t>;
 
-// ---- NO REFERENCE ----
-// The graph is built from reads alone. There is no reference index, so no strand vote and no repeat
-// merge: every read enters BOTH ways (its bytes as sequenced and their reverse complement) and every
-// kept core enters as extract() produced it. A locus therefore has a mirror twin in the other strand
-// family; the twins are two nodes with different sigs and no core in common, and pairing them is the
-// scorer's job, not the graph's. Repeats are ordinary nodes, told apart by COVERAGE.
-
-// Node identity = core_sig (MurmurHash64A over the core's homopolymer-compressed bytes), computed in
-// extract(). That sig is the only thing stored per node; no sequence is kept anywhere.
-
-// ---- stage timing (wall-clock; one Tic per stage entry) ----
 struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
     explicit Tic(const char* tg) : t0(std::chrono::steady_clock::now()), prev(t0), tag(tg) {}
     void mark(const char* lbl) {
@@ -75,43 +57,81 @@ struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
     }
 };
 
-// Per-edge key (prev_sig, cur_sig). Hash mixes the sig pair; not tagged
-// is_avalanching so unordered_dense re-mixes it (prev*golden+cur alone is not fully avalanched).
 struct EdgeHash { uint64_t operator()(const SEdge& e) const { return e.first * 0x9e3779b97f4a7c15ULL + e.second; } };
 using EdgeSet = ankerl::unordered_dense::set<SEdge, EdgeHash>;
 
-// Edges carry NO per-sample counts. Nothing downstream ever read them: `ecov` appears in no
-// expression in bubbles.cpp, junctions.cpp, call.cpp or pick.cpp, and both graph.bin readers stop
-// after `edst`. At S=21 that was 21 bytes of arena on every edge -- about 29% of the edge table and
-// 17% of peak memory -- kept alive for a consumer that does not exist. An edge is a fact about the
-// graph's shape, and its shape is all bubbles and junctions ask for.
+struct Prof {
+    uint64_t ins_ns = 0;
+    uint64_t seq_ns = 0;
+    uint64_t seq_smp = 0;
+    uint64_t seq_n = 0;
+    uint64_t seq_bp = 0;
+    uint64_t seq_rev = 0;
+    uint64_t edge_n = 0;
+    uint64_t wait_ns = 0;
+    uint64_t read_ns = 0;
+    uint64_t local_hw = 0;
+};
+Prof PROF;
+std::mutex PROF_MTX;
 
-// Counts saturate: no stage reads their magnitude, only zero / non-zero and the min_mult floor.
+uint64_t CLK_NS = 0;
+
+constexpr uint64_t SEQ_SAMPLE = 1024;
+
+void prof_merge(const Prof& p) {
+    std::lock_guard<std::mutex> lk(PROF_MTX);
+    PROF.ins_ns += p.ins_ns; PROF.seq_ns += p.seq_ns; PROF.seq_smp += p.seq_smp;
+    PROF.seq_n  += p.seq_n;  PROF.seq_bp += p.seq_bp; PROF.seq_rev += p.seq_rev;
+    PROF.edge_n += p.edge_n; PROF.wait_ns += p.wait_ns; PROF.read_ns += p.read_ns;
+    PROF.local_hw += p.local_hw;
+}
+
+uint64_t clock_cost_ns() {
+    uint64_t best = ~0ull;
+    for (int i = 0; i < 1000; i++) {
+        const uint64_t a = thr_ns(), b = thr_ns();
+        best = std::min(best, b - a);
+    }
+    return best;
+}
+
 static inline void bump(cov_t& c) { c += (c != COV_MAX); }
 
-// A surviving core's RAW bytes, 2-bit packed (A=00 C=01 G=10 T=11). bubbles needs a core's bytes to
-// measure an arm in bases and to derive its minimizers, and the only other place those bytes exist
-// is the reads -- which is why bubbles used to re-read every FASTQ: measured, 2.4 TB of scanning to
-// recover 49 MB of sequence. Carrying them in graph.bin costs ~3.7 GiB and turns that scan into a
-// 6 GiB read. The bytes and not the minimizers, so k and w stay parameters of bubbles.
-//
-// A core holding anything outside ACGT is stored verbatim instead, flagged in the high bit of `len`:
-// packing an N as an A would change the homopolymer compression and every minimizer downstream.
-struct SeqRef { uint64_t off = 0; uint32_t len = 0; };     // len == 0: nothing stored yet
+struct SeqRef { uint64_t off = 0; uint32_t len = 0; };
 
-static inline int b2(char c) { return c == 'A' ? 0 : c == 'C' ? 1 : c == 'G' ? 2 : c == 'T' ? 3 : -1; }
+static inline uint32_t b2(char c) {
+    const uint32_t v = ((uint32_t)(uint8_t)c >> 1) & 3;
+    return v ^ (v >> 1);
+}
 
-static SeqRef seq_put(std::vector<uint8_t>& a, const char* s, uint32_t n) {
+constexpr uint32_t ACGT_WORD = 0x54474341u;
+
+static inline uint32_t acgt_bad(uint8_t c, uint32_t v) {
+    return ((ACGT_WORD >> (v * 8)) & 0xff) ^ (uint32_t)(c & 0xdfu);
+}
+
+static SeqRef seq_put(std::vector<uint8_t>& a, const uint8_t* v, uint32_t n) {
     SeqRef r; r.off = a.size(); r.len = n;
-    for (uint32_t i = 0; i < n; i++) if (b2(s[i]) < 0) { r.len |= SEQ_RAW; break; }
-    if (r.len & SEQ_RAW) { a.insert(a.end(), s, s + n); return r; }
-    a.resize(r.off + (n + 3) / 4, 0);
-    for (uint32_t i = 0; i < n; i++) a[r.off + (i >> 2)] |= (uint8_t)(b2(s[i]) << (6 - 2 * (i & 3)));
+    a.resize(r.off + (n + 3) / 4);
+    uint8_t* o = a.data() + r.off;
+    uint32_t i = 0;
+    for (; i + 4 <= n; i += 4)
+        o[i >> 2] = (uint8_t)((v[i] << 6) | (v[i + 1] << 4) | (v[i + 2] << 2) | v[i + 3]);
+    if (i < n) {
+        uint32_t last = 0;
+        for (uint32_t j = i; j < n; j++) last |= (uint32_t)v[j] << (6 - 2 * (j & 3));
+        o[i >> 2] = (uint8_t)last;
+    }
     return r;
 }
 
-// Move an already-packed core between arenas: worker -> sample -> graph, each time only for cores
-// that have earned the space by clearing the gate.
+static SeqRef seq_put_raw(std::vector<uint8_t>& a, const uint8_t* v, uint32_t n) {
+    SeqRef r; r.off = a.size(); r.len = n | SEQ_RAW;
+    for (uint32_t i = 0; i < n; i++) a.push_back((uint8_t)"ACGT"[v[i]]);
+    return r;
+}
+
 static SeqRef seq_copy(std::vector<uint8_t>& dst, const uint8_t* src, SeqRef r) {
     SeqRef o; o.off = dst.size(); o.len = r.len;
     const uint64_t nb = seq_bytes(r.len);
@@ -122,9 +142,6 @@ static inline void addsat(cov_t& d, cov_t v) { const uint32_t t = (uint32_t)d + 
 
 static bool is_gz(const std::string& p) { return p.size() >= 3 && p.compare(p.size() - 3, 3, ".gz") == 0; }
 
-// A sample input is a directory of FASTQ/.svb shards (read in parallel) or a single file.
-// Compressed input is rejected, not decompressed: `.fastq.gz` still contains ".fastq", so without
-// this check it would be fopen'd as plain text and parsed into silent garbage.
 std::vector<std::string> collect_shards(const std::string& path) {
     struct stat st;
     if (stat(path.c_str(), &st) != 0) { std::fprintf(stderr, "[FATAL] no input %s\n", path.c_str()); std::abort(); }
@@ -147,9 +164,6 @@ std::vector<std::string> collect_shards(const std::string& path) {
     return v;
 }
 
-// Parallel sort: split, sort the pieces on `threads` threads, then merge pairwise in place. Only
-// <thread> and std::sort/std::inplace_merge, so it behaves the same on any compiler and any
-// architecture -- and the result is the same order std::sort would have produced.
 template <class T, class Cmp>
 void psort(std::vector<T>& v, int threads, Cmp cmp) {
     const size_t n = v.size();
@@ -174,25 +188,14 @@ void psort(std::vector<T>& v, int threads, Cmp cmp) {
 struct Shard { std::string path; int col; };
 struct Batch { std::vector<std::string> seqs; int col; };
 
-// Plain, uncompressed FASTQ. Decompression is not part of this program: measured on this box,
-// gunzipping the 80 GB whole-genome .gz costs ~10 min while an assembler reads the resulting
-// 188 GB plain FASTQ, parses it AND builds its graph in ~5 min. Paying that per run -- twice,
-// once per pass -- bought nothing, so the input contract is uncompressed FASTQ, full stop.
 static FILE* open_fastq(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) { std::fprintf(stderr, "[FATAL] fopen %s (input must be uncompressed FASTQ)\n", path.c_str()); std::abort(); }
     return f;
 }
 
-// ---- .svb compact reads (2-bit packed; snape uses only the ACGT sequence, no qual/name) ------
-// A sample is a dir of shard.<k>.svb; each file = 32B header then sequential records:
-//   len_tag u32 (low 31 = length L, bit31 = RAW); payload = RAW ? L ASCII bytes verbatim :
-//   ceil(L/4) packed bytes, 2 bits/base (A=00 C=01 G=10 T=11), base i in byte i/4, high 2 bits
-//   first. fopen'd (a real seekable file, NOT a pipe), so records fread exact-size -- no 1 MB
-//   block/carry juggling. Sequential -> pass 1 and pass 2 re-read in identical (shard,rid) order.
 static bool is_svb(const std::string& p) { return p.size() >= 4 && p.compare(p.size() - 4, 4, ".svb") == 0; }
 
-// The four ASCII bases each of the 256 packed bytes stands for, as one word.
 static const uint32_t* quad_table() {
     static uint32_t q[256];
     static const bool once = []{
@@ -215,26 +218,23 @@ static FILE* open_svb(const std::string& path) {
         std::fprintf(stderr, "[FATAL] bad .svb header %s\n", path.c_str()); std::abort(); }
     uint32_t ver; std::memcpy(&ver, hdr + 4, 4);
     if (ver != 1) { std::fprintf(stderr, "[FATAL] .svb version %u != 1 (%s)\n", ver, path.c_str()); std::abort(); }
-    return f;                                            // positioned at the first record
+    return f;
 }
 
-// Decode ONE record into `seq` (ACGT, or verbatim for a RAW record). false at clean EOF.
 static bool svb_next(FILE* f, std::string& seq) {
     uint32_t tag;
-    if (std::fread(&tag, 4, 1, f) != 1) return false;    // clean EOF
+    if (std::fread(&tag, 4, 1, f) != 1) return false;
     const uint32_t L = tag & 0x7fffffffu;
     seq.resize(L);
-    if (tag >> 31) {                                     // RAW escape (N / non-ACGT read)
+    if (tag >> 31) {
         if (L && std::fread(&seq[0], 1, L, f) != L) { std::fprintf(stderr, "[FATAL] .svb raw truncated\n"); std::abort(); }
-        for (char& c : seq) if (c >= 'a' && c <= 'z') c -= 32;   // the only .svb bytes not already ACGT
         return true;
     }
     const uint32_t nb = (L + 3) >> 2;
     static thread_local std::vector<uint8_t> pb;
     pb.resize(nb);
     if (nb && std::fread(pb.data(), 1, nb, f) != nb) { std::fprintf(stderr, "[FATAL] .svb packed truncated\n"); std::abort(); }
-    // One store per PACKED BYTE: QUAD[b] is the four bases byte b encodes, written as a 4-byte word,
-    // instead of a shift and a mask per base over 391 Gbp of reads.
+
     static const uint32_t* QUAD = quad_table();
     static const char LUT[4] = { 'A', 'C', 'G', 'T' };
     const uint32_t full = L >> 2;
@@ -244,20 +244,15 @@ static bool svb_next(FILE* f, std::string& seq) {
     return true;
 }
 
-}  // namespace   (the reader below is snape.h's, and the rest of this file is not)
+}
 
-// ---- the shared reads input (snape.h) ---------------------------------------------------------
-// The same two readers above, behind one interface, so bubbles and junctions can take a .svb
-// directly instead of being handed a FASTQ stream by a shell.
-// One line out of the block buffer, newline stripped. `s` points into the buffer, or into r.carry
-// when the line straddled a block boundary. False at EOF.
 static bool rd_line(Reads& r, const char*& s, size_t& n) {
     r.carry.clear();
     for (;;) {
         if (r.pos >= r.end) {
             r.end = std::fread(r.buf.data(), 1, r.buf.size(), r.f);
             r.pos = 0;
-            if (r.end == 0) {                                // EOF: a last line with no newline still counts
+            if (r.end == 0) {
                 if (r.carry.empty()) return false;
                 s = r.carry.data(); n = r.carry.size();
                 while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) n--;
@@ -293,17 +288,16 @@ bool reads_next(Reads& r, std::string& seq, std::string* name) {
         return true;
     }
     const char* p; size_t n;
-    if (!rd_line(r, p, n)) return false;                     // '@name'
+    if (!rd_line(r, p, n)) return false;
     if (name) {
         const char* sp = n > 1 ? (const char*)std::memchr(p + 1, ' ', n - 1) : nullptr;
         name->assign(r.tag);
         name->append(p + 1, sp ? (size_t)(sp - p - 1) : (n > 0 ? n - 1 : 0));
     }
-    if (!rd_line(r, p, n)) return false;                     // sequence
+    if (!rd_line(r, p, n)) return false;
     seq.assign(p, n);
-    for (char& c : seq) if (c >= 'a' && c <= 'z') c -= 32;
-    if (!rd_line(r, p, n)) return false;                     // '+'
-    if (!rd_line(r, p, n)) return false;                     // quality, discarded
+    if (!rd_line(r, p, n)) return false;
+    if (!rd_line(r, p, n)) return false;
     r.idx++;
     return true;
 }
@@ -312,12 +306,6 @@ void reads_close(Reads& r) { if (r.f) std::fclose(r.f); r.f = nullptr; }
 
 namespace {
 
-// ---- the build: ONE pass over the reads, exact maps -----------------------------------------
-// One pass and not two, because an exact map knows a signature's MULTIPLICITY and its NEIGHBOURS at
-// the same time. It costs holding adjacencies for error cores as well, since survivorship is not
-// decided until the end, but the pruning rule stays exact: an edge is kept iff both endpoints
-// survive. With homopolymer normalisation the map fits -- distinct is 78.7 M per colour and the two
-// colours share one record.
 using SigNodeMap = ankerl::unordered_dense::map<uint64_t, uint32_t>;
 struct NodeTab { SigNodeMap m; std::vector<cov_t> a; std::vector<SeqRef> r; std::vector<uint8_t> s; };
 
@@ -327,21 +315,52 @@ static inline cov_t* node_slot(NodeTab& t, uint64_t k, int S) {
     return t.a.data() + (size_t)r.first->second * (size_t)S;
 }
 
-// One sample's own tables: a count per signature, its bytes, and the bare existence of an adjacency.
-// No colour, because inside one sample there is only one colour.
 struct Core { cov_t n = 0; SeqRef s; };
 using SigCntMap = ankerl::unordered_dense::map<uint64_t, Core>;
 struct ShTab { SigCntMap m; std::vector<uint8_t> a; };
 struct Local { SigCntMap n; EdgeSet e; std::vector<uint8_t> a; };
 
-// One read -> its cores' counts AND its raw consecutive adjacencies, both strands, in a single walk.
-// Both strands come out of ONE extract2() call, so the read is homopolymer-compressed once instead
-// of twice and its reverse complement is never materialised. Cores within `margin` of either end of
-// their strand are dropped, exactly as the two-call version dropped them.
+constexpr int NSHARD = 64;
+
+void report_bytes(int col, const ShTab* psn, const EdgeSet* pse, const NodeTab* gnode,
+                  const EdgeSet* gedge) {
+    size_t pm = 0, pa = 0, pe = 0, gm = 0, ga = 0, gr = 0, gs = 0, ge = 0;
+    for (int sh = 0; sh < NSHARD; sh++) {
+        pm += psn[sh].m.values().capacity() * sizeof(std::pair<uint64_t, Core>) + psn[sh].m.bucket_count() * 8;
+        pa += psn[sh].a.capacity();
+        pe += pse[sh].values().capacity() * sizeof(SEdge) + pse[sh].bucket_count() * 8;
+        gm += gnode[sh].m.values().capacity() * sizeof(std::pair<uint64_t, uint32_t>) + gnode[sh].m.bucket_count() * 8;
+        ga += gnode[sh].a.capacity() * sizeof(cov_t);
+        gr += gnode[sh].r.capacity() * sizeof(SeqRef);
+        gs += gnode[sh].s.capacity();
+        ge += gedge[sh].values().capacity() * sizeof(SEdge) + gedge[sh].bucket_count() * 8;
+    }
+    const double G = 1073741824.0;
+    std::fprintf(stderr, "[bytes] sample %d, before merge: sample-map %.2f | sample-seq %.2f | "
+                 "sample-edges %.2f || graph-map %.2f | graph-cov %.2f | graph-seqref %.2f | "
+                 "graph-seq %.2f | graph-edges %.2f || sum %.2f GB, RSS %.2f GB\n",
+                 col, pm / G, pa / G, pe / G, gm / G, ga / G, gr / G, gs / G, ge / G,
+                 (pm + pa + pe + gm + ga + gr + gs + ge) / G, rss_gb());
+}
+
+void rss_poll(std::atomic<bool>* stop, std::string path, double* peak, double* peak_t) {
+    FILE* f = xopen(path + ".tmp", "w");
+    std::fprintf(f, "t_s\trss_gb\n");
+    const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    while (!stop->load()) {
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const double r = rss_gb();
+        std::fprintf(f, "%.2f\t%.3f\n", t, r);
+        if (r > *peak) { *peak = r; *peak_t = t; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    atomic_close(f, path + ".tmp", path);
+}
+
 void process_read_single(std::string& s, int level, int margin, Local& lo,
-                         uint64_t& cpu_ext, uint64_t& ncores, uint64_t& ov_s, uint64_t& ov_n) {
-    // Reads arrive upper-cased: the FASTQ reader does it as it parses, the .svb decoder emits ACGT
-    // and upper-cases the RAW records it does not decode.
+                         uint64_t& cpu_ext, uint64_t& ncores, uint64_t& ov_s, uint64_t& ov_n,
+                         Prof& pf) {
+
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
     int nf, nr; const uint64_t *stf, *enf, *sgf, *strv, *enr, *sgr;
@@ -349,52 +368,52 @@ void process_read_single(std::string& s, int level, int margin, Local& lo,
     extract2(s.data(), (int)len, level, &nf, &stf, &enf, &sgf, &nr, &strv, &enr, &sgr);
     cpu_ext += thr_ns() - te;
     const uint64_t mg = (uint64_t)margin;
-    // extract2 gives the reverse strand's cores in the REVERSE COMPLEMENT's own frame, and never
-    // materialises it -- that is the point of doing both strands from one compression. Storing a
-    // core's bytes needs the string those offsets index, so the reverse complement is built once per
-    // read, and only when a reverse-strand core actually has to be stored. It is a linear pass at
-    // ~0.3 ns/base against extract2's ~15, so it does not show up next to the parse.
-    static thread_local std::string cb;                 // the core's own bytes, built per stored core
+
+    static thread_local std::vector<uint8_t> cd;
     auto chain = [&](bool rev, int n, const uint64_t* st, const uint64_t* en, const uint64_t* sig) {
-        // Consecutive cores of one read overlap in that read's own bytes, so summing core lengths
-        // over an arm overcounts by (cores-1) x overlap. Measured here, where the read is in hand,
-        // and carried in the header: bubbles used to re-read every FASTQ to get this one number.
+
         for (int i = 0; i + 1 < n; i++) if (en[i] > st[i + 1]) { ov_s += en[i] - st[i + 1]; ov_n++; }
         uint64_t prev = 0; bool have = false;
         for (int i = 0; i < n; i++) {
             if (st[i] < mg || en[i] + mg > len) continue;
             ncores++;
             const auto r = lo.n.try_emplace(sig[i], Core{});
-            // The LAST core of a strand has no trustworthy `en`: extract's emit() reads one byte
-            // past the core, and for that one core it lands on whatever the buffer held before, so
-            // the span can even come out inverted. The count still goes in -- that stale `en` is
-            // what the margin test has always used -- but its BYTES are skipped, and at 18x another
-            // read carries the same core in its interior and supplies them.
+
             if (r.second && en[i] > st[i] && en[i] <= len) {
+                const bool smp = (pf.seq_n % SEQ_SAMPLE) == 0;
+                const uint64_t ts = smp ? thr_ns() : 0;
                 const uint32_t w = (uint32_t)(en[i] - st[i]);
-                cb.assign(s, (size_t)st[i], w);
-                // The reverse strand's cores are spans of the FORWARD read whose sequence is that
-                // span reverse-complemented -- that is the string whose compression was hashed.
-                if (rev) {
-                    for (uint32_t a = 0, b = w - 1; a < b; a++, b--) std::swap(cb[a], cb[b]);
-                    for (char& c : cb) c = c == 'A' ? 'T' : c == 'C' ? 'G' : c == 'G' ? 'C' : c == 'T' ? 'A' : c;
+
+                const char* src = s.data() + (rev ? len - en[i] : st[i]);
+                const uint32_t flip = rev ? 3u : 0u;
+                cd.resize(w);
+                uint32_t m = 0, bad = 0, prev = 4;
+                for (uint32_t x = 0; x < w; x++) {
+                    const uint8_t c = (uint8_t)src[rev ? w - 1 - x : x];
+                    const uint32_t v0 = b2((char)c);
+                    bad |= acgt_bad(c, v0);
+                    const uint32_t v = v0 ^ flip;
+                    cd[m] = (uint8_t)v;
+                    m += (v != prev);
+                    prev = v;
                 }
-                r.first->second.s = seq_put(lo.a, cb.data(), w);
+                r.first->second.s = bad ? seq_put_raw(lo.a, cd.data(), m)
+                                        : seq_put(lo.a, cd.data(), m);
+                if (smp) { pf.seq_ns += thr_ns() - ts; pf.seq_smp++; }
+                pf.seq_n++; pf.seq_bp += m; pf.seq_rev += rev;
             }
             bump(r.first->second.n);
-            // Every consecutive pair, survivor or not -- the mm gate fires when the sample ends.
-            if (have && prev != sig[i]) lo.e.insert(SEdge(prev, sig[i]));
+
+            if (have && prev != sig[i]) { lo.e.insert(SEdge(prev, sig[i])); pf.edge_n++; }
             prev = sig[i]; have = true;
         }
     };
+    const uint64_t ti = thr_ns();
     chain(false, nf, stf, enf, sgf);
     chain(true, nr, strv, enr, sgr);
+    pf.ins_ns += thr_ns() - ti;
 }
 
-// Survivor lookup. out_nodes is sorted by signature, so the top BITS bits of a signature index
-// straight into the run of the array that could hold it: one offset table of 2^BITS + 1 uint32s
-// (67 MB) replaces a 70 M-entry hash set (is this core alive?) and a 70 M-entry hash map (which node
-// id is it?), 2.4 GB between them, and answers both in one probe of about four entries.
 struct SigIndex {
     static constexpr int BITS = 24;
     std::vector<uint32_t> off;
@@ -405,23 +424,13 @@ struct SigIndex {
         for (const SigCount& c : nodes) off[(size_t)(c.sig >> (64 - BITS)) + 1]++;
         for (size_t i = 1; i < off.size(); i++) off[i] += off[i - 1];
     }
-    uint32_t find(uint64_t sig) const {                       // node id, or UINT32_MAX if dead
+    uint32_t find(uint64_t sig) const {
         const size_t b = (size_t)(sig >> (64 - BITS));
         for (uint32_t i = off[b], e = off[b + 1]; i < e; i++) if (v[i].sig == sig) return i;
         return UINT32_MAX;
     }
 };
 
-
-constexpr int NSHARD = 64;
-
-// One sample's reads -> that sample's own 64-sharded exact tables.
-//
-// ONE reader thread and threads-1 workers. Measured on this box, on a real 114 GiB read set: a
-// single reader does 1622 Mbp/s -- block read, line split and upper-case included -- while one core
-// of extract2() does 65 Mbp/s. One reader feeds about 25 workers, so the old `threads/2` reader cap
-// left half the machine copying bytes: at --threads 32 it ran 16 readers and 16 workers and the
-// process sat at 1650% CPU on a 32-core box.
 void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
                   ShTab* psn, EdgeSet* pse, std::mutex* nmtx, std::mutex* emtx,
                   std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
@@ -437,6 +446,7 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
     constexpr unsigned BLOCK = 1u << 20;
 
     auto reader = [&]() {
+        const uint64_t r0 = thr_ns();
         std::vector<char> buf(BLOCK);
         std::vector<std::string> batch; batch.reserve(BATCH);
         std::string carry;
@@ -463,10 +473,6 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
                         if (line_no == 1) {
                             if (carry.empty()) batch.emplace_back(start, n);
                             else { carry.append(start, n); batch.push_back(std::move(carry)); carry.clear(); }
-                            // Upper-case HERE, where a FASTQ sequence line is formed: a soft-masked
-                            // FASTQ would otherwise reach extract() as lower-case bytes, hpc() splits
-                            // at every case boundary and the cores come out with other signatures.
-                            for (char& c : batch.back()) if (c >= 'a' && c <= 'z') c -= 32;
                             shard_reads++;
                             if (batch.size() >= BATCH) push();
                         } else if (!carry.empty()) carry.clear();
@@ -481,24 +487,21 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
         }
         push();
         if (readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(qmtx); cv_empty.notify_all(); }
+        Prof rp; rp.read_ns = thr_ns() - r0; prof_merge(rp);
     };
 
     auto worker = [&]() {
         uint64_t ext = 0, emis = 0;
-        // How many entries a worker accumulates before merging into this sample's shard tables. It
-        // bounds a worker's own two tables AND its per-shard staging vectors, and it is a speed dial
-        // too: a bigger table dedupes more repeats before the locked, cache-missing merge sees them.
+
         const char* fe = std::getenv("SNAPE_FLUSH");
         const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 20);
         uint64_t ovs = 0, ovn = 0;
+        Prof pf;
         Local lo; lo.n.reserve(1u << 20); lo.e.reserve(1u << 20);
         std::vector<std::vector<std::pair<uint64_t, Core>>> bn(NSHARD);
         std::vector<std::vector<SEdge>> be(NSHARD);
         auto flush = [&]() {
-            // Time spent in the merge, lock included. graph went 31:27 -> 46:42 when it began
-            // carrying core sequence and only a sixth of that is the packing arithmetic; the
-            // untested suspect is seq_copy lengthening the per-shard critical section. This says
-            // whether that is where the time went, and costs one clock read per million entries.
+
             const uint64_t tf = thr_ns();
             for (auto& v : bn) v.clear();
             for (const auto& kv : lo.n) bn[kv.first & (NSHARD - 1)].push_back(kv);
@@ -508,8 +511,7 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
                 for (const auto& kv : bn[sh]) {
                     Core& e = psn[sh].m[kv.first];
                     addsat(e.n, kv.second.n);
-                    // The bytes are promoted the moment the count clears the gate, and never before:
-                    // half of a sample's distinct signatures are read errors and cost nothing here.
+
                     if (e.s.len == 0 && (uint32_t)e.n >= (uint32_t)min_mult)
                         e.s = seq_copy(psn[sh].a, lo.a.data(), kv.second.s);
                 }
@@ -529,15 +531,22 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
             std::vector<std::string> b;
             {
                 std::unique_lock<std::mutex> lk(qmtx);
+                const std::chrono::steady_clock::time_point w0 = std::chrono::steady_clock::now();
                 cv_empty.wait(lk, [&]{ return !q.empty() || readers_left.load() == 0; });
+                pf.wait_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now() - w0).count();
                 if (q.empty()) break;
                 b = std::move(q.front()); q.pop(); cv_full.notify_one();
             }
-            for (std::string& s : b) process_read_single(s, level, margin, lo, ext, emis, ovs, ovn);
+            for (std::string& s : b) process_read_single(s, level, margin, lo, ext, emis, ovs, ovn, pf);
+            const size_t lb = lo.n.values().capacity() * sizeof(std::pair<uint64_t, Core>) + lo.n.bucket_count() * 8
+                            + lo.e.values().capacity() * sizeof(SEdge) + lo.e.bucket_count() * 8 + lo.a.capacity();
+            pf.local_hw = std::max(pf.local_hw, lb);
             if (lo.n.size() >= FLUSH || lo.e.size() >= FLUSH) flush();
         }
         flush();
         emissions += emis; extract_ns += ext; ov_sum += ovs; ov_cnt += ovn;
+        prof_merge(pf);
     };
 
     { std::vector<std::thread> th;
@@ -553,38 +562,35 @@ static inline bool survives(const ShTab* psn, uint64_t sig, int min_mult) {
     return it != m.end() && (uint32_t)it->second.n >= (uint32_t)min_mult;
 }
 
-// The mm gate, applied to ONE sample on that sample's own exact counts, and the merge into the
-// S-plane graph. Two phases, because phase 2 reads every shard of `psn` while phase 1 only writes
-// its own: freeing inside phase 1 would race with phase 2's lookups.
 void merge_sample(ShTab* psn, EdgeSet* pse, NodeTab* gnode, EdgeSet* gedge,
-                  int col, int S, int min_mult, int threads, uint64_t& seen, uint64_t& kept) {
+                  int col, int S, int min_mult, int threads, uint64_t& seen, uint64_t& kept,
+                  uint64_t& one, uint64_t& two) {
     const int nt = std::max(1, threads);
-    std::atomic<uint64_t> nseen{0}, npass{0};
+    std::atomic<uint64_t> nseen{0}, npass{0}, n1{0}, n2{0};
     {
         std::atomic<int> next_sh{0};
         std::vector<std::thread> th;
         for (int i = 0; i < nt; i++) th.emplace_back([&]{
             for (int sh = next_sh.fetch_add(1); sh < NSHARD; sh = next_sh.fetch_add(1)) {
-                uint64_t a = 0, b = 0;
+                uint64_t a = 0, b = 0, c1 = 0, c2 = 0;
                 for (const auto& kv : psn[sh].m) {
                     a++;
-                    if ((uint32_t)kv.second.n < (uint32_t)min_mult) continue;  // read error in THIS sample
+                    c1 += (kv.second.n == 1); c2 += (kv.second.n == 2);
+                    if ((uint32_t)kv.second.n < (uint32_t)min_mult) continue;
                     b++;
                     node_slot(gnode[sh], kv.first, S)[col] = kv.second.n;
-                    // The first sample to promote a core donates its bytes; the rest are the same
-                    // 217 bases of the same locus, so the graph keeps one copy.
+
                     const uint32_t slot = gnode[sh].m.find(kv.first)->second;
                     if (gnode[sh].r[slot].len == 0)
                         gnode[sh].r[slot] = seq_copy(gnode[sh].s, psn[sh].a.data(), kv.second.s);
                 }
-                nseen += a; npass += b;
+                nseen += a; npass += b; n1 += c1; n2 += c2;
             }
         });
         for (auto& t : th) t.join();
     }
-    {   // An edge is kept iff BOTH ends cleared the gate in this sample: the pair was seen in this
-        // sample's reads, so this sample's counts are the ones entitled to decide it. The per-sample
-        // and the global edge tables shard on the same hash, so a thread only ever writes its own.
+    {
+
         std::atomic<int> next_sh{0};
         std::vector<std::thread> th;
         for (int i = 0; i < nt; i++) th.emplace_back([&]{
@@ -598,24 +604,9 @@ void merge_sample(ShTab* psn, EdgeSet* pse, NodeTab* gnode, EdgeSet* gedge,
     for (int sh = 0; sh < NSHARD; sh++) {
         SigCntMap().swap(psn[sh].m); std::vector<uint8_t>().swap(psn[sh].a); EdgeSet().swap(pse[sh]);
     }
-    seen = nseen.load(); kept = npass.load();
+    seen = nseen.load(); kept = npass.load(); one = n1.load(); two = n2.load();
 }
 
-// The build: ONE SAMPLE AT A TIME. Each sample's exact tables are gated at min_mult and merged into
-// the S-plane graph, then thrown away, so the merged map only ever holds signatures some sample saw
-// at least min_mult times.
-//
-// Gating after the merge -- which is what this used to do -- meant holding every sample's read
-// errors simultaneously, and a read error is seen once, so they are most of what a sample's table
-// contains. Measured at S=21 over 1.2 Tbp: RSS grew 3.72 GiB/min, linearly, never flattening, and
-// the kernel killed the process at 141 GiB before it had finished reading.
-//
-// What this changes in the RESULT: `cov[j] == 0` now means "sample j did not reach min_mult", not
-// "sample j never saw it". The somatic test reads plane 0, so somatic now means the normal did not
-// reach the threshold -- the same rule the tumour planes were always held to. At 18x a true germline
-// core has ~1e-6 chance of landing under three reads, so one or two normal reads at a somatic locus
-// is a read error, and vetoing the call on it was accepting one sample's noise as another's
-// evidence. The germline question is asked again, properly, on the normal's own alignment in `call`.
 void run_pool_single(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
                      int S, std::vector<SigCount>& out_nodes, std::vector<cov_t>& out_ncov,
                      std::vector<CEdge>& out_edges, std::vector<SeqRef>& out_sref,
@@ -631,19 +622,22 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
     for (int col = 0; col < S; col++) {
         std::vector<Shard> mine;
         for (const Shard& s : shards) if (s.col == col) mine.push_back(s);
-        uint64_t rd = 0, seen = 0, pass = 0;
+        uint64_t rd = 0, seen = 0, pass = 0, one = 0, two = 0;
         count_sample(mine, level, margin, threads, min_mult, psn, pse, nmtx, emtx, emissions,
                      extract_ns, ov_sum, ov_cnt, flush_ns, rd);
-        merge_sample(psn, pse, gnode, gedge, col, S, min_mult, threads, seen, pass);
+        report_bytes(col, psn, pse, gnode, gedge);
+        merge_sample(psn, pse, gnode, gedge, col, S, min_mult, threads, seen, pass, one, two);
         reads_per[col] = rd;
         distinct += seen; kept += pass;
         std::fprintf(stderr, "[graph1] sample %d/%d: %llu reads, %.3f M distinct -> %.3f M >= %d (%.1f%%)\n",
                      col + 1, S, (unsigned long long)rd, seen / 1e6, pass / 1e6, min_mult,
                      seen ? 100.0 * pass / seen : 0.0);
+        std::fprintf(stderr, "[graph1]   distinct seen once %.3f M (%.1f%%), twice %.3f M (%.1f%%) "
+                     "-- neither can reach min_mult=%d, and both are held to the end of the sample\n",
+                     one / 1e6, seen ? 100.0 * one / seen : 0.0,
+                     two / 1e6, seen ? 100.0 * two / seen : 0.0, min_mult);
     }
 
-    // Flatten. Every entry in gnode already cleared the gate in some sample, so there is no second
-    // gate to apply here -- only the id assignment.
     {
         std::vector<std::vector<SigCount>> part(NSHARD);
         std::vector<std::vector<cov_t>> pcov(NSHARD);
@@ -725,33 +719,8 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
                  out_seq.size() / 1073741824.0, ov_c ? (double)ov_s / (double)ov_c : 0.0);
 }
 
+}
 
-
-}  // namespace
-
-// ---- the stage: reads -> counted cores and adjacencies -> self-contained graph.bin ----
-// graph.bin v2 schema (little-endian throughout):
-//   char[4] "SNPG" | u32 version=4 | u32 S | u32 reserved | u64 ov_sum | u64 ov_cnt
-//   u64 K | u64 sig[K] | cov_t cov[S][K]
-//   u64 sbytes | u32 slen[K] | u8 seq[sbytes]
-//   u64 E | u32 esrc[E] | u32 edst[E]
-//
-//   slen[i]  the core's RAW length, high bit set when its bytes are stored verbatim rather than
-//            2-bit packed (a core holding an N). seq[] is those bytes, concatenated in node order.
-//   ov_*     the summed overlap of consecutive cores within a read, and how many pairs it came
-//            from. bubbles needs the mean to compare arms of different core counts, and used to
-//            re-read every FASTQ to measure it.
-//
-// v1 had NO magic and NO version -- it began with K -- so a v1 file and a v2 file were
-// indistinguishable except by size arithmetic, and `run` resumes on nothing but the presence of the
-// file. The header exists so that a stale graph in a work dir is an abort and not silent garbage.
-//
-//   sig[K]     MurmurHash64A over the core's homopolymer-compressed bytes = the node's identity.
-//   cov[s][i]  reads of sample s carrying node i. Plane 0 is ALWAYS the normal, planes 1..S-1 the
-//              tumour lines in sheet order. COLOUR IS STILL DERIVED, NEVER STORED: cov[0][i]==0 is
-//              somatic, and which lines carry it is which planes are non-zero.
-//   Nodes are SoA and so are edges, because v1's AoS edge record forced junctions.cpp to slurp the
-//   whole edge section as a flat u32 array with a hard-coded stride.
 void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
                      int level, int margin, int min_mult, int threads) {
     mkdir(dir.c_str(), 0755);
@@ -762,16 +731,16 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     std::fprintf(stderr, "[graph] %d samples (%zu shards), threads=%d min_mult=%d\n",
                  S, shards_all.size(), threads, min_mult);
     Tic tic("graph");
+    CLK_NS = clock_cost_ns();
+    std::atomic<bool> rss_stop{false};
+    double rss_peak = 0, rss_peak_t = 0;
+    std::thread rss_th(rss_poll, &rss_stop, dir + "/rss_trace.tsv", &rss_peak, &rss_peak_t);
 
-    // ---- per-phase CPU-second + wall accounting. wall via steady_clock; CPU via getrusage
-    // (SELF = all in-process threads incl. readers/workers/main). Snapshots taken at each phase
-    // boundary; deltas attribute cost to that phase. ----
     struct Snap { double wall, self, rss, peak; };
     const auto torig = std::chrono::steady_clock::now();
     auto snap = [&]() -> Snap { return { std::chrono::duration<double>(std::chrono::steady_clock::now() - torig).count(), self_cpu_s(), rss_gb(), peak_gb() }; };
     const Snap P0 = snap();
 
-    // ---- the build: ONE pass over the reads, exact maps, nodes and edges together ----
     std::vector<SigCount> nodes; std::vector<CEdge> ce;
     std::vector<cov_t> ncov; std::vector<uint64_t> nreads;
     std::vector<SeqRef> sref; std::vector<uint8_t> sbuf; uint64_t ov_s = 0, ov_c = 0;
@@ -782,22 +751,15 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     tic.mark("pool_both");
     std::fprintf(stderr, "[graph]   survivors=%lu\n", (unsigned long)K);
 
-    // ---- node sigs (node id = sig-sorted index; the sig IS the stored node identity now, colour is
-    // derived from ncov/tcov on demand and never materialised). The edges came back already
-    // resolved to node ids -- the survivor index did it with the same probe that tested liveness. ----
-    const Snap P2 = snap();          // nodes come back sig-sorted: SigIndex needs that inside the pool
+    const Snap P2 = snap();
 
     psort(ce, threads, [](const CEdge& x, const CEdge& y){ return x.src != y.src ? x.src < y.src : x.dst < y.dst; });
     const Snap P4 = snap();
     tic.mark("sort_edges");
 
-    // ---- write self-contained graph.bin v2 ----
-    // The count planes are GATHERED one at a time through the sorted nodes' slots, so only one plane
-    // (K * sizeof(cov_t)) is ever materialised on top of the arena -- at 21 samples the alternative,
-    // building the whole SoA block first, would hold a second 3.5 GB copy.
     const std::string gp = dir + "/graph.bin";
     FILE* fg = xopen(gp + ".tmp", "wb");
-    const uint32_t ver = 4, Sw = (uint32_t)S, resv = 0;
+    const uint32_t ver = 5, Sw = (uint32_t)S, resv = 0;
     wr(fg, "SNPG", 4); wr(fg, &ver, 4); wr(fg, &Sw, 4); wr(fg, &resv, 4);
     wr(fg, &ov_s, 8); wr(fg, &ov_c, 8);
     uint64_t Kw = K; wr(fg, &Kw, 8);
@@ -809,9 +771,7 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
         for (uint64_t i = 0; i < K; i++) plane[i] = ncov[(size_t)nodes[i].slot * (size_t)S + j];
         wr(fg, plane.data(), K * sizeof(cov_t));
     }
-    // Core sequence, in node order, WHILE `nodes` is still alive -- it is released just below, and
-    // gathering through its slots afterwards is what a first version of this did and segfaulted on.
-    // Written through a buffer: one fwrite per core would be K of them, and K is 68 million.
+
     { std::vector<uint32_t> sl(K);
       uint64_t tot = 0;
       for (uint64_t i = 0; i < K; i++) { sl[i] = sref[nodes[i].slot].len; tot += seq_bytes(sl[i]); }
@@ -842,11 +802,8 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     std::fprintf(stderr, "[graph] nodes=%lu edges=%lu S=%d -> %s/graph.bin\n",
                  (unsigned long)K, (unsigned long)E, S, dir.c_str());
 
-    // ---- per-component CPU-second + execution-efficiency table -------------------------------
-    // CPU = Δself (all in-process threads). wall = phase wall.
-    // efficiency = CPU / (ncpu * wall) = fraction of the box's cores the phase actually kept busy
-    // (1.0 = every core saturated for the whole phase; <1.0 = idle cores / serial sections).
-    cpu_set_t cs; CPU_ZERO(&cs);   // efficiency denominator = cores ACTUALLY allotted (taskset/affinity), not the box's total
+    rss_stop.store(true); rss_th.join();
+    cpu_set_t cs; CPU_ZERO(&cs);
     const double ncpu = (sched_getaffinity(0, sizeof(cs), &cs) == 0 && CPU_COUNT(&cs) > 0) ? (double)CPU_COUNT(&cs) : (double)sysconf(_SC_NPROCESSORS_ONLN);
     auto row = [&](const char* name, const Snap& lo, const Snap& hi) {
         const double wall = hi.wall - lo.wall, cpu = hi.self - lo.self;
@@ -861,4 +818,20 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     row("write",            P4, P5);
     row("TOTAL",            P0, P5);
     std::fprintf(stderr, "=====================================================================\n");
+
+    const double seq_net = (double)PROF.seq_ns - (double)(PROF.seq_smp * CLK_NS);
+    const double seq_est = PROF.seq_smp ? seq_net * (double)PROF.seq_n / (double)PROF.seq_smp : 0.0;
+    std::fprintf(stderr, "[prof] per-core bookkeeping  %9.1f CPU-s\n", PROF.ins_ns / 1e9);
+    std::fprintf(stderr, "[prof]   of which packing    %9.1f CPU-s (estimated from %llu of %llu blocks, "
+                 "%.2f Gbp packed, %.1f%% of them reverse-strand)\n",
+                 seq_est / 1e9, (unsigned long long)PROF.seq_smp, (unsigned long long)PROF.seq_n,
+                 PROF.seq_bp / 1e9, PROF.seq_n ? 100.0 * PROF.seq_rev / PROF.seq_n : 0.0);
+    std::fprintf(stderr, "[prof] worker-local tables    %9.2f GB (sum of per-worker high water) | "
+                 "clock pair %llu ns, subtracted\n",
+                 PROF.local_hw / 1073741824.0, (unsigned long long)CLK_NS);
+    std::fprintf(stderr, "[prof] edge insertions       %9.3f G\n", PROF.edge_n / 1e9);
+    std::fprintf(stderr, "[prof] reader thread CPU     %9.1f s | workers blocked on empty queue %9.1f s (wall, summed)\n",
+                 PROF.read_ns / 1e9, PROF.wait_ns / 1e9);
+    std::fprintf(stderr, "[prof] RSS trace peak %.2f GB at t=%.1fs -> %s/rss_trace.tsv\n",
+                 rss_peak, rss_peak_t, dir.c_str());
 }

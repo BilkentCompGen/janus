@@ -1,6 +1,3 @@
-// snape dump: one .svb file (argv[1]) -> FASTQ on stdout, for round-trip verification/debug.
-// Header + quality are synthetic (snape ignores both); only the sequence is meaningful.
-// Format matches src/graph.cpp open_svb/svb_next and src/svb_pack.cpp.
 #include "svb.h"
 
 #include <cstdint>

@@ -9,8 +9,6 @@ namespace {
 
 void die(const std::string& m) { std::fprintf(stderr, "[FATAL] samples: %s\n", m.c_str()); std::abort(); }
 
-// Split on tabs or runs of spaces, so a sheet lined up by hand parses like one a script wrote.
-// \r is a field terminator too: a sheet saved on Windows must not name a sample "T01\r".
 size_t fields(char* line, char* out[3]) {
     size_t n = 0;
     for (char* p = line; *p && n < 3;) {
@@ -23,7 +21,6 @@ size_t fields(char* line, char* out[3]) {
     return n;
 }
 
-// The CLI boundary, and the only place in snape that validates anything (CODE_STYLE rule 6).
 void check(std::vector<Sample>& s) {
     if (s.size() < 2) die("need one normal and at least one tumor row");
     if (s.size() > 64) die("at most 64 samples: the per-chunk carriage mask is 64-bit");
@@ -32,8 +29,7 @@ void check(std::vector<Sample>& s) {
     if (nn != 1) die("need exactly one normal row, found " + std::to_string(nn));
     for (size_t i = 0; i < s.size(); i++) {
         if (s[i].name.empty()) die("empty sample name");
-        // The name is embedded in a read name, hence in a contig name, hence in the VCF's CTG= value,
-        // which pick.cpp reads back by stopping at ';' or a tab. '|' is our own read-name separator.
+
         if (s[i].name.find_first_of(";|/ \t") != std::string::npos)
             die("sample name may not contain ; | / space or tab: " + s[i].name);
         for (size_t j = 0; j < i; j++)
@@ -42,7 +38,7 @@ void check(std::vector<Sample>& s) {
     }
 }
 
-}  // namespace
+}
 
 std::vector<Sample> samples_read(const std::string& tsv) {
     FILE* f = std::fopen(tsv.c_str(), "r");
@@ -55,7 +51,7 @@ std::vector<Sample> samples_read(const std::string& tsv) {
         char* c[3];
         if (buf[0] == '#') continue;
         const size_t nf = fields(buf, c);
-        if (nf == 0) continue;                     // blank line
+        if (nf == 0) continue;
         if (nf != 3) die("three columns required (name role path), got " + std::to_string(nf));
         if (!hdr) {
             hdr = true;
@@ -71,7 +67,7 @@ std::vector<Sample> samples_read(const std::string& tsv) {
     std::fclose(f);
     check(raw);
 
-    std::vector<Sample> out;                       // normal first, tumours in sheet order
+    std::vector<Sample> out;
     for (const Sample& x : raw) if (x.normal) out.push_back(x);
     for (const Sample& x : raw) if (!x.normal) out.push_back(x);
     std::fprintf(stderr, "[samples] %s: 1 normal + %zu tumor\n", tsv.c_str(), out.size() - 1);

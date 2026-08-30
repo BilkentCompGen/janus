@@ -1,21 +1,3 @@
-// snape: 2-colour LCP-core graph built FROM READS (normal vs tumour reads), then the somatic material
-// carved out of those reads as junction contigs. READS ONLY -- no assembly, and no reference until
-// the contigs are handed to an aligner.
-//
-//   snape run       <normal> <tumour> <ref.fa> <dir>   THE PIPELINE, end to end
-//
-//   snape graph     <normal> <tumour> <dir>      reads           -> dir/graph.bin
-//   snape bubbles   <graph.bin> <normal> <tumour> graph + reads  -> dir/drop.sigs (sub-SV cores)
-//   snape junctions <graph.bin> <reads> <out.fa> graph + reads   -> junction contigs
-//   snape call      <ctg.bam> <normal.bam|-> <out.vcf> aligned contigs -> breakpoints
-//   snape pick      <ctg.fa> <calls.vcf> <normal> <out.fq> the normal reads worth aligning
-//   snape pack      <out.svb>                    FASTQ (stdin)   -> 2-bit .svb
-//   snape dump      <in.svb>                     .svb            -> FASTQ (stdout)
-//
-// Every stage takes .svb or uncompressed FASTQ, so the pipeline needs no shell to convert between
-// them. The only outside programs are the aligner and samtools, which snape is not and does not
-// reimplement; `run` invokes them and every default it passes is the one measured in
-// docs/RESULTS.md.
 #include "bubbles.h"
 #include "call.h"
 #include "graph.h"
@@ -57,27 +39,6 @@ static void usage() {
         "  snape dump      <in.svb> > reads.fastq\n");
 }
 
-// ---- `run`: the pipeline ---------------------------------------------------------------------
-//
-// Each stage is skipped when its output is already there, so a kill and a restart pick up where this
-// left off. Two of them are the aligner and samtools; the rest is snape.
-//
-//   graph.bin        the 2-colour core graph, from both samples' reads
-//   drop.sigs        the somatic cores that are sub-SV edits and must never become a contig
-//   ctg.fa           one junction contig per somatic chunk per read, 50 cores of anchor each side
-//   ctg.bam          those contigs against the reference
-//   candidates.vcf   `call` with no normal: the loci the germline question will be asked about
-//   normal_at_       the normal reads sharing cores with those candidates' germline anchors --
-//     candidates       1.56% of the sample on hcc1954
-//   normal.bam       ONLY those, against the reference
-//   calls.vcf        `call` again, now able to ask the normal at each locus
-//
-// The normal is not aligned whole. That question removes 552 false calls on hcc1954 and needs full
-// depth to make (3x leaves 290 false calls, 5.5x 172, 11x 136, 44x 116) -- but it is only ever asked
-// at the candidate loci, and the graph can say which normal reads cover those. Measured: 177k picked
-// reads give 0.887/0.858 against 0.891/0.858 for the whole 11.3M-read normal, in eleven and a half
-// minutes of alignment instead of two hours.
-
 static int sh(const std::string& cmd) {
     std::fprintf(stderr, "[run] $ %s\n", cmd.c_str());
     const int rc = std::system(cmd.c_str());
@@ -95,8 +56,6 @@ static std::string self_path() {
 
 static bool is_svb(const std::string& p) { return p.size() >= 4 && p.compare(p.size() - 4, 4, ".svb") == 0; }
 
-// minimap2 cannot read .svb, and it is the only thing in the pipeline that cannot, so this is where
-// the conversion happens -- streamed, never written out.
 static std::string as_fastq(const std::string& reads, const std::string& self) {
     return is_svb(reads) ? "'" + self + "' dump '" + reads + "' | " : std::string();
 }
@@ -110,9 +69,6 @@ static std::string align(const std::string& reads, const std::string& ref, const
            " | samtools sort -@ " + std::to_string(st) + " -m 3G -T '" + tmp + "' -o '" + out + "' -";
 }
 
-// minimap2 | samtools sort: samtools can exit 0 on a truncated stream, so the sorted BAM is
-// written under .tmp, checked for its BGZF end-of-file marker, and only then given its real name.
-// A killed or broken run therefore resumes at this line instead of past it.
 static int align_checked(const std::string& reads, const std::string& ref, const std::string& bam,
                          const std::string& tmp, int threads, const std::string& self, const std::string& T) {
     if (sh(align(reads, ref, bam + ".tmp", tmp, threads, self))) return 1;
@@ -129,12 +85,8 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
     const std::string self = self_path();
     const std::string normal = smp[0].path;
     const std::string graph = dir + "/graph.bin", drop = dir + "/drop.sigs";
-    const std::string ctg = dir + "/ctg." + smp.back().name + ".fa";   // the LAST line's contigs:
-                                                                       // junctions writes them in
-                                                                       // sheet order, so this one
-                                                                       // existing means all do
-    // The two lists `call` and `pick` take: one contig FASTA and one contig BAM per tumour line, in
-    // sheet order. `call` needs the names as well -- they become the VCF's sample columns.
+    const std::string ctg = dir + "/ctg." + smp.back().name + ".fa";
+
     std::string ctg_fa, ctg_bam;
     for (size_t i = 1; i < smp.size(); i++) {
         if (i > 1) { ctg_fa += ','; ctg_bam += ','; }
@@ -162,8 +114,6 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
         if (int rc = cmd_junctions((int)v.size(), v.data())) return rc;
     }
 
-    // One alignment per tumour line, independent -- the shared graph already made the chunk set
-    // common, so nothing here needs to know about the other lines. Each is skipped on its own.
     for (size_t i = 1; i < smp.size(); i++) {
         const std::string bam = dir + "/ctg." + smp[i].name + ".bam";
         if (exists(bam)) { std::fprintf(stderr, "[run] atlandi align %s: %s var\n", smp[i].name.c_str(), bam.c_str()); continue; }
@@ -171,10 +121,6 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
                           threads, self, T)) return 1;
     }
 
-    // The germline check needs the normal AT the candidate loci and nowhere else, so the candidates
-    // are made first, without it, and they are what says which normal reads to align. Their support
-    // floor is ONE BELOW the reporting floor on purpose: a call sitting at the boundary still gets
-    // its normal reads aligned, and a locus too many costs alignment, never precision.
     if (exists(cand)) std::fprintf(stderr, "[run] atlandi aday call: %s var\n", cand.c_str());
     else {
         std::vector<std::string> a{"call", ctg_bam, "-", cand, "10", "0", "50", "50",
@@ -211,8 +157,6 @@ int main(int argc, char** argv) {
     if (argc < 2) { usage(); return 2; }
     const std::string cmd = argv[1];
 
-    // These take their arguments positionally, with no --flags to strip, so they are dispatched
-    // before the option parser runs. junctions needs the LCP alphabet; pack/dump do not.
     if (cmd == "junctions") { LCP_INIT(); return cmd_junctions(argc - 1, argv + 1); }
     if (cmd == "bubbles")   { LCP_INIT(); return cmd_bubbles(argc - 1, argv + 1); }
     if (cmd == "call")      return cmd_call(argc - 1, argv + 1);

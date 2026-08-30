@@ -1,10 +1,5 @@
-// snape pack: FASTQ (stdin) -> one .svb file (argv[1]). 2-bit packs pure-ACGT reads
-// (A=00 C=01 G=10 T=11, base i in byte i/4, high 2 bits first); RAW-escapes any read
-// containing a non-ACGT base (e.g. N) so packing is lossless. snape reads .svb natively.
-// Streaming, O(1) memory; only the sequence line of each FASTQ record is kept.
-// Format matches src/graph.cpp open_svb/svb_next.
 #ifndef _GNU_SOURCE
-#define _GNU_SOURCE 1          // getline
+#define _GNU_SOURCE 1
 #endif
 #include "svb.h"
 
@@ -21,7 +16,7 @@ static inline int code(char c) {
         case 'G': case 'g': return 2;
         case 'T': case 't': return 3;
     }
-    return -1;                 // non-ACGT -> RAW escape
+    return -1;
 }
 
 int cmd_pack(int argc, char** argv) {
@@ -32,13 +27,13 @@ int cmd_pack(int argc, char** argv) {
     char hdr[32] = {0};
     std::memcpy(hdr, "SVB1", 4);
     uint32_t ver = 1; std::memcpy(hdr + 4, &ver, 4);
-    std::fwrite(hdr, 1, 32, out);                     // placeholder counts; patched at EOF
+    std::fwrite(hdr, 1, 32, out);
 
     uint64_t nreads = 0, total = 0;
     char* line = nullptr; size_t cap = 0; ssize_t got; int ln = 0;
     std::vector<uint8_t> pb;
     while ((got = getline(&line, &cap, stdin)) != -1) {
-        if (ln == 1) {                                // FASTQ sequence line
+        if (ln == 1) {
             size_t L = (size_t)got;
             while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) L--;
             bool raw = false;
