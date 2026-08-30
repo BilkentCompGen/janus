@@ -128,7 +128,7 @@ void emit(Scratch& s, const struct core* cores, int n, const std::string& h,
         const uint64_t a = cores[i].start, b = cores[i].end + 1;
         s.sig[i] = core_sig(h.data() + a, (int)(b - a));
         s.st[i] = offset + map[a];
-        s.en[i] = offset + map[b];
+        s.en[i] = offset + map[b < map.size() ? b : map.size() - 1];
     }
 }
 

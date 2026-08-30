@@ -186,7 +186,7 @@ void psort(std::vector<T>& v, int threads, Cmp cmp) {
 }
 
 struct Shard { std::string path; int col; };
-struct Batch { std::vector<std::string> seqs; int col; };
+struct Batch { std::vector<std::string> seqs; int col = 0; };
 
 static FILE* open_fastq(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -307,40 +307,46 @@ void reads_close(Reads& r) { if (r.f) std::fclose(r.f); r.f = nullptr; }
 namespace {
 
 using SigNodeMap = ankerl::unordered_dense::map<uint64_t, uint32_t>;
-struct NodeTab { SigNodeMap m; std::vector<cov_t> a; std::vector<SeqRef> r; std::vector<uint8_t> s; };
+struct NodeTab { SigNodeMap m; std::vector<cov_t> a; };
 
 static inline cov_t* node_slot(NodeTab& t, uint64_t k, int S) {
     const auto r = t.m.try_emplace(k, (uint32_t)(t.a.size() / (size_t)S));
-    if (r.second) { t.a.resize(t.a.size() + (size_t)S, 0); t.r.emplace_back(); }
+    if (r.second) t.a.resize(t.a.size() + (size_t)S, 0);
     return t.a.data() + (size_t)r.first->second * (size_t)S;
 }
 
-struct Core { cov_t n = 0; SeqRef s; };
-using SigCntMap = ankerl::unordered_dense::map<uint64_t, Core>;
-struct ShTab { SigCntMap m; std::vector<uint8_t> a; };
-struct Local { SigCntMap n; EdgeSet e; std::vector<uint8_t> a; };
+using SigCntMap = ankerl::unordered_dense::map<uint64_t, cov_t>;
+struct ShTab { SigCntMap m; };
+using EdgeKeySet = ankerl::unordered_dense::set<uint64_t>;
 
 constexpr int NSHARD = 64;
 
-void report_bytes(int col, const ShTab* psn, const EdgeSet* pse, const NodeTab* gnode,
-                  const EdgeSet* gedge) {
-    size_t pm = 0, pa = 0, pe = 0, gm = 0, ga = 0, gr = 0, gs = 0, ge = 0;
+
+void report_bytes_a(int col, const ShTab* psn, const NodeTab* gnode) {
+    size_t pm = 0, gm = 0, ga = 0;
     for (int sh = 0; sh < NSHARD; sh++) {
-        pm += psn[sh].m.values().capacity() * sizeof(std::pair<uint64_t, Core>) + psn[sh].m.bucket_count() * 8;
-        pa += psn[sh].a.capacity();
-        pe += pse[sh].values().capacity() * sizeof(SEdge) + pse[sh].bucket_count() * 8;
+        pm += psn[sh].m.values().capacity() * sizeof(std::pair<uint64_t, cov_t>) + psn[sh].m.bucket_count() * 8;
         gm += gnode[sh].m.values().capacity() * sizeof(std::pair<uint64_t, uint32_t>) + gnode[sh].m.bucket_count() * 8;
         ga += gnode[sh].a.capacity() * sizeof(cov_t);
-        gr += gnode[sh].r.capacity() * sizeof(SeqRef);
-        gs += gnode[sh].s.capacity();
-        ge += gedge[sh].values().capacity() * sizeof(SEdge) + gedge[sh].bucket_count() * 8;
     }
     const double G = 1073741824.0;
-    std::fprintf(stderr, "[bytes] sample %d, before merge: sample-map %.2f | sample-seq %.2f | "
-                 "sample-edges %.2f || graph-map %.2f | graph-cov %.2f | graph-seqref %.2f | "
-                 "graph-seq %.2f | graph-edges %.2f || sum %.2f GB, RSS %.2f GB\n",
-                 col, pm / G, pa / G, pe / G, gm / G, ga / G, gr / G, gs / G, ge / G,
-                 (pm + pa + pe + gm + ga + gr + gs + ge) / G, rss_gb());
+    std::fprintf(stderr, "[bytes] A sample %d, before merge: sample-map %.2f || graph-map %.2f | "
+                 "graph-cov %.2f || sum %.2f GB, RSS %.2f GB\n",
+                 col, pm / G, gm / G, ga / G, (pm + gm + ga) / G, rss_gb());
+}
+
+void report_bytes_b(const EdgeKeySet* ge, const std::vector<uint8_t>* sq, size_t idx_bytes,
+                    size_t cov_bytes, size_t sref_bytes) {
+    size_t e = 0, s = 0;
+    for (int sh = 0; sh < NSHARD; sh++) {
+        e += ge[sh].values().capacity() * 8 + ge[sh].bucket_count() * 8;
+        s += sq[sh].capacity();
+    }
+    const double G = 1073741824.0;
+    std::fprintf(stderr, "[bytes] B: survivor-index %.2f | graph-cov %.2f | seqref %.2f | "
+                 "edges %.2f | seq %.2f || sum %.2f GB, RSS %.2f GB\n",
+                 idx_bytes / G, cov_bytes / G, sref_bytes / G, e / G, s / G,
+                 (idx_bytes + cov_bytes + sref_bytes + e + s) / G, rss_gb());
 }
 
 void rss_poll(std::atomic<bool>* stop, std::string path, double* peak, double* peak_t) {
@@ -357,10 +363,8 @@ void rss_poll(std::atomic<bool>* stop, std::string path, double* peak, double* p
     atomic_close(f, path + ".tmp", path);
 }
 
-void process_read_single(std::string& s, int level, int margin, Local& lo,
-                         uint64_t& cpu_ext, uint64_t& ncores, uint64_t& ov_s, uint64_t& ov_n,
-                         Prof& pf) {
-
+void count_read(std::string& s, int level, int margin, SigCntMap& lo,
+                uint64_t& cpu_ext, uint64_t& ncores, uint64_t& ov_s, uint64_t& ov_n, Prof& pf) {
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
     int nf, nr; const uint64_t *stf, *enf, *sgf, *strv, *enr, *sgr;
@@ -368,49 +372,17 @@ void process_read_single(std::string& s, int level, int margin, Local& lo,
     extract2(s.data(), (int)len, level, &nf, &stf, &enf, &sgf, &nr, &strv, &enr, &sgr);
     cpu_ext += thr_ns() - te;
     const uint64_t mg = (uint64_t)margin;
-
-    static thread_local std::vector<uint8_t> cd;
-    auto chain = [&](bool rev, int n, const uint64_t* st, const uint64_t* en, const uint64_t* sig) {
-
+    auto chain = [&](int n, const uint64_t* st, const uint64_t* en, const uint64_t* sig) {
         for (int i = 0; i + 1 < n; i++) if (en[i] > st[i + 1]) { ov_s += en[i] - st[i + 1]; ov_n++; }
-        uint64_t prev = 0; bool have = false;
         for (int i = 0; i < n; i++) {
             if (st[i] < mg || en[i] + mg > len) continue;
             ncores++;
-            const auto r = lo.n.try_emplace(sig[i], Core{});
-
-            if (r.second && en[i] > st[i] && en[i] <= len) {
-                const bool smp = (pf.seq_n % SEQ_SAMPLE) == 0;
-                const uint64_t ts = smp ? thr_ns() : 0;
-                const uint32_t w = (uint32_t)(en[i] - st[i]);
-
-                const char* src = s.data() + (rev ? len - en[i] : st[i]);
-                const uint32_t flip = rev ? 3u : 0u;
-                cd.resize(w);
-                uint32_t m = 0, bad = 0, prev = 4;
-                for (uint32_t x = 0; x < w; x++) {
-                    const uint8_t c = (uint8_t)src[rev ? w - 1 - x : x];
-                    const uint32_t v0 = b2((char)c);
-                    bad |= acgt_bad(c, v0);
-                    const uint32_t v = v0 ^ flip;
-                    cd[m] = (uint8_t)v;
-                    m += (v != prev);
-                    prev = v;
-                }
-                r.first->second.s = bad ? seq_put_raw(lo.a, cd.data(), m)
-                                        : seq_put(lo.a, cd.data(), m);
-                if (smp) { pf.seq_ns += thr_ns() - ts; pf.seq_smp++; }
-                pf.seq_n++; pf.seq_bp += m; pf.seq_rev += rev;
-            }
-            bump(r.first->second.n);
-
-            if (have && prev != sig[i]) { lo.e.insert(SEdge(prev, sig[i])); pf.edge_n++; }
-            prev = sig[i]; have = true;
+            bump(lo[sig[i]]);
         }
     };
     const uint64_t ti = thr_ns();
-    chain(false, nf, stf, enf, sgf);
-    chain(true, nr, strv, enr, sgr);
+    chain(nf, stf, enf, sgf);
+    chain(nr, strv, enr, sgr);
     pf.ins_ns += thr_ns() - ti;
 }
 
@@ -429,120 +401,190 @@ struct SigIndex {
         for (uint32_t i = off[b], e = off[b + 1]; i < e; i++) if (v[i].sig == sig) return i;
         return UINT32_MAX;
     }
+    size_t bytes() const { return off.capacity() * 4; }
 };
 
-void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
-                  ShTab* psn, EdgeSet* pse, std::mutex* nmtx, std::mutex* emtx,
+struct FillCtx {
+    const SigIndex* idx = nullptr;
+    const std::vector<cov_t>* cov = nullptr;
+    std::vector<std::atomic<uint8_t>>* have = nullptr;
+    std::vector<SeqRef>* sref = nullptr;
+    int S = 0;
+};
+
+struct LocalB {
+    EdgeKeySet e;
+    std::vector<uint8_t> a;
+    std::vector<std::pair<uint32_t, SeqRef>> put;
+};
+
+void fill_read(std::string& s, int level, int margin, int col, const FillCtx& cx, LocalB& lo,
+               uint64_t& cpu_ext, uint64_t& ncores, Prof& pf) {
+    const uint64_t len = s.size();
+    if (len < (uint64_t)(2 * margin + 4)) return;
+    int nf, nr; const uint64_t *stf, *enf, *sgf, *strv, *enr, *sgr;
+    const uint64_t te = thr_ns();
+    extract2(s.data(), (int)len, level, &nf, &stf, &enf, &sgf, &nr, &strv, &enr, &sgr);
+    cpu_ext += thr_ns() - te;
+    const uint64_t mg = (uint64_t)margin;
+    const int S = cx.S;
+    const cov_t* cov = cx.cov->data();
+
+    static thread_local std::vector<uint8_t> cd;
+    auto chain = [&](bool rev, int n, const uint64_t* st, const uint64_t* en, const uint64_t* sig) {
+        uint32_t prev = UINT32_MAX; bool have_prev = false; uint64_t prev_sig = 0;
+        for (int i = 0; i < n; i++) {
+            if (st[i] < mg || en[i] + mg > len) continue;
+            ncores++;
+            const uint32_t node = cx.idx->find(sig[i]);
+
+            if (node != UINT32_MAX && en[i] > st[i] && en[i] <= len &&
+                (*cx.have)[node].load(std::memory_order_relaxed) == 0 &&
+                (*cx.have)[node].exchange(1, std::memory_order_relaxed) == 0) {
+                const bool smp = (pf.seq_n % SEQ_SAMPLE) == 0;
+                const uint64_t ts = smp ? thr_ns() : 0;
+                const uint32_t w = (uint32_t)(en[i] - st[i]);
+                const char* src = s.data() + (rev ? len - en[i] : st[i]);
+                const uint32_t flip = rev ? 3u : 0u;
+                cd.resize(w);
+                uint32_t m = 0, bad = 0, pv = 4;
+                for (uint32_t x = 0; x < w; x++) {
+                    const uint8_t c = (uint8_t)src[rev ? w - 1 - x : x];
+                    const uint32_t v0 = b2((char)c);
+                    bad |= acgt_bad(c, v0);
+                    const uint32_t v = v0 ^ flip;
+                    cd[m] = (uint8_t)v;
+                    m += (v != pv);
+                    pv = v;
+                }
+                lo.put.emplace_back(node, bad ? seq_put_raw(lo.a, cd.data(), m)
+                                              : seq_put(lo.a, cd.data(), m));
+                if (smp) { pf.seq_ns += thr_ns() - ts; pf.seq_smp++; }
+                pf.seq_n++; pf.seq_bp += m; pf.seq_rev += rev;
+            }
+
+            if (have_prev && prev_sig != sig[i] && prev != UINT32_MAX && node != UINT32_MAX &&
+                prev != node && cov[(size_t)prev * S + col] != 0 && cov[(size_t)node * S + col] != 0) {
+                lo.e.insert(((uint64_t)prev << 32) | (uint64_t)node);
+                pf.edge_n++;
+            }
+            prev = node; prev_sig = sig[i]; have_prev = true;
+        }
+    };
+    const uint64_t ti = thr_ns();
+    chain(false, nf, stf, enf, sgf);
+    chain(true, nr, strv, enr, sgr);
+    pf.ins_ns += thr_ns() - ti;
+}
+
+struct Feed {
+    std::mutex qmtx;
+    std::condition_variable cv_full, cv_empty;
+    std::queue<Batch> q;
+    std::atomic<int> readers_left{1};
+    std::atomic<size_t> next{0};
+    std::vector<uint64_t> reads_per;
+};
+
+void read_shards(const std::vector<Shard>& shards, Feed& fd, size_t q_cap, size_t batch_n) {
+    const uint64_t r0 = thr_ns();
+    constexpr unsigned BLOCK = 1u << 20;
+    std::vector<char> buf(BLOCK);
+    Batch batch; batch.seqs.reserve(batch_n);
+    std::string carry;
+    std::vector<uint64_t> mine(fd.reads_per.size(), 0);
+    auto push = [&]() {
+        if (batch.seqs.empty()) return;
+        std::unique_lock<std::mutex> lk(fd.qmtx);
+        fd.cv_full.wait(lk, [&]{ return fd.q.size() < q_cap; });
+        fd.q.push(std::move(batch)); fd.cv_empty.notify_one();
+        batch.seqs.clear(); batch.seqs.reserve(batch_n);
+    };
+    size_t si; std::string svseq;
+    while ((si = fd.next.fetch_add(1)) < shards.size()) {
+        const int col = shards[si].col;
+        if (!batch.seqs.empty() && batch.col != col) push();
+        batch.col = col;
+        const bool svb = is_svb(shards[si].path);
+        FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
+        if (svb) {
+            while (svb_next(f, svseq)) {
+                mine[col]++; batch.seqs.emplace_back(std::move(svseq));
+                if (batch.seqs.size() >= batch_n) push();
+            }
+        } else {
+            int line_no = 0; carry.clear(); int got;
+            while ((got = (int)std::fread(buf.data(), 1, BLOCK, f)) > 0) {
+                const char* base = buf.data(); const char* end = base + got; const char* start = base;
+                for (const char* p = base; p < end; p++) if (*p == '\n') {
+                    const size_t n = (size_t)(p - start);
+                    if (line_no == 1) {
+                        if (carry.empty()) batch.seqs.emplace_back(start, n);
+                        else { carry.append(start, n); batch.seqs.push_back(std::move(carry)); carry.clear(); }
+                        mine[col]++;
+                        if (batch.seqs.size() >= batch_n) push();
+                    } else if (!carry.empty()) carry.clear();
+                    line_no = (line_no + 1) & 3; start = p + 1;
+                }
+                if (start < end && line_no == 1) carry.append(start, end - start);
+            }
+        }
+        std::fclose(f);
+        push();
+    }
+    push();
+    { std::lock_guard<std::mutex> lk(fd.qmtx);
+      for (size_t i = 0; i < mine.size(); i++) fd.reads_per[i] += mine[i]; }
+    if (fd.readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(fd.qmtx); fd.cv_empty.notify_all(); }
+    Prof rp; rp.read_ns = thr_ns() - r0; prof_merge(rp);
+}
+
+bool feed_take(Feed& fd, Batch& out, Prof& pf) {
+    std::unique_lock<std::mutex> lk(fd.qmtx);
+    const std::chrono::steady_clock::time_point w0 = std::chrono::steady_clock::now();
+    fd.cv_empty.wait(lk, [&]{ return !fd.q.empty() || fd.readers_left.load() == 0; });
+    pf.wait_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      std::chrono::steady_clock::now() - w0).count();
+    if (fd.q.empty()) return false;
+    out = std::move(fd.q.front()); fd.q.pop(); fd.cv_full.notify_one();
+    return true;
+}
+
+void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads,
+                  ShTab* psn, std::mutex* nmtx,
                   std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
                   std::atomic<uint64_t>& ov_sum, std::atomic<uint64_t>& ov_cnt,
                   std::atomic<uint64_t>& flush_ns, uint64_t& reads_here) {
     const int nw = std::max(1, threads - 1);
-    std::atomic<size_t> next{0};
-    std::atomic<uint64_t> rcnt{0};
-    std::atomic<int> readers_left{1};
-    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
-    std::queue<std::vector<std::string>> q;
-    constexpr size_t Q_CAP = 256, BATCH = 64;
-    constexpr unsigned BLOCK = 1u << 20;
-
-    auto reader = [&]() {
-        const uint64_t r0 = thr_ns();
-        std::vector<char> buf(BLOCK);
-        std::vector<std::string> batch; batch.reserve(BATCH);
-        std::string carry;
-        auto push = [&]() {
-            if (batch.empty()) return;
-            std::unique_lock<std::mutex> lk(qmtx);
-            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
-            q.push(std::move(batch)); cv_empty.notify_one();
-            batch.clear(); batch.reserve(BATCH);
-        };
-        size_t si; std::string svseq;
-        while ((si = next.fetch_add(1)) < shards.size()) {
-            uint64_t shard_reads = 0;
-            const bool svb = is_svb(shards[si].path);
-            FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
-            if (svb) {
-                while (svb_next(f, svseq)) { shard_reads++; batch.emplace_back(std::move(svseq)); if (batch.size() >= BATCH) push(); }
-            } else {
-                int line_no = 0; carry.clear(); int got;
-                while ((got = (int)std::fread(buf.data(), 1, BLOCK, f)) > 0) {
-                    const char* base = buf.data(); const char* end = base + got; const char* start = base;
-                    for (const char* p = base; p < end; p++) if (*p == '\n') {
-                        const size_t n = (size_t)(p - start);
-                        if (line_no == 1) {
-                            if (carry.empty()) batch.emplace_back(start, n);
-                            else { carry.append(start, n); batch.push_back(std::move(carry)); carry.clear(); }
-                            shard_reads++;
-                            if (batch.size() >= BATCH) push();
-                        } else if (!carry.empty()) carry.clear();
-                        line_no = (line_no + 1) & 3; start = p + 1;
-                    }
-                    if (start < end && line_no == 1) carry.append(start, end - start);
-                }
-            }
-            std::fclose(f);
-            push();
-            rcnt += shard_reads;
-        }
-        push();
-        if (readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(qmtx); cv_empty.notify_all(); }
-        Prof rp; rp.read_ns = thr_ns() - r0; prof_merge(rp);
-    };
+    Feed fd; fd.reads_per.assign(1, 0);
+    std::vector<Shard> mine = shards;
+    for (Shard& s : mine) s.col = 0;
 
     auto worker = [&]() {
-        uint64_t ext = 0, emis = 0;
-
+        uint64_t ext = 0, emis = 0, ovs = 0, ovn = 0;
         const char* fe = std::getenv("SNAPE_FLUSH");
         const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 20);
-        uint64_t ovs = 0, ovn = 0;
         Prof pf;
-        Local lo; lo.n.reserve(1u << 20); lo.e.reserve(1u << 20);
-        std::vector<std::vector<std::pair<uint64_t, Core>>> bn(NSHARD);
-        std::vector<std::vector<SEdge>> be(NSHARD);
+        SigCntMap lo; lo.reserve(1u << 20);
+        std::vector<std::vector<std::pair<uint64_t, cov_t>>> bn(NSHARD);
         auto flush = [&]() {
-
             const uint64_t tf = thr_ns();
             for (auto& v : bn) v.clear();
-            for (const auto& kv : lo.n) bn[kv.first & (NSHARD - 1)].push_back(kv);
+            for (const auto& kv : lo) bn[kv.first & (NSHARD - 1)].push_back(kv);
             for (int sh = 0; sh < NSHARD; sh++) {
                 if (bn[sh].empty()) continue;
                 std::lock_guard<std::mutex> lk(nmtx[sh]);
-                for (const auto& kv : bn[sh]) {
-                    Core& e = psn[sh].m[kv.first];
-                    addsat(e.n, kv.second.n);
-
-                    if (e.s.len == 0 && (uint32_t)e.n >= (uint32_t)min_mult)
-                        e.s = seq_copy(psn[sh].a, lo.a.data(), kv.second.s);
-                }
+                for (const auto& kv : bn[sh]) addsat(psn[sh].m[kv.first], kv.second);
             }
-            lo.n.clear(); lo.a.clear();
-            for (auto& v : be) v.clear();
-            for (const auto& e : lo.e) be[EdgeHash{}(e) & (NSHARD - 1)].push_back(e);
-            for (int sh = 0; sh < NSHARD; sh++) {
-                if (be[sh].empty()) continue;
-                std::lock_guard<std::mutex> lk(emtx[sh]);
-                for (const auto& e : be[sh]) pse[sh].insert(e);
-            }
-            lo.e.clear();
+            lo.clear();
             flush_ns += thr_ns() - tf;
         };
-        while (true) {
-            std::vector<std::string> b;
-            {
-                std::unique_lock<std::mutex> lk(qmtx);
-                const std::chrono::steady_clock::time_point w0 = std::chrono::steady_clock::now();
-                cv_empty.wait(lk, [&]{ return !q.empty() || readers_left.load() == 0; });
-                pf.wait_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                  std::chrono::steady_clock::now() - w0).count();
-                if (q.empty()) break;
-                b = std::move(q.front()); q.pop(); cv_full.notify_one();
-            }
-            for (std::string& s : b) process_read_single(s, level, margin, lo, ext, emis, ovs, ovn, pf);
-            const size_t lb = lo.n.values().capacity() * sizeof(std::pair<uint64_t, Core>) + lo.n.bucket_count() * 8
-                            + lo.e.values().capacity() * sizeof(SEdge) + lo.e.bucket_count() * 8 + lo.a.capacity();
-            pf.local_hw = std::max(pf.local_hw, lb);
-            if (lo.n.size() >= FLUSH || lo.e.size() >= FLUSH) flush();
+        Batch b;
+        while (feed_take(fd, b, pf)) {
+            for (std::string& s : b.seqs) count_read(s, level, margin, lo, ext, emis, ovs, ovn, pf);
+            pf.local_hw = std::max(pf.local_hw,
+                lo.values().capacity() * sizeof(std::pair<uint64_t, cov_t>) + lo.bucket_count() * 8);
+            if (lo.size() >= FLUSH) flush();
         }
         flush();
         emissions += emis; extract_ns += ext; ov_sum += ovs; ov_cnt += ovn;
@@ -550,72 +592,103 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
     };
 
     { std::vector<std::thread> th;
-      th.emplace_back(reader);
+      th.emplace_back([&]{ read_shards(mine, fd, 256, 64); });
       for (int i = 0; i < nw; i++) th.emplace_back(worker);
       for (auto& t : th) t.join(); }
-    reads_here = rcnt.load();
+    reads_here = fd.reads_per[0];
 }
 
-static inline bool survives(const ShTab* psn, uint64_t sig, int min_mult) {
-    const SigCntMap& m = psn[sig & (NSHARD - 1)].m;
-    const auto it = m.find(sig);
-    return it != m.end() && (uint32_t)it->second.n >= (uint32_t)min_mult;
-}
-
-void merge_sample(ShTab* psn, EdgeSet* pse, NodeTab* gnode, EdgeSet* gedge,
-                  int col, int S, int min_mult, int threads, uint64_t& seen, uint64_t& kept,
-                  uint64_t& one, uint64_t& two) {
+void merge_sample(ShTab* psn, NodeTab* gnode, int col, int S, int min_mult, int threads,
+                  uint64_t& seen, uint64_t& kept, uint64_t& one, uint64_t& two) {
     const int nt = std::max(1, threads);
     std::atomic<uint64_t> nseen{0}, npass{0}, n1{0}, n2{0};
-    {
-        std::atomic<int> next_sh{0};
-        std::vector<std::thread> th;
-        for (int i = 0; i < nt; i++) th.emplace_back([&]{
-            for (int sh = next_sh.fetch_add(1); sh < NSHARD; sh = next_sh.fetch_add(1)) {
-                uint64_t a = 0, b = 0, c1 = 0, c2 = 0;
-                for (const auto& kv : psn[sh].m) {
-                    a++;
-                    c1 += (kv.second.n == 1); c2 += (kv.second.n == 2);
-                    if ((uint32_t)kv.second.n < (uint32_t)min_mult) continue;
-                    b++;
-                    node_slot(gnode[sh], kv.first, S)[col] = kv.second.n;
-
-                    const uint32_t slot = gnode[sh].m.find(kv.first)->second;
-                    if (gnode[sh].r[slot].len == 0)
-                        gnode[sh].r[slot] = seq_copy(gnode[sh].s, psn[sh].a.data(), kv.second.s);
-                }
-                nseen += a; npass += b; n1 += c1; n2 += c2;
+    std::atomic<int> next_sh{0};
+    std::vector<std::thread> th;
+    for (int i = 0; i < nt; i++) th.emplace_back([&]{
+        for (int sh = next_sh.fetch_add(1); sh < NSHARD; sh = next_sh.fetch_add(1)) {
+            uint64_t a = 0, b = 0, c1 = 0, c2 = 0;
+            for (const auto& kv : psn[sh].m) {
+                a++;
+                c1 += (kv.second == 1); c2 += (kv.second == 2);
+                if ((uint32_t)kv.second < (uint32_t)min_mult) continue;
+                b++;
+                node_slot(gnode[sh], kv.first, S)[col] = kv.second;
             }
-        });
-        for (auto& t : th) t.join();
-    }
-    {
-
-        std::atomic<int> next_sh{0};
-        std::vector<std::thread> th;
-        for (int i = 0; i < nt; i++) th.emplace_back([&]{
-            for (int sh = next_sh.fetch_add(1); sh < NSHARD; sh = next_sh.fetch_add(1))
-                for (const auto& e : pse[sh])
-                    if (survives(psn, e.first, min_mult) && survives(psn, e.second, min_mult))
-                        gedge[sh].insert(e);
-        });
-        for (auto& t : th) t.join();
-    }
-    for (int sh = 0; sh < NSHARD; sh++) {
-        SigCntMap().swap(psn[sh].m); std::vector<uint8_t>().swap(psn[sh].a); EdgeSet().swap(pse[sh]);
-    }
+            nseen += a; npass += b; n1 += c1; n2 += c2;
+            SigCntMap().swap(psn[sh].m);
+        }
+    });
+    for (auto& t : th) t.join();
     seen = nseen.load(); kept = npass.load(); one = n1.load(); two = n2.load();
 }
 
-void run_pool_single(const std::vector<Shard>& shards, int level, int margin, int threads, int min_mult,
-                     int S, std::vector<SigCount>& out_nodes, std::vector<cov_t>& out_ncov,
-                     std::vector<CEdge>& out_edges, std::vector<SeqRef>& out_sref,
-                     std::vector<uint8_t>& out_seq, uint64_t& ov_s, uint64_t& ov_c,
-                     std::vector<uint64_t>& reads_per) {
-    NodeTab gnode[NSHARD]; EdgeSet gedge[NSHARD];
-    ShTab psn[NSHARD]; EdgeSet pse[NSHARD];
-    std::mutex nmtx[NSHARD], emtx[NSHARD];
-    std::atomic<uint64_t> emissions{0}, extract_ns{0}, ov_sum{0}, ov_cnt{0}, flush_ns{0};
+void fill_pass(const std::vector<Shard>& shards, int level, int margin, int threads, int S,
+               const SigIndex& idx, const std::vector<cov_t>& cov,
+               std::vector<std::atomic<uint8_t>>& have, std::vector<SeqRef>& sref,
+               EdgeKeySet* gedge, std::vector<uint8_t>* gseq,
+               std::mutex* emtx, std::mutex* smtx,
+               std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
+               std::atomic<uint64_t>& flush_ns, std::vector<uint64_t>& reads_per) {
+    const int nw = std::max(1, threads - 1);
+    Feed fd; fd.reads_per.assign((size_t)S, 0);
+    FillCtx cx; cx.idx = &idx; cx.cov = &cov; cx.have = &have; cx.sref = &sref; cx.S = S;
+
+    auto worker = [&]() {
+        uint64_t ext = 0, emis = 0;
+        const char* fe = std::getenv("SNAPE_FLUSH");
+        const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 20);
+        Prof pf;
+        LocalB lo; lo.e.reserve(1u << 20);
+        std::vector<std::vector<uint64_t>> be(NSHARD);
+        std::vector<std::vector<std::pair<uint32_t, SeqRef>>> bs(NSHARD);
+        auto flush = [&]() {
+            const uint64_t tf = thr_ns();
+            for (auto& v : be) v.clear();
+            for (uint64_t e : lo.e) be[(size_t)((e >> 32) ^ (e * 0x9e3779b97f4a7c15ULL)) & (NSHARD - 1)].push_back(e);
+            for (int sh = 0; sh < NSHARD; sh++) {
+                if (be[sh].empty()) continue;
+                std::lock_guard<std::mutex> lk(emtx[sh]);
+                for (uint64_t e : be[sh]) gedge[sh].insert(e);
+            }
+            lo.e.clear();
+            for (auto& v : bs) v.clear();
+            for (const auto& p : lo.put) bs[idx.v[p.first].sig & (NSHARD - 1)].push_back(p);
+            for (int sh = 0; sh < NSHARD; sh++) {
+                if (bs[sh].empty()) continue;
+                std::lock_guard<std::mutex> lk(smtx[sh]);
+                for (const auto& p : bs[sh]) sref[p.first] = seq_copy(gseq[sh], lo.a.data(), p.second);
+            }
+            lo.put.clear(); lo.a.clear();
+            flush_ns += thr_ns() - tf;
+        };
+        Batch b;
+        while (feed_take(fd, b, pf)) {
+            for (std::string& s : b.seqs) fill_read(s, level, margin, b.col, cx, lo, ext, emis, pf);
+            const size_t lb = lo.e.values().capacity() * 8 + lo.e.bucket_count() * 8 + lo.a.capacity();
+            pf.local_hw = std::max(pf.local_hw, lb);
+            if (lo.e.size() >= FLUSH || lo.a.size() >= (size_t)(64u << 20)) flush();
+        }
+        flush();
+        emissions += emis; extract_ns += ext;
+        prof_merge(pf);
+    };
+
+    { std::vector<std::thread> th;
+      th.emplace_back([&]{ read_shards(shards, fd, 256, 64); });
+      for (int i = 0; i < nw; i++) th.emplace_back(worker);
+      for (auto& t : th) t.join(); }
+    for (int i = 0; i < S; i++) reads_per[i] = fd.reads_per[i];
+}
+
+void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, int threads,
+                       int min_mult, int S, std::vector<SigCount>& out_nodes,
+                       std::vector<cov_t>& out_ncov, std::vector<CEdge>& out_edges,
+                       std::vector<SeqRef>& out_sref, std::vector<uint8_t>& out_seq,
+                       uint64_t& ov_s, uint64_t& ov_c, std::vector<uint64_t>& reads_per) {
+    NodeTab gnode[NSHARD];
+    ShTab psn[NSHARD];
+    std::mutex nmtx[NSHARD], emtx[NSHARD], smtx[NSHARD];
+    std::atomic<uint64_t> emis_a{0}, ext_a{0}, ov_sum{0}, ov_cnt{0}, flush_a{0};
     reads_per.assign((size_t)S, 0);
     uint64_t distinct = 0, kept = 0;
 
@@ -623,25 +696,22 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
         std::vector<Shard> mine;
         for (const Shard& s : shards) if (s.col == col) mine.push_back(s);
         uint64_t rd = 0, seen = 0, pass = 0, one = 0, two = 0;
-        count_sample(mine, level, margin, threads, min_mult, psn, pse, nmtx, emtx, emissions,
-                     extract_ns, ov_sum, ov_cnt, flush_ns, rd);
-        report_bytes(col, psn, pse, gnode, gedge);
-        merge_sample(psn, pse, gnode, gedge, col, S, min_mult, threads, seen, pass, one, two);
+        count_sample(mine, level, margin, threads, psn, nmtx, emis_a, ext_a, ov_sum, ov_cnt, flush_a, rd);
+        report_bytes_a(col, psn, gnode);
+        merge_sample(psn, gnode, col, S, min_mult, threads, seen, pass, one, two);
         reads_per[col] = rd;
         distinct += seen; kept += pass;
-        std::fprintf(stderr, "[graph1] sample %d/%d: %llu reads, %.3f M distinct -> %.3f M >= %d (%.1f%%)\n",
+        std::fprintf(stderr, "[graphA] sample %d/%d: %llu reads, %.3f M distinct -> %.3f M >= %d (%.1f%%)\n",
                      col + 1, S, (unsigned long long)rd, seen / 1e6, pass / 1e6, min_mult,
                      seen ? 100.0 * pass / seen : 0.0);
-        std::fprintf(stderr, "[graph1]   distinct seen once %.3f M (%.1f%%), twice %.3f M (%.1f%%) "
-                     "-- neither can reach min_mult=%d, and both are held to the end of the sample\n",
+        std::fprintf(stderr, "[graphA]   distinct seen once %.3f M (%.1f%%), twice %.3f M (%.1f%%)\n",
                      one / 1e6, seen ? 100.0 * one / seen : 0.0,
-                     two / 1e6, seen ? 100.0 * two / seen : 0.0, min_mult);
+                     two / 1e6, seen ? 100.0 * two / seen : 0.0);
     }
 
     {
         std::vector<std::vector<SigCount>> part(NSHARD);
         std::vector<std::vector<cov_t>> pcov(NSHARD);
-        std::vector<std::vector<SeqRef>> pref(NSHARD);
         std::atomic<int> next_sh{0};
         std::vector<std::thread> th;
         for (int i = 0, nt = std::max(1, threads); i < nt; i++) th.emplace_back([&]{
@@ -651,70 +721,82 @@ void run_pool_single(const std::vector<Shard>& shards, int level, int margin, in
                     const cov_t* c = gnode[sh].a.data() + (size_t)kv.second * (size_t)S;
                     part[sh].push_back({kv.first, (uint32_t)(pcov[sh].size() / (size_t)S)});
                     pcov[sh].insert(pcov[sh].end(), c, c + S);
-                    pref[sh].push_back(gnode[sh].r[kv.second]);
                 }
                 SigNodeMap().swap(gnode[sh].m);
                 std::vector<cov_t>().swap(gnode[sh].a);
-                std::vector<SeqRef>().swap(gnode[sh].r);
             }
         });
         for (auto& t : th) t.join();
         size_t K = 0;
         for (int sh = 0; sh < NSHARD; sh++) K += part[sh].size();
         out_nodes.clear(); out_nodes.reserve(K);
-        out_ncov.clear(); out_ncov.reserve(K * (size_t)S);
-        out_sref.clear(); out_sref.reserve(K);
-        out_seq.clear();
+        std::vector<cov_t> tmpcov; tmpcov.reserve(K * (size_t)S);
         for (int sh = 0; sh < NSHARD; sh++) {
-            const uint32_t base = (uint32_t)(out_ncov.size() / (size_t)S);
-            const uint64_t sbase = out_seq.size();
+            const uint32_t base = (uint32_t)(tmpcov.size() / (size_t)S);
             for (SigCount c : part[sh]) { c.slot += base; out_nodes.push_back(c); }
-            for (SeqRef r : pref[sh]) { r.off += sbase; out_sref.push_back(r); }
-            out_ncov.insert(out_ncov.end(), pcov[sh].begin(), pcov[sh].end());
-            out_seq.insert(out_seq.end(), gnode[sh].s.begin(), gnode[sh].s.end());
+            tmpcov.insert(tmpcov.end(), pcov[sh].begin(), pcov[sh].end());
             std::vector<SigCount>().swap(part[sh]);
             std::vector<cov_t>().swap(pcov[sh]);
-            std::vector<SeqRef>().swap(pref[sh]);
-            std::vector<uint8_t>().swap(gnode[sh].s);
+        }
+        psort(out_nodes, threads, [](const SigCount& a, const SigCount& b){ return a.sig < b.sig; });
+        out_ncov.assign(K * (size_t)S, 0);
+        for (size_t i = 0; i < K; i++) {
+            const cov_t* c = tmpcov.data() + (size_t)out_nodes[i].slot * (size_t)S;
+            std::copy(c, c + S, out_ncov.begin() + (std::ptrdiff_t)(i * (size_t)S));
+            out_nodes[i].slot = (uint32_t)i;
         }
     }
-    psort(out_nodes, threads, [](const SigCount& a, const SigCount& b){ return a.sig < b.sig; });
-    SigIndex idx; idx.build(out_nodes);
 
-    uint64_t eraw = 0;
-    for (int sh = 0; sh < NSHARD; sh++) eraw += gedge[sh].size();
+    const size_t K = out_nodes.size();
+    SigIndex idx; idx.build(out_nodes);
+    std::fprintf(stderr, "[graphA] survivors=%.3f M, index %.2f GB -> pass B\n",
+                 K / 1e6, (idx.bytes() + K * 8) / 1073741824.0);
+
+    std::vector<std::atomic<uint8_t>> have(K);
+    for (size_t i = 0; i < K; i++) have[i].store(0, std::memory_order_relaxed);
+    out_sref.assign(K, SeqRef{});
+    EdgeKeySet gedge[NSHARD];
+    std::vector<uint8_t> gseq[NSHARD];
+    std::atomic<uint64_t> emis_b{0}, ext_b{0}, flush_b{0};
+    std::vector<uint64_t> rp_b((size_t)S, 0);
+
+    fill_pass(shards, level, margin, threads, S, idx, out_ncov, have, out_sref,
+              gedge, gseq, emtx, smtx, emis_b, ext_b, flush_b, rp_b);
+    report_bytes_b(gedge, gseq, idx.bytes() + K * 8, out_ncov.capacity(), out_sref.capacity() * sizeof(SeqRef));
+    std::vector<std::atomic<uint8_t>>().swap(have);
+
     {
-        std::vector<std::vector<CEdge>> part(NSHARD);
-        std::atomic<int> next_sh{0};
-        std::vector<std::thread> th;
-        for (int i = 0, nt = std::max(1, threads); i < nt; i++) th.emplace_back([&]{
-            for (int sh = next_sh.fetch_add(1); sh < NSHARD; sh = next_sh.fetch_add(1)) {
-                part[sh].reserve(gedge[sh].size());
-                for (const auto& e : gedge[sh]) {
-                    const uint32_t a = idx.find(e.first), b = idx.find(e.second);
-                    if (a == UINT32_MAX || b == UINT32_MAX || a == b) continue;
-                    part[sh].push_back({a, b});
-                }
-                EdgeSet().swap(gedge[sh]);
-            }
-        });
-        for (auto& t : th) t.join();
-        size_t ne = 0;
-        for (int sh = 0; sh < NSHARD; sh++) ne += part[sh].size();
+        uint64_t ne = 0;
+        for (int sh = 0; sh < NSHARD; sh++) ne += gedge[sh].size();
         out_edges.clear(); out_edges.reserve(ne);
         for (int sh = 0; sh < NSHARD; sh++) {
-            out_edges.insert(out_edges.end(), part[sh].begin(), part[sh].end());
-            std::vector<CEdge>().swap(part[sh]);
+            for (uint64_t e : gedge[sh]) out_edges.push_back({(uint32_t)(e >> 32), (uint32_t)e});
+            EdgeKeySet().swap(gedge[sh]);
         }
     }
-    std::fprintf(stderr, "[graph1] core emissions=%.3f M, of which %.1f CPU-s in extract, %.1f CPU-s in flush\n",
-                 emissions.load() / 1e6, extract_ns.load() / 1e9, flush_ns.load() / 1e9);
+    {
+        uint64_t base[NSHARD], tot = 0;
+        for (int sh = 0; sh < NSHARD; sh++) { base[sh] = tot; tot += gseq[sh].size(); }
+        out_seq.clear(); out_seq.reserve(tot);
+        for (int sh = 0; sh < NSHARD; sh++) {
+            out_seq.insert(out_seq.end(), gseq[sh].begin(), gseq[sh].end());
+            std::vector<uint8_t>().swap(gseq[sh]);
+        }
+        for (size_t i = 0; i < K; i++)
+            if (out_sref[i].len != 0) out_sref[i].off += base[out_nodes[i].sig & (NSHARD - 1)];
+    }
+
+    ov_s = ov_sum.load(); ov_c = ov_cnt.load();
+    uint64_t stored = 0;
+    for (size_t i = 0; i < K; i++) stored += (out_sref[i].len != 0);
+    std::fprintf(stderr, "[graphA] emissions=%.3f M, extract %.1f CPU-s, flush %.1f CPU-s\n",
+                 emis_a.load() / 1e6, ext_a.load() / 1e9, flush_a.load() / 1e9);
+    std::fprintf(stderr, "[graphB] emissions=%.3f M, extract %.1f CPU-s, flush %.1f CPU-s\n",
+                 emis_b.load() / 1e6, ext_b.load() / 1e9, flush_b.load() / 1e9);
     std::fprintf(stderr, "[graph1] per-sample distinct sigs=%.3f M -> passed mm=%d: %.3f M (%.2f%%)\n",
                  distinct / 1e6, min_mult, kept / 1e6, distinct ? 100.0 * kept / distinct : 0.0);
-    ov_s = ov_sum.load(); ov_c = ov_cnt.load();
-    std::fprintf(stderr, "[graph1] merged nodes=%.3f M | raw adjacencies=%.3f M -> kept=%.3f M (%.2f%%)\n",
-                 out_nodes.size() / 1e6, eraw / 1e6, out_edges.size() / 1e6,
-                 eraw ? 100.0 * out_edges.size() / eraw : 0.0);
+    std::fprintf(stderr, "[graph1] merged nodes=%.3f M | edges=%.3f M | seq stored for %.3f M nodes (%.1f%%)\n",
+                 K / 1e6, out_edges.size() / 1e6, stored / 1e6, K ? 100.0 * stored / K : 0.0);
     std::fprintf(stderr, "[graph1] core sequence=%.3f GiB, ardisik cekirdek ortusme %.1f bp\n",
                  out_seq.size() / 1073741824.0, ov_c ? (double)ov_s / (double)ov_c : 0.0);
 }
@@ -744,7 +826,7 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     std::vector<SigCount> nodes; std::vector<CEdge> ce;
     std::vector<cov_t> ncov; std::vector<uint64_t> nreads;
     std::vector<SeqRef> sref; std::vector<uint8_t> sbuf; uint64_t ov_s = 0, ov_c = 0;
-    run_pool_single(shards_all, level, margin, threads, min_mult, S, nodes, ncov, ce, sref, sbuf,
+    run_pool_two_pass(shards_all, level, margin, threads, min_mult, S, nodes, ncov, ce, sref, sbuf,
                     ov_s, ov_c, nreads);
     const uint64_t K = nodes.size();
     const Snap P1 = snap();
