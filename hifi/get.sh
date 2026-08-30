@@ -17,15 +17,23 @@
 # The first version of this script streamed curl -> pigz -> svb_pack so no .gz ever hit disk. It was
 # measured at 16 Mbase/s, a 30-hour run: ENA hands a single connection ~2 MB/s, and curl opens one.
 # aria2c's -x16 is what got 35 MB/s per run on the COLO829 downloads, and it cannot write to a pipe
-# because multi-connection transfers arrive out of order. So the .gz goes to disk after all. It fits:
-# 864 GB of .gz plus 465 GB of .svb is 1.33 TB against 1.8 TB free -- but only because each .gz is
-# trashed the moment its .svb lands, and trashing frees nothing on this filesystem, so the total is
-# what has to fit, not the peak.
+# because multi-connection transfers arrive out of order. So the .gz goes to disk after all.
+#
+# md5, 2026-08-30: an earlier pass of this script finished four runs at EXACTLY the ENA byte count
+# and all four unpacked to garbage. Cause is the combination that was here before -- -x16 writes
+# pieces out of order, --file-allocation=none makes the file's size the highest offset written, and
+# --continue=true on a restart whose .aria2 control file was gone reads that size as "already have
+# this much" and appends the remainder. Right length, wrong bytes, no error. Two changes: ENA's
+# fastq_md5 goes to aria2c --checksum so a bad transfer fails loudly at the end of the transfer
+# instead of silently at the science, and --continue is gone so resume happens only through the
+# control file, which is the only mechanism that knows which pieces are real. Exit 32 is aria2c's
+# checksum failure: that one restarts from zero, everything else resumes.
 set -uo pipefail
 cd /home/yuio/snape/hifi
 SNAPE=/home/yuio/snape
 API=https://www.ebi.ac.uk/ena/portal/api/filereport
 TRASH=/home/yuio/trash/hifi-gz; mkdir -p "$TRASH"
+LOG=$SNAPE/file-removals.txt
 
 # accession sample expected_bases
 RUNS="
@@ -41,21 +49,54 @@ SRR31537482 hs578_t     175649373095
 SRR31537479 hs578_n      87055294667
 "
 
+trash_partial() {   # $1 = accession, $2 = why
+    local acc=$1 why=$2 stamp f
+    stamp=$(date +%Y%m%d-%H%M%S)
+    for f in "$acc.gz.part" "$acc.gz.part.aria2"; do
+        [ -e "$f" ] || continue
+        mv "$f" "$TRASH/$stamp-$f"
+        echo "$(date '+%Y-%m-%d %H:%M:%S')  mv $f $TRASH/$stamp-$f  ($why)" >> "$LOG"
+    done
+}
+
 fetch_pack() {   # $1 = accession, $2 = sample name, $3 = expected bases
     # one folder per sample pair: hcc1954/t.svb, hcc1954/n.svb, ...
     local acc=$1 name=$2 want=$3
     local out=${name%_*}/${name##*_}.svb
     mkdir -p "${name%_*}"
     [ -s "$out" ] && { echo "[$name] zaten var"; return 0; }
-    local url
-    url=$(curl -sS "$API?accession=$acc&result=read_run&fields=fastq_ftp&format=tsv" | tail -n +2 | cut -f2)
-    [ -n "$url" ] || { echo "[FATAL] $acc: ENA URL vermedi"; return 1; }
-    echo "[$name] $acc indiriliyor $(date +%T)"
-    # --max-tries=0: ENA refuses connections intermittently and a 5-try default silently ends the
-    # transfer 10 GB in. --continue picks a partial back up instead of restarting 95 GB.
-    aria2c -x16 -s16 -k10M --file-allocation=none --console-log-level=warn --summary-interval=900 \
-        --max-tries=0 --retry-wait=30 --continue=true -o "$acc.gz.part" "https://$url" || return 1
+
+    local meta url md5
+    meta=$(curl -sS "$API?accession=$acc&result=read_run&fields=fastq_ftp,fastq_md5&format=tsv" | tail -n +2)
+    url=$(printf '%s' "$meta" | cut -f2)
+    md5=$(printf '%s' "$meta" | cut -f3)
+    [ -n "$url" ] && [ -n "$md5" ] || { echo "[FATAL] $acc: ENA URL/md5 vermedi"; return 1; }
+
+    local tries=0 bad=0 rc
+    while :; do
+        echo "[$name] $acc indiriliyor $(date +%T)  md5=$md5"
+        # --max-tries=0: ENA refuses connections intermittently and a 5-try default silently ends the
+        # transfer 10 GB in. No --continue: only the .aria2 control file may resume this.
+        aria2c -x16 -s16 -k10M --file-allocation=none --console-log-level=warn \
+               --summary-interval=900 --max-tries=0 --retry-wait=30 \
+               --auto-file-renaming=false --checksum=md5="$md5" \
+               -o "$acc.gz.part" "https://$url"
+        rc=$?
+        [ $rc -eq 0 ] && break
+        tries=$((tries + 1))
+        if [ $rc -eq 32 ]; then                   # aria2c: checksum validation failed
+            bad=$((bad + 1))
+            echo "[$name] md5 TUTMADI ($bad. kez), sifirdan $(date +%T)"
+            trash_partial "$acc" "aria2c md5 dogrulamasi basarisiz, yeniden indiriliyor"
+            [ $bad -ge 3 ] && { echo "[FATAL] $name: uc denemede de md5 tutmadi"; return 1; }
+        else
+            echo "[$name] aria2c $rc ile dustu, kontrol dosyasindan devam $(date +%T)"
+        fi
+        [ $tries -ge 8 ] && { echo "[FATAL] $name: 8 denemede inmedi"; return 1; }
+        sleep 60
+    done
     mv "$acc.gz.part" "$acc.gz"
+
     echo "[$name] paketleniyor $(date +%T)"
     pigz -dc "$acc.gz" | "$SNAPE/snape" pack "$out.tmp" 2> "${out%.svb}.pack.log" || return 1
     local got                                     # "[svb_pack] out.svb: N reads, M bases"
@@ -63,12 +104,13 @@ fetch_pack() {   # $1 = accession, $2 = sample name, $3 = expected bases
     [ "$got" = "$want" ] || echo "[$name] UYARI: $got baz paketlendi, ENA $want diyor"
     mv "$out.tmp" "$out"
     mv "$acc.gz" "$TRASH/"
+    echo "$(date '+%Y-%m-%d %H:%M:%S')  mv $acc.gz $TRASH/  (svb paketlendi, ham .gz artik gereksiz)" >> "$LOG"
     echo "[$name] bitti $(date +%T)  $(ls -l --block-size=1 "$out" | awk '{printf "%.2f GB",$5/1e9}')  $got baz"
 }
 
 # Four at a time: measured on this link one aria2c gets 35 MB/s and five get 89 MB/s combined, so the
-# cap is per-transfer at ENA's end. Four leaves cores for the simulation arms running alongside.
-echo "########## 10 kosu, 1846.6 Gbp HiFi, aria2c $(date +%T) ##########"
+# cap is per-transfer at ENA's end.
+echo "########## 10 kosu, 1846.6 Gbp HiFi, 864.3 GB .gz, aria2c $(date +%T) ##########"
 echo "$RUNS" | while read -r acc name want; do
     [ -z "$acc" ] && continue
     while [ "$(jobs -rp | wc -l)" -ge 4 ]; do wait -n; done

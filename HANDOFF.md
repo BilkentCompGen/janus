@@ -1,99 +1,67 @@
-# HANDOFF — 2026-08-28 gecesi
+# Handoff — 2026-08-28 evening
 
-**Oturum:** 03:57 → (devam ediyor). Amaç: Results bölümünün beş deneyi için plot hazırlamak.
+## What changed in the code
 
-## Tek cümlede
+`src/graph.cpp` only. Uncommitted (nothing was committed; CLAUDE.md says not to without being asked).
+Baseline copies of the file at each step are under `tmp/prof/`.
 
-Deney 2, 3, 4 ve 5 **bitti ve plot'landı**; deney 1 (çekirdek sweep'i) tam ölçekte yapılamadı,
-altörneklenmiş hali koşuluyor. Ayrıca depo `.git`'i 141 GB'dan 7.6 MB'a indirildi.
+1. **BUG FIX — reverse-strand cores stored the wrong bytes.** `extract2` returns a reverse-strand
+   core's `[st, en)` in the reverse complement's own frame; the code sliced the FORWARD read at those
+   offsets, so ~half of every graph's stored core sequence was a real but unrelated span from the
+   mirror position. Proven with `tmp/prof/t_extract.cpp` (0/430 reverse cores hashed back to their
+   own signature, against 430/430 for the mirrored interval) and on real data (50.5% of stored cores
+   reproduced their signature before the fix, 100.0% after). Lengths were never affected; what was
+   wrong is `bubbles`' minimizers, hence `drop.sigs`.
+2. **LUT-driven packing.** ~21% off the `graph` stage. Details and the negative result about the
+   removed memcpy are in `docs/NOTES.md`.
+3. **Profiling instrumentation**, additive: a second per-read CPU counter, a sampled timer on the
+   packing block (with the clock's own cost calibrated and subtracted), exact per-structure byte
+   accounting per sample, a 200 ms RSS trace written to `<dir>/rss_trace.tsv`, and a signature count
+   histogram. Prints under `[prof]` and `[bytes]` beside the existing `[eff]` table.
 
-## Üretilen figürler (`figs/`)
+Verification protocol used for every change, and the one to keep using: run the unmodified binary
+twice on the same input, compare `graph.bin` section by section, and require the changed binary to
+sit in the same equivalence class — `sig` / `cov` / `E` / `esrc` / `edst` byte-identical, `slen` and
+`seq` differing no more than two baseline runs differ from each other (~1.15% of `slen` bytes).
 
-| dosya | deney | ne gösteriyor |
-|---|---|---|
-| `exp2_castle_consensus` | 2 | CASTLE hcc1954, dört konsensüs konfigürasyonu, snape'in sırası |
-| `exp2_castle_consensus_hcc1937` | 2 | aynısı hcc1937 için |
-| `exp3_phylogeny` | 3 | ağaç kurma yöntemleri (RF), bootstrap desteği, klad oranı |
-| `exp4_total_time` | 4 | 1+20 vakanın toplam süresi, üç kol |
-| `exp5_joint_vs_pair` | 5a | 20 hatta ortak graf ↔ ikili kayıt farkı |
-| `exp5b_consensus` | 5b | 7 yaprakta snape konsensüs içinde/dışında |
+## What it cost in accuracy — READ THIS BEFORE TRUSTING ANY OLD NUMBER
 
-Her figürün altında kaynak notu var: hangi dosyadan, hangi yöntemle, ölçüldü mü ölçeklendi mi.
+| pair | before (RESULTS.md) | after the fix | ΔF1 |
+|---|---|---|---|
+| h2009 | 0.854 / 0.876 / 0.865 | 0.850 / 0.872 / 0.861 | −0.004 |
+| h1437 | 0.727 / 0.783 / 0.754 | 0.665 / 0.783 / 0.719 | −0.035 |
 
-## Başlıca sayılar
+Every accuracy number recorded before 2026-08-28 was measured with the defect. `bubbles`'
+thresholds were calibrated against broken minimizers, and `max_unmatched` has been ruled out as the
+knob that recovers this — the sweep is in `docs/NOTES.md`. **This is a decision, not a bug: left for
+yuio.**
 
-**Deney 2 — CASTLE.** Gerçek küme `minda_4_2` (11 çağırıcı, CASTLE'ın kendi dosyası) çağırıcı
-oylamasıyla kuruluyor. İki koşul: snape o oylamanın dışında (A) ve 12. üyesi (C).
+## What is on disk
 
-| koşul | hcc1954 | hcc1937 |
-|---|---|---|
-| A, snape dışarıda | 0.8704 (3/12) | 0.7649 (4/12) |
-| C, snape üye | **0.8851 (1/12)** | 0.7819 (4/12) |
-| fark | +0.0147 | +0.0170 |
+- `tmp/measure/h2009/snape_out/` and `tmp/measure/h1437/snape_out/` — complete pipelines with the
+  fixed binary, every stage timed under `/usr/bin/time -v` into `results/measure/<pair>/`.
+- `results/measure/<pair>/minda/` — scored against CASTLE `minda_4_2`.
+- `tmp/night/clean/{H2009,H1437,HCC1954,HCC1937}_minda_4_2.vcf` — truth sets with the archive's
+  malformed `cmd:` line removed. Record counts match `docs/RESULTS.md`: 925 / 221 / 1106 / 703.
+- `tmp/night/castle_archive/` (13 GB) — all four pairs' caller VCFs, intact.
+- Reads: `hifi/h2009/{n,t}.fastq` (820 GB) and `hifi/h1437/{n,t}.svb` (98 GB). hcc1954 and hcc1937
+  have no reads on disk; re-measuring those two needs a re-download.
 
-A'da rakiplerin **hepsi** oylamaya katılıyor, snape katılmıyor — fark bir yöntem farkı değil,
-gerçek kümenin nasıl kurulduğunun sonucu.
+## Running when this was written
 
-**İki çift aynı yönde değil:** hcc1954'te snape üye olduğunda panelin en yükseği, hcc1937'de
-iki koşulda da 4. sırada.
+- `tmp/night/fetch_h1437.sh` — resuming the h1437 `.gz` download (~165 GB left), log
+  `tmp/night/fetch_h1437.log`. It keeps the `.gz` because the timing arm must be measured from plain
+  FASTQ, not `.svb`.
+- `tmp/night/exp2_fixed.sh` — experiment 2 conditions A and C on both pairs with the fixed calls,
+  into `results/exp2_fixed/`.
 
-**Deney 3 — filogeni.** `greedy-split` gerçek topolojiyi **birebir** kuruyor (RF = 0, kapsam ve
-kesinlik 1.000). Klad oranı %88.0 (null %70.7); bilgilendirici örüntülerde %59.6 (null **%1.0**).
-39/39 klad tanıklandı. 17 kladın 13'ü %100 bootstrap.
+## Next
 
-**Deney 4 — süre.** (C kolu **ölçeklendi**, 21 genom gerçekten hizalanmadı.) Ortak graf 21 örnek **1.93 sa**; ikili ×20 3.19 sa (1.65×);
-21×minimap2 + 20×severus 13.08 sa (**6.76×**); +sniffles2 9.83 sa (5.08×); +nanomonsv 21.11 sa.
-
-**Deney 5.** Ortak graf 20 hatta ikiliden %10.7 daha çok çağrı (+2.641), kaybettiği 367.
-Konsensüste snape dışarıda 0.773–0.820 (3/8), içeride 0.900–0.928 (6/7 yaprakta 1/8).
-
-**Deney 1 (altörneklenmiş).** Uçtan uca hızlanma 1→32 çekirdek **10.2×**, graf aşamasında 14.4×.
-Graf 4–32 arasında %76–85 paralel verim koruyor. **1→2 çekirdek hiçbir şey kazandırmıyor**
-(36.6 → 35.5 dk): girdi örnek başına parçalanıyor, 2 parça birbirini bekliyor. Tepe RSS
-çekirdekle büyüyor: 15.7 → 24.8 GB.
-
-## Sabah yapılması gerekenler
-
-1. **`git push --force origin changes`** — yerel `.git` temizlendi (141 GB → 7.6 MB) ama uzak hâlâ
-   eski, 16 GB BAM'lı tarihçeyle. Force-push classifier tarafından engellendi (doğru bir engel:
-   yayımlanmış tarihçeyi sen yokken ezmek geri alınamaz).
-2. Deney 5b'nin "içeride" sayıları **tek başına kullanılmamalı**: üyelik primi orada ~0.12 F1,
-   CASTLE'da ~0.015. Sebep konsensüsün küçük olması (7–8 çağırıcı, ≥3 oy).
-3. hcc1937'nin sonucu hcc1954'ünkiyle aynı yönde değil. Paper'da "comparable" iddiası bu iki
-   çiftin ikisini de göstermeli.
-
-## Ne denendi ve bırakıldı
-
-- **Deney 1 tam ölçekte**: disk %93 dolu (protokol eşiği %85), CASTLE'ın normal FASTQ'su yok,
-  6 çekirdek ayarında tam koşu ~10+ saat. Altörneklenmiş sürüm **koşuldu ve bitti** (600k
-  okuma/örnek, ~3× kapsam, 06:14→07:57), altı noktanın hepsi elde; mutlak RAM'i tam ölçekte
-  vermez, ölçeklenmenin şeklini verir.
-- **h2009**: tümör `.svb`'si diskte yok (`t.svb.tmp` yarım kalmış). **h1437**: koşulabilirdi,
-  zaman yetmedi.
-- **delly** deney 4'ten çıkarıldı: koşuları zaman boşluğuyla ayrılamıyor, ölçüm güvenilmez.
-
-Kalanların tam listesi: `benchmarks_gaps.md`.
-
-## Düzeltilen hatalar
-
-| ne | nerede | yedek |
-|---|---|---|
-| `eval_phylo.py` değişken gölgeleme (`got` int'e dönüyor, JSON dökümü patlıyor) | `tmp/overnight/eval_phylo.py:296` | `tmp/night/eval_phylo.py.orig` |
-| Minda sayısal VCF ID'lerinde çöküyor | `tmp/.venv/.../minda/decompose.py:357` | `tmp/night/minda_decompose.py.orig` |
-| Arşivdeki HCC1937 `minda_4_2` VCF'inde `#` önekli olmayan `cmd:` satırı | temiz kopya | `tmp/night/clean/` |
-| İlk `true_burden` yazımım yanlıştı (T01 için 391, doğrusu 1277) | `tmp/night/exp5_joint_vs_pair.py` | — |
-
-Silinen/bozulan her şey `file-removals.txt`'te; zaman, gerekçe, komut.
-
-## Nerede ne var
-
-```
-PLAN.md               talimat + yorumu
-activity_log.md       zaman damgalı olay günlüğü
-file-removals.txt     silme/bozma kaydı
-benchmarks_gaps.md    ölçülmeyenler ve neden
-experiments/          deney başına kayıt (02, 03, 04, 05)
-figs/                 PDF + PNG
-results/              plot'ları üreten ham TSV/JSON
-tmp/night/            bu gecenin betikleri, yedekleri, ara çıktıları
-```
+1. Decide what to do about the `bubbles` calibration. Nothing else should be measured against the
+   paper until that is settled.
+2. h2009's alignment-first arm is still unmeasured: `mm2_n`, severus, sniffles, cuteSV, dysgu. Those
+   need a quiet machine, so they must wait for the download to finish.
+3. `tools/` (longcallD, sawfish, pbsv, SVDSS) was lost from the working tree in the `.git` cleanup
+   and is untracked-empty; re-fetch from upstream releases if those callers are wanted.
+4. `docs/RESULTS.md`'s cost table is stale in at least the `bubbles` row (04:02 there, 7–9 s
+   measured on two pairs today). The new per-stage table is in `docs/NOTES.md`.

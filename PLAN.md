@@ -118,3 +118,24 @@ bile sonra, yalnızca vakit kalırsa.
 - Refactor `75b3a05` sonrası **yalnız hcc1954** yeniden skorlandı (F1 0.870); diğer üç çiftin
   sayıları refactor öncesi.
 - Deney 14'te 20 hattın **yalnız 2'si** (T01, T09) ölçülmüş.
+
+## 2026-08-29 04:30 — new mandate, ~7-8 hours
+
+Three objectives, in the user's words:
+1. maximise F1
+2. bring RSS and time down
+3. by morning, the WHOLE CASTLE set on disk as `.svb`
+
+Interpretation and standing constraints:
+- No file may be deleted. Anything finished with goes to /home/yuio/trash and is logged in
+  file-removals.txt.
+- Objective 3 is the long pole and it is network-bound, so it starts first and runs throughout;
+  objectives 1 and 2 use the CPU while it does.
+- The box has 32 cores. Experiments may run two at a time at 14 threads each; anything measured for
+  TIME must instead run alone and be marked as such.
+
+State at the start:
+- on disk: h1437 t.svb + n.svb (verified against ENA read/base counts), h2009 n.svb + both FASTQs
+- to fetch: hcc1954 (SRR28305163 t, SRR28305160 n), hcc1937 (SRR28305185 t, SRR28305182 n)
+- h2009 t.svb can be packed from the local FASTQ, no download
+- h1437's freshly downloaded .gz are CORRUPT (crc32); its .svb are older and sound, so no refetch

@@ -41,3 +41,14 @@ experiments/ (5 dosya), review_rounds/ (2 tur), figs/ (7 PDF + 7 PNG),
 results/ (özet TSV/JSON + gece_raporu.html).
 
 Açık kalan tek iş kullanıcının onayını gerektiriyor: `git push --force origin changes`.
+2026-08-28 18:39:44  graph.cpp: LUT-driven packing + reverse-strand slice fix. sig/cov/edges unchanged vs baseline; seq now reproduces its own signature (50.5% -> 100%). Count phase 57.3 -> 44.8 s wall, 832 -> 648 CPU-s.
+2026-08-28 19:2x  h2009 tam olcek, optimize ikili: graph 12:26 / 34.56 GB (nodes 70.5 M, edges 75.5 M). bubbles 9.06 s / 7.57 GB.
+2026-08-28 19:2x  RESULTS.md'deki bubbles 04:02 (hcc1954, 08-13) muhtemelen graph.bin'in cekirdek dizisini tasimasindan ONCEKI surumden; o zaman bubbles her FASTQ'yu yeniden tariyordu. Maliyet tablosunun o satiri bayat.
+2026-08-28 20:57:10
+  h2009 + h1437 tam boru hatti duzeltilmis ikiliyle; Minda A/C sonuclari results/exp2_fixed/. h1437 .gz indirmesi koseuyor.
+2026-08-29 01:5x  graph.bin v5: seq artik homopolimer-sikistirilmis. ASCII bit trick ile paketleme (tablosuz, dalsiz), gecerlilik testi cekirdek yolunun icine kaynatildi, ters iplikcik dilimi aynalanmis araliga duzeltildi. Degismez: murmur(saklanan) == sig, orneklemde 5000/5000. graph.bin iki kosuda BAYT BAYT ayni (v4'te degildi).
+2026-08-29 01:5x  bubbles: minimizer/LCS kurali kaldirildi. Yeni kural: iki kolun dizisini dik, iki uctan baz baz kirp, ikisi de <25 sikistirilmis baz ise ele. maxlen 40 -> 6.
+2026-08-29 04:45  call parametre supurmesi (mevcut BAM uzerinde, yeniden hizalama yok, nokta basina ~30 s).
+  h1437/align25: varsayilan F1 0.733 -> mapq40 + anchor_rep 0.45 + shred_rep 0.30 ile 0.758.
+  Kazanc precision'dan: FP 80 -> 61, TP 174 -> 172. TEK CIFTTE ayarlandi, h2009'da dogrulanmadan
+  hicbir varsayilan degistirilmeyecek.
