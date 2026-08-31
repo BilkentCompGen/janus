@@ -186,7 +186,7 @@ void psort(std::vector<T>& v, int threads, Cmp cmp) {
 }
 
 struct Shard { std::string path; int col; };
-struct Batch { std::vector<std::string> seqs; int col = 0; };
+struct Batch { std::vector<std::string> seqs; int col = 0; uint64_t first = 0; };
 
 static FILE* open_fastq(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -404,11 +404,83 @@ struct SigIndex {
     size_t bytes() const { return off.capacity() * 4; }
 };
 
+std::atomic<uint64_t> POST_SKIP{0};
+
+struct PostIdx {
+    uint32_t N = 0, pad = 0;
+    std::vector<uint64_t> w;
+    std::vector<uint8_t> cnt;
+    std::vector<uint64_t> worst;
+    std::mutex* mtx = nullptr;
+    bool on() const { return N != 0; }
+    size_t bytes() const { return w.capacity() * 8 + cnt.capacity() + worst.capacity() * 8; }
+};
+
+static inline uint64_t post_key(uint64_t w0) { return w0 & 0x3ffffffffull; }
+constexpr uint64_t POST_READ_MAX = 1ull << 28;
+constexpr uint64_t POST_ORD_MAX  = 1ull << 14;
+constexpr uint64_t POST_LEN_MAX  = 1ull << 16;
+
+static inline uint64_t post_w0(uint32_t samp, uint64_t read, uint32_t ord, uint32_t clen) {
+    return read | (uint64_t)samp << 28 | (uint64_t)ord << 34 | (uint64_t)clen << 48;
+}
+static inline uint64_t post_w1(uint32_t st, uint32_t dl, uint32_t dr) {
+    return (uint64_t)st | (uint64_t)dl << 32 | (uint64_t)dr << 48;
+}
+
+void post_offer(PostIdx& px, uint32_t node, uint64_t w0, uint64_t w1) {
+    const uint64_t key = post_key(w0);
+    if (px.cnt[node] >= px.N && key >= px.worst[node]) return;
+    std::lock_guard<std::mutex> lk(px.mtx[node & (NSHARD - 1)]);
+    uint64_t* row = px.w.data() + (size_t)node * (size_t)px.N * 2;
+    uint8_t& c = px.cnt[node];
+    size_t j;
+    if (c < px.N) {
+        j = c;
+    } else {
+        if (key >= post_key(row[(size_t)(px.N - 1) * 2])) return;
+        j = px.N - 1;
+    }
+    while (j > 0 && post_key(row[(j - 1) * 2]) > key) {
+        row[j * 2] = row[(j - 1) * 2]; row[j * 2 + 1] = row[(j - 1) * 2 + 1]; j--;
+    }
+    row[j * 2] = w0; row[j * 2 + 1] = w1;
+    if (c < px.N) c++;
+    if (c == px.N) px.worst[node] = post_key(row[(size_t)(px.N - 1) * 2]);
+}
+
+void post_write(const PostIdx& px, const std::string& path, uint64_t K, int S) {
+    std::vector<uint32_t> off(K + 1, 0);
+    for (uint64_t i = 0; i < K; i++) off[i + 1] = off[i] + px.cnt[i];
+    const uint64_t E = off[K];
+    FILE* f = xopen(path + ".tmp", "wb");
+    const uint32_t ver = 1, Sw = (uint32_t)S, pad = px.pad, N = px.N, resv = 0;
+    wr(f, "SNPI", 4); wr(f, &ver, 4); wr(f, &Sw, 4); wr(f, &pad, 4);
+    uint64_t Kw = K; wr(f, &Kw, 8); wr(f, &N, 4); wr(f, &resv, 4);
+    wr(f, off.data(), (K + 1) * 4);
+    std::vector<uint64_t> buf; buf.reserve(1u << 20);
+    for (uint64_t i = 0; i < K; i++) {
+        const uint64_t* row = px.w.data() + i * (size_t)px.N * 2;
+        for (uint32_t j = 0; j < px.cnt[i]; j++) { buf.push_back(row[j * 2]); buf.push_back(row[j * 2 + 1]); }
+        if (buf.size() >= (1u << 20)) { wr(f, buf.data(), buf.size() * 8); buf.clear(); }
+    }
+    if (!buf.empty()) wr(f, buf.data(), buf.size() * 8);
+    atomic_close(f, path + ".tmp", path);
+    uint64_t full = 0;
+    for (uint64_t i = 0; i < K; i++) full += (px.cnt[i] >= px.N);
+    std::fprintf(stderr, "[index] alanina sigmadigi icin atlanan kayit: %llu\n",
+                 (unsigned long long)POST_SKIP.load());
+    std::fprintf(stderr, "[index] %llu kayit, %.3f M dugumun %.1f%%'i dolu (N=%u), %.2f GB -> %s\n",
+                 (unsigned long long)E, K / 1e6, K ? 100.0 * (double)full / (double)K : 0.0, px.N,
+                 (16.0 * (double)E + 4.0 * (double)(K + 1) + 24.0) / 1073741824.0, path.c_str());
+}
+
 struct FillCtx {
     const SigIndex* idx = nullptr;
     const std::vector<cov_t>* cov = nullptr;
     std::vector<std::atomic<uint8_t>>* have = nullptr;
     std::vector<SeqRef>* sref = nullptr;
+    PostIdx* px = nullptr;
     int S = 0;
 };
 
@@ -418,8 +490,8 @@ struct LocalB {
     std::vector<std::pair<uint32_t, SeqRef>> put;
 };
 
-void fill_read(std::string& s, int level, int margin, int col, const FillCtx& cx, LocalB& lo,
-               uint64_t& cpu_ext, uint64_t& ncores, Prof& pf) {
+void fill_read(std::string& s, int level, int margin, int col, uint64_t rno,
+               const FillCtx& cx, LocalB& lo, uint64_t& cpu_ext, uint64_t& ncores, Prof& pf) {
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
     int nf, nr; const uint64_t *stf, *enf, *sgf, *strv, *enr, *sgr;
@@ -431,7 +503,11 @@ void fill_read(std::string& s, int level, int margin, int col, const FillCtx& cx
     const cov_t* cov = cx.cov->data();
 
     static thread_local std::vector<uint8_t> cd;
+    static thread_local std::vector<int> ci;
+    static thread_local std::vector<uint32_t> cnode;
     auto chain = [&](bool rev, int n, const uint64_t* st, const uint64_t* en, const uint64_t* sig) {
+        const bool wantpost = cx.px && cx.px->on() && !rev;
+        if (wantpost) { ci.clear(); cnode.clear(); }
         uint32_t prev = UINT32_MAX; bool have_prev = false; uint64_t prev_sig = 0;
         for (int i = 0; i < n; i++) {
             if (st[i] < mg || en[i] + mg > len) continue;
@@ -468,7 +544,26 @@ void fill_read(std::string& s, int level, int margin, int col, const FillCtx& cx
                 lo.e.insert(((uint64_t)prev << 32) | (uint64_t)node);
                 pf.edge_n++;
             }
+            if (wantpost) { ci.push_back(i); cnode.push_back(node); }
             prev = node; prev_sig = sig[i]; have_prev = true;
+        }
+        if (!wantpost || ci.empty()) return;
+        const int P = (int)cx.px->pad, m = (int)ci.size();
+        for (int p = 0; p < m; p++) {
+            const uint32_t node = cnode[p];
+            if (node == UINT32_MAX) continue;
+            const int la = p > P ? p - P : 0, rb = p + P < m ? p + P : m - 1;
+            const uint64_t a = st[ci[p]], b = en[ci[p]];
+            const uint64_t ws = st[ci[la]], we = en[ci[rb]];
+            if (b <= a || b - a >= POST_LEN_MAX || a - ws >= POST_LEN_MAX ||
+                we - b >= POST_LEN_MAX || rno >= POST_READ_MAX ||
+                (uint64_t)p >= POST_ORD_MAX || a >= (1ull << 32)) {
+                POST_SKIP.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            post_offer(*cx.px, node,
+                       post_w0((uint32_t)col, rno, (uint32_t)p, (uint32_t)(b - a)),
+                       post_w1((uint32_t)a, (uint32_t)(a - ws), (uint32_t)(we - b)));
         }
     };
     const uint64_t ti = thr_ns();
@@ -505,10 +600,12 @@ void read_shards(const std::vector<Shard>& shards, Feed& fd, size_t q_cap, size_
         const int col = shards[si].col;
         if (!batch.seqs.empty() && batch.col != col) push();
         batch.col = col;
+        if (batch.seqs.empty()) batch.first = mine[col];
         const bool svb = is_svb(shards[si].path);
         FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
         if (svb) {
             while (svb_next(f, svseq)) {
+                if (batch.seqs.empty()) batch.first = mine[col];
                 mine[col]++; batch.seqs.emplace_back(std::move(svseq));
                 if (batch.seqs.size() >= batch_n) push();
             }
@@ -519,6 +616,7 @@ void read_shards(const std::vector<Shard>& shards, Feed& fd, size_t q_cap, size_
                 for (const char* p = base; p < end; p++) if (*p == '\n') {
                     const size_t n = (size_t)(p - start);
                     if (line_no == 1) {
+                        if (batch.seqs.empty()) batch.first = mine[col];
                         if (carry.empty()) batch.seqs.emplace_back(start, n);
                         else { carry.append(start, n); batch.seqs.push_back(std::move(carry)); carry.clear(); }
                         mine[col]++;
@@ -624,14 +722,15 @@ void merge_sample(ShTab* psn, NodeTab* gnode, int col, int S, int min_mult, int 
 
 void fill_pass(const std::vector<Shard>& shards, int level, int margin, int threads, int S,
                const SigIndex& idx, const std::vector<cov_t>& cov,
-               std::vector<std::atomic<uint8_t>>& have, std::vector<SeqRef>& sref,
+               std::vector<std::atomic<uint8_t>>& have, std::vector<SeqRef>& sref, PostIdx& px,
                EdgeKeySet* gedge, std::vector<uint8_t>* gseq,
                std::mutex* emtx, std::mutex* smtx,
                std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
                std::atomic<uint64_t>& flush_ns, std::vector<uint64_t>& reads_per) {
     const int nw = std::max(1, threads - 1);
     Feed fd; fd.reads_per.assign((size_t)S, 0);
-    FillCtx cx; cx.idx = &idx; cx.cov = &cov; cx.have = &have; cx.sref = &sref; cx.S = S;
+    FillCtx cx; cx.idx = &idx; cx.cov = &cov; cx.have = &have; cx.sref = &sref;
+    cx.px = &px; cx.S = S;
 
     auto worker = [&]() {
         uint64_t ext = 0, emis = 0;
@@ -663,7 +762,8 @@ void fill_pass(const std::vector<Shard>& shards, int level, int margin, int thre
         };
         Batch b;
         while (feed_take(fd, b, pf)) {
-            for (std::string& s : b.seqs) fill_read(s, level, margin, b.col, cx, lo, ext, emis, pf);
+            for (size_t k = 0; k < b.seqs.size(); k++)
+                fill_read(b.seqs[k], level, margin, b.col, b.first + k, cx, lo, ext, emis, pf);
             const size_t lb = lo.e.values().capacity() * 8 + lo.e.bucket_count() * 8 + lo.a.capacity();
             pf.local_hw = std::max(pf.local_hw, lb);
             if (lo.e.size() >= FLUSH || lo.a.size() >= (size_t)(64u << 20)) flush();
@@ -681,7 +781,8 @@ void fill_pass(const std::vector<Shard>& shards, int level, int margin, int thre
 }
 
 void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, int threads,
-                       int min_mult, int S, std::vector<SigCount>& out_nodes,
+                       int min_mult, int S, int index_n, int pad_cores, const std::string& dir,
+                       std::vector<SigCount>& out_nodes,
                        std::vector<cov_t>& out_ncov, std::vector<CEdge>& out_edges,
                        std::vector<SeqRef>& out_sref, std::vector<uint8_t>& out_seq,
                        uint64_t& ov_s, uint64_t& ov_c, std::vector<uint64_t>& reads_per) {
@@ -760,8 +861,24 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
     std::atomic<uint64_t> emis_b{0}, ext_b{0}, flush_b{0};
     std::vector<uint64_t> rp_b((size_t)S, 0);
 
-    fill_pass(shards, level, margin, threads, S, idx, out_ncov, have, out_sref,
+    PostIdx px;
+    if (index_n > 0) {
+        px.N = (uint32_t)index_n; px.pad = (uint32_t)pad_cores;
+        px.w.assign(K * (size_t)index_n * 2, 0);
+        px.cnt.assign(K, 0);
+        px.worst.assign(K, 0);
+        px.mtx = smtx;
+        std::fprintf(stderr, "[index] N=%d pad=%d, tampon %.2f GB\n",
+                     index_n, pad_cores, px.bytes() / 1073741824.0);
+    }
+    fill_pass(shards, level, margin, threads, S, idx, out_ncov, have, out_sref, px,
               gedge, gseq, emtx, smtx, emis_b, ext_b, flush_b, rp_b);
+    if (px.on()) {
+        post_write(px, dir + "/index.bin", K, S);
+        std::vector<uint64_t>().swap(px.w);
+        std::vector<uint8_t>().swap(px.cnt);
+        std::vector<uint64_t>().swap(px.worst);
+    }
     report_bytes_b(gedge, gseq, idx.bytes() + K * 8, out_ncov.capacity(), out_sref.capacity() * sizeof(SeqRef));
     std::vector<std::atomic<uint8_t>>().swap(have);
 
@@ -804,7 +921,7 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
 }
 
 void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
-                     int level, int margin, int min_mult, int threads) {
+                     int level, int margin, int min_mult, int threads, int index_n, int pad_cores) {
     mkdir(dir.c_str(), 0755);
     const int S = (int)samples.size();
     std::vector<Shard> shards_all;
@@ -826,8 +943,8 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     std::vector<SigCount> nodes; std::vector<CEdge> ce;
     std::vector<cov_t> ncov; std::vector<uint64_t> nreads;
     std::vector<SeqRef> sref; std::vector<uint8_t> sbuf; uint64_t ov_s = 0, ov_c = 0;
-    run_pool_two_pass(shards_all, level, margin, threads, min_mult, S, nodes, ncov, ce, sref, sbuf,
-                    ov_s, ov_c, nreads);
+    run_pool_two_pass(shards_all, level, margin, threads, min_mult, S, index_n, pad_cores, dir,
+                      nodes, ncov, ce, sref, sbuf, ov_s, ov_c, nreads);
     const uint64_t K = nodes.size();
     const Snap P1 = snap();
     tic.mark("pool_both");

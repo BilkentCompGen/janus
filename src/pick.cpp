@@ -95,13 +95,14 @@ size_t anchor_cores(const char* fa, const ankerl::unordered_dense::set<std::stri
 int cmd_pick(int argc, char** argv) {
     if (argc < 5) {
         std::fprintf(stderr, "usage: snape pick <ctg.fa[,ctg.fa...]> <calls.vcf> <normal reads> <out.fastq> "
-                             "[threads=16] [min_shared=5]\n");
+                             "[threads=16] [min_shared=5] [trim_bp=0]\n");
         return 2;
     }
     const std::string fa = argv[1], vcf = argv[2], reads = argv[3], out = argv[4];
     const int NT = argc > 5 ? std::atoi(argv[5]) : 16;
 
     const int MINSH = argc > 6 ? std::atoi(argv[6]) : 5;
+    const int64_t TRIM = argc > 7 ? std::atoll(argv[7]) : 0;
     if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
 
     const auto want = wanted_contigs(vcf.c_str());
@@ -121,7 +122,7 @@ int cmd_pick(int argc, char** argv) {
     Reads in = reads_open(reads, "");
     FILE* fo = std::fopen((out + ".tmp").c_str(), "w"); if (!fo) die("open out");
     std::mutex out_mu;
-    std::atomic<uint64_t> seen{0}, kept{0};
+    std::atomic<uint64_t> seen{0}, kept{0}, kept_bp{0}, seen_bp{0};
 
     constexpr size_t Q_CAP = 128, BATCH = 32;
     struct Rd { std::string name, seq; };
@@ -168,11 +169,27 @@ int cmd_pick(int argc, char** argv) {
                     hit += sigs.contains(sg[i]);
                 }
                 if (hit >= MINSH) {
-                    buf.assign("@"); buf += r.name; buf += "\n"; buf += r.seq;
-                    buf += "\n+\n"; buf.append(r.seq.size(), 'I'); buf += "\n";
+                    uint64_t a = 0, b = r.seq.size();
+                    if (TRIM > 0) {
+                        uint64_t lo_ = UINT64_MAX, hi_ = 0;
+                        for (int i = 0; i < n; i++) {
+                            if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > r.seq.size()) continue;
+                            if (!sigs.contains(sg[i])) continue;
+                            if (st[i] < lo_) lo_ = st[i];
+                            if (en[i] > hi_) hi_ = en[i];
+                        }
+                        if (lo_ != UINT64_MAX) {
+                            a = lo_ > (uint64_t)TRIM ? lo_ - (uint64_t)TRIM : 0;
+                            b = hi_ + (uint64_t)TRIM < r.seq.size() ? hi_ + (uint64_t)TRIM : r.seq.size();
+                        }
+                    }
+                    const size_t L = (size_t)(b - a);
+                    buf.assign("@"); buf += r.name; buf += "\n";
+                    buf.append(r.seq, (size_t)a, L);
+                    buf += "\n+\n"; buf.append(L, 'I'); buf += "\n";
                     std::lock_guard<std::mutex> lk(out_mu);
                     std::fwrite(buf.data(), 1, buf.size(), fo);
-                    kept++;
+                    kept++; kept_bp += L; seen_bp += r.seq.size();
                 }
                 if (s % 2000000 == 0)
                     std::fprintf(stderr, "[pick]   %llu okuma, %llu secildi\n",
@@ -188,7 +205,9 @@ int cmd_pick(int argc, char** argv) {
     if (std::rename((out + ".tmp").c_str(), out.c_str())) die("rename");
 
     const uint64_t sn = seen.load(), kp = kept.load();
-    std::fprintf(stderr, "[pick] %llu normal okumanin %llu tanesi secildi (%%%.2f) -> %s\n",
-                 (unsigned long long)sn, (unsigned long long)kp, sn ? 100.0 * kp / sn : 0.0, out.c_str());
+    std::fprintf(stderr, "[pick] %llu normal okumanin %llu tanesi secildi (%%%.2f), %.3f Gbp"
+                 " (kirpma %lld bp, kirpilmadan %.3f Gbp olurdu) -> %s\n",
+                 (unsigned long long)sn, (unsigned long long)kp, sn ? 100.0 * kp / sn : 0.0,
+                 kept_bp.load() / 1e9, (long long)TRIM, seen_bp.load() / 1e9, out.c_str());
     return 0;
 }

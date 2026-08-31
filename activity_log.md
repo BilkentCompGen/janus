@@ -52,3 +52,45 @@ Açık kalan tek iş kullanıcının onayını gerektiriyor: `git push --force o
   h1437/align25: varsayilan F1 0.733 -> mapq40 + anchor_rep 0.45 + shred_rep 0.30 ile 0.758.
   Kazanc precision'dan: FP 80 -> 61, TP 174 -> 172. TEK CIFTTE ayarlandi, h2009'da dogrulanmadan
   hicbir varsayilan degistirilmeyecek.
+
+## 2026-08-31 gece oturumu
+
+2026-08-31 03:13:00  Otonom mod. Hedef: 5 CASTLE cifti e2e + ters indeks, olculmus.
+2026-08-31 03:13:00  Truth setleri diskte yok (yalniz hcc1954). Zenodo 14541057 (15 GB) indirmeye alindi.
+2026-08-31 03:13:00  PLAN.md yazildi: e2e once ve kesintisiz, indeks kodu onun uzerine.
+2026-08-31 03:22:00  Determinizm DOGRULANDI: iki tam kosu bayt bayt ayni (17:10.78 / 17:07.97, 10.12 / 10.21 GB).
+2026-08-31 03:22:00  Ters indeks yazildi ve dogrulandi: --index 0 ciktiyi degistirmiyor (bayt bayt),
+                     --index 8 graph.bin'e dokunmadan index.bin uretiyor. Altornekte 92.5 M kayit, 1.61 GB.
+2026-08-31 03:23:00  e2e bes cift basliyor, graph --index 8 ile. Indekssiz baseline: hcc1954 16:59 / 10.24 GB.
+2026-08-31 03:22:26  e2e: bes cift basliyor, T=16
+2026-08-31 03:22:26  e2e hcc1954 basladi
+2026-08-31 03:30:58  FATAL hcc1954/graph rc=134
+2026-08-31 03:30:58  e2e h2009 basladi
+2026-08-31 03:40:09  FATAL h2009/graph rc=134
+2026-08-31 03:40:09  e2e hcc1937 basladi
+2026-08-31 03:48:02  FATAL hcc1937/graph rc=134
+2026-08-31 03:48:02  e2e h1437 basladi
+2026-08-31 03:57:04  FATAL h1437/graph rc=134
+2026-08-31 03:57:04  e2e hs578 basladi
+2026-08-31 04:01:30  FATAL hs578/graph rc=143
+2026-08-31 04:01:30  e2e: bes cift bitti
+2026-08-31 04:02:00  HATA: e2e'nin bes graph asamasi da die_post() ile dustu (rc=134). Sebep: posting
+                     kaydinda cekirdek uzunluguna 12 bit verilmisti (max 4095); olculen max 2,474 idi
+                     ama tam olcekte asiliyor. Ayrica indeks bir optimizasyon olmasina ragmen kosuyu
+                     olduruyordu. Duzeltme: ord 16->14 bit, cekirdek uzunlugu 12->16 bit, ve tasma
+                     artik abort degil, kayit atlanip sayiliyor. e2e bastan baslatildi. Kayip 40 dk.
+2026-08-31 04:02:59  e2e: bes cift basliyor, T=16
+2026-08-31 04:02:59  e2e hcc1954 basladi
+2026-08-31 04:22:00  DIKKAT, olcum kirliligi: tam olcekli indeks kurulumu (nice 19, -t 8) e2e'nin
+                     hcc1954 asamalariyla es zamanli kosuyor. hcc1954'un graph'i 19:13'te ve hala
+                     kosuyor, temiz baseline 16:59 idi. KARAR: indeks kurulumu birakiliyor cunku
+                     N=8'in yetip yetmedigi ayri bir teslim; hcc1954'un e2e SURELERI "cekismeli"
+                     diye isaretlenecek ve graph icin determinizm kosularinin temiz sayilari
+                     (17:10.78 / 10.12 GB ve 17:07.97 / 10.21 GB) kullanilacak. Ciftler 2-5 temiz.
+2026-08-31 04:55:48  e2e hcc1954 bitti, 1066 cagri
+2026-08-31 04:55:48  e2e h2009 basladi
+2026-08-31 04:58:00  hcc1954 e2e BITTI: 52:49, 1066 cagri, P 0.894 R 0.862 F1 0.878.
+                     Agustos referansi (ayni skorlayici, eski binary): 0.891/0.862/0.876. Yani iki
+                     gecisli graph + emit duzeltmesi + yeni bubble kurali dogrulugu bozmadi.
+                     (Once 0.559 okumustum; skorlayiciya tolerans olarak yanlislikla 1 bp gecmisim.
+                     Argüman ayristirmasi --types bayragina cevrildi.)

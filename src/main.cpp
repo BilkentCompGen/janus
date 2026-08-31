@@ -26,6 +26,7 @@ static void usage() {
         "  snape run       --samples <sheet.tsv> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10]\n"
         "                  [--min-mult 3] [--supp-discover 5] [--supp-assign 2]\n"
         "  snape graph     --samples <sheet.tsv> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
+        "                  [--index N] [--pad-cores 50]   N>0: <dir>/index.bin, dugum basina N kayit\n"
         "\n"
         "  the sheet is a three-column TSV, one row per read set:\n"
         "      name  role    path\n"
@@ -36,7 +37,8 @@ static void usage() {
         "  snape call      <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5]\n"
         "  snape pick      <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads=16] [min_shared=5]\n"
         "  snape pack      <out.svb> < reads.fastq\n"
-        "  snape dump      <in.svb> > reads.fastq\n");
+        "  snape dump      <in.svb> > reads.fastq\n"
+        "  snape svbidx    <in.svb>            per-read offsets -> in.svb.idx\n");
 }
 
 static int sh(const std::string& cmd) {
@@ -163,8 +165,10 @@ int main(int argc, char** argv) {
     if (cmd == "pick")      { LCP_INIT(); return cmd_pick(argc - 1, argv + 1); }
     if (cmd == "pack")      return cmd_pack(argc - 1, argv + 1);
     if (cmd == "dump")      return cmd_dump(argc - 1, argv + 1);
+    if (cmd == "svbidx")    return cmd_svbidx(argc - 1, argv + 1);
 
     int level = 5, margin = 10, min_mult = 3, threads = 16, supp_discover = 5, supp_assign = 2;
+    int index_n = 0, pad_cores = 50;
     std::string sheet;
     std::vector<std::string> pos;
     for (int i = 2; i < argc; i++) {
@@ -179,6 +183,8 @@ int main(int argc, char** argv) {
         else if (a == "--samples") sheet = v;
         else if (a == "--supp-discover") supp_discover = std::atoi(v);
         else if (a == "--supp-assign") supp_assign = std::atoi(v);
+        else if (a == "--index") index_n = std::atoi(v);
+        else if (a == "--pad-cores") pad_cores = std::atoi(v);
         else { std::fprintf(stderr, "[FATAL] arg: %s\n", a.c_str()); std::abort(); }
     }
     if (min_mult > (int)COV_MAX) { std::fprintf(stderr, "[FATAL] --min-mult %d exceeds the count width (%d)\n", min_mult, (int)COV_MAX); std::abort(); }
@@ -195,7 +201,7 @@ int main(int argc, char** argv) {
         const std::vector<Sample> smp = samples_read(sheet);
         mkdir(pos[0].c_str(), 0755);
         samples_lock(smp, pos[0] + "/samples.tsv");
-        run_graph_reads(smp, pos[0], level, margin, min_mult, threads);
+        run_graph_reads(smp, pos[0], level, margin, min_mult, threads, index_n, pad_cores);
     }
     else { usage(); return 2; }
     return 0;
