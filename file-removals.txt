@@ -130,3 +130,4 @@ TASINANLAR:
 2026-08-31 00:07:48  mv hifi/SRR31537479.gz /home/yuio/trash/hifi-gz/  (30039691573 B; .svb paketlendi ve ENA baz sayisiyla dogrulandi, ham .gz gereksiz)
 2026-08-31 00:07:48  mv hifi/SRR31537482.gz /home/yuio/trash/hifi-gz/  (84801526605 B; .svb paketlendi ve ENA baz sayisiyla dogrulandi, ham .gz gereksiz)
 2026-08-31 00:35:47  cp -a src /home/yuio/trash/src-with-comments-20260831-003547  (yorumlar silinmeden once tam kopya)
+2026-08-31 05:26:27  mv e2e/mm2exp/norm_full.* -> trash (yarim kalan kirpma deneyi, yeniden kosulacak)

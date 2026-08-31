@@ -9,11 +9,11 @@ set -u
 cd /home/yuio/snape
 MMI=/home/yuio/snape/e2e/hg38.map-hifi.mmi
 D=e2e/mm2exp; mkdir -p $D
-T=8
+T=14
 
 run() { local tag=$1; shift
     [ -s "$D/$tag.time" ] && { printf "   %-22s (atlandi)\n" "$tag"; return; }
-    nice -n 5 /usr/bin/time -v "$@" > $D/$tag.out 2> $D/$tag.time
+    nice -n 0 /usr/bin/time -v "$@" > $D/$tag.out 2> $D/$tag.time
     printf "   %-22s %10s  %6s GB  %6s\n" "$tag" \
         "$(grep -a 'Elapsed (wall' $D/$tag.time | sed 's/.*): //')" \
         "$(grep -a 'Maximum resident' $D/$tag.time | awk '{printf "%.2f",$NF/1048576}')" \
@@ -30,7 +30,7 @@ run norm_full sh -c "minimap2 -ax map-hifi -t $T -Y --secondary=no '$MMI' '$NFQ'
 for tr in 3000 1500 500; do
     f=$D/norm_trim$tr.fastq
     if [ ! -s "$f" ]; then
-        nice -n 5 ./snape pick e2e/hcc1954/ctg.t.fa e2e/hcc1954/candidates.vcf \
+        nice -n 0 ./snape pick e2e/hcc1954/ctg.t.fa e2e/hcc1954/candidates.vcf \
             hifi/hcc1954/n.svb "$f" $T 5 $tr > $D/pick$tr.out 2> $D/pick$tr.time
     fi
     grep -a "\[pick\]" $D/pick$tr.time | sed 's/^/   /'
@@ -43,7 +43,7 @@ for v in full trim3000 trim1500 trim500; do
     b=$D/norm_$v.bam
     [ -s "$b" ] || continue
     [ -s "$b.bai" ] || samtools index -@ 4 "$b"
-    [ -s "$D/calls_$v.vcf" ] || nice -n 5 ./snape call "t=e2e/hcc1954/ctg.t.bam" "$b" "$D/calls_$v.vcf" \
+    [ -s "$D/calls_$v.vcf" ] || nice -n 0 ./snape call "t=e2e/hcc1954/ctg.t.bam" "$b" "$D/calls_$v.vcf" \
         10 0 50 50 5 6 300 0.01 0.40 0.50 0.25 2 > $D/call_$v.out 2> $D/call_$v.time
     printf "   %-10s " "$v"
     /home/yuio/.venv/bin/python e2e/score.py "$D/calls_$v.vcf" truth/hcc1954.truth.vcf

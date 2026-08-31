@@ -94,3 +94,71 @@ Açık kalan tek iş kullanıcının onayını gerektiriyor: `git push --force o
                      gecisli graph + emit duzeltmesi + yeni bubble kurali dogrulugu bozmadi.
                      (Once 0.559 okumustum; skorlayiciya tolerans olarak yanlislikla 1 bp gecmisim.
                      Argüman ayristirmasi --types bayragina cevrildi.)
+2026-08-31 05:26:00  Kirpma deneyi DURDURULDU. e2e'nin sureleri kirleniyordu (h2009 graph 23:38,
+                     temiz karsiligi ~17:10) -- graph bellek bandina duyarli, bos cekirdek olsa da
+                     es zamanli is yavaslatiyor. Bes ciftin temiz olculmesi birincil teslim;
+                     minimap2 "vakit kalirsa" idi. Kirpma sweep'i e2e bitince kosulacak.
+2026-08-31 05:55:35  e2e h2009 bitti, 960 cagri
+2026-08-31 05:55:35  e2e hcc1937 basladi
+2026-08-31 05:55:35  h2009 e2e BITTI: 59:47, 960 cagri, P 0.848 R 0.880 F1 0.864.
+                     docs/RESULTS.md'deki tarihsel h2009 F1 0.865 ile ayni.
+                     Asama sureleri: graph 23:38* / bubbles 0:09.36 / junctions 2:37.95 /
+                     mm2_ctg 17:45.03 / call_cand 0:23.06 / pick 2:06.68 / mm2_norm 12:28.70 /
+                     call 0:37.04.  (* graph, kirpma deneyi es zamanli kosarken olculdu)
+2026-08-31 06:08:00  Iki cift bitti. Boru hattinin tepe RSS'i artik minimap2'nin: hcc1954 19.71 GB,
+                     h2009 19.17 GB; graph 10.30 / 10.41. Iki gecisli graph zirveyi 32.8 -> ~19.7'ye
+                     indirdi ama daha asagi inmek icin kaldirac minimap2'de, oyle olacagi
+                     ongorulmustu ve simdi kendi verimizle dogrulandi.
+                     h2009 contig FASTA'si 8.09 GB (hcc1954 3.10 GB), mm2_ctg 17:45 vs 7:49.
+2026-08-31 06:28:57  e2e hcc1937 bitti, 605 cagri
+2026-08-31 06:28:57  e2e h1437 basladi
+2026-08-31 06:28:57  hcc1937 e2e BITTI: 33:22 (temiz kutu), 605 cagri, P 0.830 R 0.714 F1 0.768.
+                     Tarihsel (docs/RESULTS.md) 0.765. Uc ciftte de tarihsel F1 ile eslesiyor:
+                     hcc1954 0.878/0.876, h2009 0.864/0.865, hcc1937 0.768/0.765.
+                     hcc1937 asama sureleri (hepsi temiz): graph 15:57.15 / bubbles 0:05.95 /
+                     junctions 1:48.95 / mm2_ctg 4:44.72 / call_cand 0:08.90 / pick 1:43.57 /
+                     mm2_norm 8:39.04 / call 0:13.43.
+2026-08-31 07:11:16  e2e h1437 bitti, 265 cagri
+2026-08-31 07:11:16  e2e hs578 basladi
+2026-08-31 07:11:16  h1437 e2e BITTI: 42:19, 265 cagri, P 0.668 R 0.801 F1 0.728.
+                     Tarihsel 0.754 (bug'li binary). Fark -0.026, bilinen: ters iplik dilim
+                     duzeltmesinin h1437'ye maliyeti. Dort ciftin ucu tarihselle esit:
+                     hcc1954 0.878/0.876, h2009 0.864/0.865, hcc1937 0.768/0.765, h1437 0.728/0.754.
+                     Ortalama 0.8095 vs 0.815, fark tamamen h1437'den.
+2026-08-31 07:36:56  e2e hs578 bitti, 132 cagri
+2026-08-31 07:36:56  e2e: bes cift bitti
+2026-08-31 07:37:28  e2e bitti, sonuclar toplaniyor
+2026-08-31 07:37:28  minimap2: thread taramasi (bos kutu)
+2026-08-31 07:37:28  mm2 deneyleri basladi
+2026-08-31 07:36:56  BES CIFT DE BITTI. Toplam 3 sa 34 dk (04:02:59 -> 07:36:56).
+                     hs578: 25:39, 132 cagri (truth yok). Sonuc tablosu e2e/RESULTS.txt,
+                     gorsel rapor results/gece_20260831.html, port 8799'da yayinda.
+                     minimap2 deneyleri (thread taramasi + kirpma) otomatik basladi.
+2026-08-31 08:20:00  minimap2 THREAD TARAMASI, negatif sonuc (contig'ler, .mmi, bos kutu):
+                       t8   8:27.76   783% CPU  15.20 GB
+                       t14  6:48.95  1360% CPU  17.40 GB
+                       t22  6:55.96  2135% CPU  20.22 GB
+                       t30  6:58.06  2891% CPU  23.11 GB
+                     14'ten sonra olcekleme YOK; CPU artiyor, duvar sabit/kotu, RSS buyuyor.
+                     Cikti /dev/null'a gidiyordu, yani I/O degil -> bellek bant genisligi.
+                     "Daha cok thread" kaldiraci OLU. Ustelik zarar: boru hattinin tavani
+                     minimap2'nin RSS'i ve thread ile buyuyor.
+                     .mmi: 6:33.74 vs 6:46.44 (FASTA), cikti birebir ayni, RSS 1 GB dusuk.
+2026-08-31 08:41:00  minimap2 BAYRAK taramasi, hepsi negatif (contig'ler, -t 30):
+                       taban      6:58.06  23.11 GB
+                       -K 2G      6:56.35  24.97 GB
+                       -2         6:57.46  23.44 GB
+                       --max-chain-skip 10 --max-chain-iter 1000  6:57.33  22.84 GB
+                     Hicbiri fark etmiyor. Bellek bant genisligine dogmus durumda.
+                     "Dogru bayraklar ve paralellik" yonu KAPANDI; ise yarayan tek sey .mmi.
+                     Kalan kaldirac: daha kucuk sorgular (kirpma).
+2026-08-31 09:49:17  mm2 deneyleri bitti
+2026-08-31 09:49:17  minimap2: kirpma sweep'i
+2026-08-31 09:51:13  gece isi bitti
+2026-08-31 10:24:01  daha-az-okuma sweep bitti
+2026-08-31 10:26:00  ASIL BULGU olculdu: pick'in min_shared'i 5 -> 20 yapmak mm2_norm'u
+                     16:16 -> 7:28 (-%54) indiriyor, F1 0.878 -> 0.877 (tek cagri), germline
+                     suzgeci ayni 870 cagriyi eliyor. 40'ta bozuluyor (862, P 0.887).
+                     Kirpmayla karsilastirma ayni asamada: kirpma baz -%41 -> sure -%11;
+                     min_shared 20 okuma -%43 -> sure -%54. Belirleyen okuma sayisi, baz degil.
+                     Onerilen: main.cpp'de pick cagrisina min_shared=20. Tek cift, dogrulanmali.

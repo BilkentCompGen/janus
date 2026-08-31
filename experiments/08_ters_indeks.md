@@ -108,3 +108,37 @@ dogrulama yapilmadan baglanmamali.
 tam olcekte N=8, chunk basina 5 contig icin yetiyor mu, ve `pick`'in ihtiyaci olan lokus
 derinligini veriyor mu. `pick` bugun lokusta ~44x goruyor; olculmus: 11x -> 136 yanlis cagri,
 44x -> 116. N=8 ile ~8x'e duserse precision'a mal olur. Bu, olculmeden baglanmamali.
+
+## `junctions`'i indekse baglamanin tasarimi (yazilmadi, cikarilan gereksinimler)
+
+Kodu yazmadan once bugunku davranisi tam olarak okudum; indeksle ayni ciktiyi vermek icin
+gerekenler:
+
+1. **Kayittan pencere dogrudan cikiyor.** Bir dizi `[a..b]` icin
+   `ws = st(a) - dleft(a)`, `we = st(b) + corelen(b) + dright(b)`,
+   `lf = dleft(a)`, `rf = dright(b)`. Dordu de kayitli alanlar, `pad` header'da.
+
+2. **Ama yon ters cevrilmeli.** Bugun `junctions` okuma -> chunk yonunde gidiyor:
+   bir okumanin butun somatik cekirdeklerini bulup maksimal diziyi cikariyor, ve
+   `nxt - b > 2*PAD` testiyle **farkli chunk'lara ait** dizileri de birlestiriyor
+   (`cc[b+1] >= 0` herhangi bir chunk demek, `ch = cc[a]` ilkini aliyor). Mobil eleman
+   insersiyonunun iki birlesme noktasini ayni pencerede tutan sey bu.
+   Indeks chunk -> okuma yonunde. Ayni davranisi vermek icin kayitlar once **okumaya gore**
+   gruplanmali, sonra `ord`'a gore siralanip dizi cikarilmali. Yani indeks okunduktan sonra
+   bir kez ters cevirme gerekiyor: (okuma -> [ord, chunk, alanlar]).
+
+3. **Kapak ve isimlendirme.** `taken[chunk*L + line] < per_chunk` ve `<okuma>_<n>` numaralandirmasi
+   okuma icinde artiyor; ikisi de yeni yonde kurulabilir ama sira bugunkunden farkli olacagi
+   icin **hangi 5 contig'in secildigi degisebilir**. Contig kumesi bugunkuyle karsilastirilmali,
+   birebir ayni olmasi beklenmemeli.
+
+4. **Okuma baytlari.** `.svb.idx` ile dogrudan seek; okumalarin %70.1'i hic acilmaz
+   (olculmus: 600k'lik altornekte contig ureten okuma orani %29.9).
+
+Beklenen kazanc, kayitli butceye gore: `junctions` 2:06 -> ~1:00. Bu gecenin olcumunde
+`junctions` 2:21.99 (hcc1954) ve 2:37.95 (h2009), yani kazanc ~1:15/cift mertebesinde.
+Boru hattinin ~%3'u. `pick`'in kazanci daha buyuk olurdu (2:17.66 -> ~0:20) ama derinlik
+sorunu yuzunden baglanamiyor.
+
+**Sonuc: indeks kuruldu ve olculdu; baglanmasi bir sonraki isin konusu ve tek basina
+boru hattinin ~%3'unu kazandiriyor. minimap2 %52.3, oncelik orada.**
