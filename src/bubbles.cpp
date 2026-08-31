@@ -1,5 +1,6 @@
 #include "bubbles.h"
 #include "samples.h"
+#include "postings.h"
 
 #include "snape.h"
 #include "unordered_dense.h"
@@ -40,28 +41,15 @@ struct Graph {
     std::vector<uint32_t> on, in;
     int S = 0;
     std::vector<uint32_t> tc;
-    std::vector<uint32_t> slen;
-    std::vector<uint64_t> soff;
-    std::vector<uint8_t> seq;
     uint64_t ov_s = 0, ov_c = 0;
 };
-
-void seq_get(const Graph& g, uint32_t v, std::string& out) {
-    const uint32_t len = g.slen[v], n = len & ~SEQ_RAW;
-    out.resize(n);
-    if (!n) return;
-    const uint8_t* p = g.seq.data() + g.soff[v];
-    if (len & SEQ_RAW) { std::memcpy(&out[0], p, n); return; }
-    static const char L[4] = { 'A', 'C', 'G', 'T' };
-    for (uint32_t i = 0; i < n; i++) out[i] = L[(p[i >> 2] >> (6 - 2 * (i & 3))) & 3];
-}
 
 Graph load_graph(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
     Graph g;
     char mg[4]; uint32_t ver = 0, S = 0, resv = 0;
     if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin (bad magic)");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 5) die("graph.bin version is not 5 -- rebuild it");
+    if (std::fread(&ver, 4, 1, f) != 1 || ver != 6) die("graph.bin version is not 6 -- rebuild it");
     if (std::fread(&S, 4, 1, f) != 1 || S < 2 || S > 64) die("graph.bin sample count out of range");
     if (std::fread(&resv, 4, 1, f) != 1) die("read header");
     if (std::fread(&g.ov_s, 8, 1, f) != 1 || std::fread(&g.ov_c, 8, 1, f) != 1) die("read overlap");
@@ -91,17 +79,6 @@ Graph load_graph(const std::string& path) {
     } else if (std::fseek(f, (long)((size_t)(S - 1) * g.K * sizeof(cov_t)), SEEK_CUR) != 0) {
         die("seek past tumour planes");
     }
-
-    uint64_t sbytes = 0;
-    if (std::fread(&sbytes, 8, 1, f) != 1) die("read core sequence size");
-    g.slen.resize(g.K);
-    if (g.K && std::fread(g.slen.data(), 4, g.K, f) != g.K) die("read core lengths");
-    g.seq.resize(sbytes);
-    if (sbytes && std::fread(g.seq.data(), 1, sbytes, f) != sbytes) die("read core sequence");
-    g.soff.resize(g.K);
-    { uint64_t at = 0;
-      for (uint64_t i = 0; i < g.K; i++) { g.soff[i] = at; at += seq_bytes(g.slen[i]); }
-      if (at != sbytes) die("core sequence section is the wrong size"); }
 
     uint64_t E = 0;
     if (std::fread(&E, 8, 1, f) != 1) die("read E");
@@ -196,11 +173,12 @@ std::vector<Bub> find_bubbles(const Graph& g, int maxlen, int NT) {
     return out;
 }
 
-bool arm_seq(const Graph& g, const std::vector<uint32_t>& arm, std::string& out) {
-    static thread_local std::string core;
+bool arm_seq(const Index& ix, std::vector<SvbFile>& svb, const std::vector<uint32_t>& arm,
+             std::string& out) {
+    static thread_local std::string core, scratch;
     out.clear();
     for (size_t i = 0; i < arm.size(); i++) {
-        seq_get(g, arm[i], core);
+        if (!core_bytes(ix, svb, arm[i], core, scratch)) return false;
         if (core.empty()) return false;
         if (i == 0) { out = core; continue; }
         size_t k = std::min(out.size(), core.size());
@@ -271,6 +249,15 @@ int cmd_bubbles(int argc, char** argv) {
     const std::vector<Sample> smp = samples_read(spath);
     const Graph g = load_graph(gpath);
     if ((size_t)g.S != smp.size()) die("sheet and graph.bin disagree on the sample count");
+
+    const size_t cut0 = gpath.find_last_of('/');
+    const std::string dir = cut0 == std::string::npos ? std::string(".") : gpath.substr(0, cut0);
+    Index ix; ix.load(dir + "/index.bin");
+    if (ix.K != g.K) die("index.bin and graph.bin disagree on the node count");
+    std::vector<SvbFile> svb(smp.size());
+    for (size_t i = 0; i < smp.size(); i++) svb[i].open(smp[i].path);
+    std::fprintf(stderr, "[bubbles] index.bin: %llu kayit, N=%u\n",
+                 (unsigned long long)ix.off[ix.K], ix.N);
     const std::vector<Bub> bubs = find_bubbles(g, MAXLEN, NT);
     if (bubs.empty()) std::fprintf(stderr, "[bubbles] temiz bubble yok\n");
 
@@ -290,7 +277,7 @@ int cmd_bubbles(int argc, char** argv) {
     uint64_t nbub = 0, nomiss = 0, naln = 0;
     std::string ts, gs;
     for (const Bub& b : bubs) {
-        const bool sized = arm_seq(g, b.som_arm, ts) && arm_seq(g, b.germ_arm, gs);
+        const bool sized = arm_seq(ix, svb, b.som_arm, ts) && arm_seq(ix, svb, b.germ_arm, gs);
         size_t a = 0, dt = 0, dn = 0, run = 0;
         if (sized) diff_span(ts, gs, a, dt, dn);
         nomiss += !sized;
@@ -316,8 +303,8 @@ int cmd_bubbles(int argc, char** argv) {
     if (ALIGN) std::fprintf(stderr, "[bubbles] %llu bubble hizalandi\n", (unsigned long long)naln);
     if (dmp) { std::fclose(dmp); std::fprintf(stderr, "[bubbles] bubble istatistikleri -> %s\n", DUMP); }
 
-    const size_t cut = gpath.find_last_of('/');
-    const std::string out = (cut == std::string::npos ? std::string(".") : gpath.substr(0, cut)) + "/drop.sigs";
+    for (auto& v : svb) v.close();
+    const std::string out = dir + "/drop.sigs";
     FILE* f = std::fopen(out.c_str(), "w"); if (!f) die("open drop.sigs");
     for (uint64_t s : drop) std::fprintf(f, "%llu\n", (unsigned long long)s);
     std::fclose(f);

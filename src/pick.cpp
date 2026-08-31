@@ -1,4 +1,6 @@
 #include "pick.h"
+#include "postings.h"
+#include <algorithm>
 
 #include "snape.h"
 #include "unordered_dense.h"
@@ -99,7 +101,7 @@ int cmd_pick(int argc, char** argv) {
         return 2;
     }
     const std::string fa = argv[1], vcf = argv[2], reads = argv[3], out = argv[4];
-    const int NT = argc > 5 ? std::atoi(argv[5]) : 16;
+    const int NT = argc > 5 ? std::atoi(argv[5]) : 16; (void)NT;
 
     const int MINSH = argc > 6 ? std::atoi(argv[6]) : 5;
     const int64_t TRIM = argc > 7 ? std::atoll(argv[7]) : 0;
@@ -119,95 +121,56 @@ int cmd_pick(int argc, char** argv) {
                  want.size(), nctg, sigs.size());
     if (sigs.empty()) die("no anchor cores");
 
-    Reads in = reads_open(reads, "");
+    const size_t cut = fa.find_last_of('/');
+    const std::string dir = cut == std::string::npos ? std::string(".") : fa.substr(0, cut);
+    uint32_t S = 0; uint64_t K = 0;
+    const std::vector<uint64_t> gsig = graph_sigs(dir + "/graph.bin", S, K);
+    SigLookup sl; sl.build(gsig);
+    Index ix; ix.load(dir + "/index.bin");
+    if (ix.K != K) die("index.bin and graph.bin disagree on the node count");
+    std::fprintf(stderr, "[pick] index.bin: %llu kayit, N=%u\n",
+                 (unsigned long long)ix.off[ix.K], ix.N);
+
+    ankerl::unordered_dense::map<uint32_t, uint32_t> hits;
+    size_t found = 0;
+    for (uint64_t sg : sigs) {
+        const uint32_t node = sl.find(sg);
+        if (node == UINT32_MAX) continue;
+        found++;
+        const uint32_t n = ix.count(node);
+        for (uint32_t j = 0; j < n; j++) {
+            const Post p = ix.get(node, j);
+            if (p.samp != 0) continue;
+            hits[p.read]++;
+        }
+    }
+    std::vector<uint32_t> take;
+    for (const auto& kv : hits) if (kv.second >= (uint32_t)MINSH) take.push_back(kv.first);
+    std::sort(take.begin(), take.end());
+
+    SvbFile rd; rd.open(reads);
     FILE* fo = std::fopen((out + ".tmp").c_str(), "w"); if (!fo) die("open out");
-    std::mutex out_mu;
-    std::atomic<uint64_t> seen{0}, kept{0}, kept_bp{0}, seen_bp{0};
-
-    constexpr size_t Q_CAP = 128, BATCH = 32;
-    struct Rd { std::string name, seq; };
-    std::mutex qmtx; std::condition_variable cv_full, cv_empty;
-    std::queue<std::vector<Rd>> q;
-    bool eof = false;
-
-    auto reader = [&]() {
-        std::vector<Rd> batch; batch.reserve(BATCH);
-        Rd r;
-        auto push = [&]() {
-            if (batch.empty()) return;
-            std::unique_lock<std::mutex> lk(qmtx);
-            cv_full.wait(lk, [&]{ return q.size() < Q_CAP; });
-            q.push(std::move(batch)); cv_empty.notify_one();
-            batch.clear(); batch.reserve(BATCH);
-        };
-        while (reads_next(in, r.seq, &r.name)) {
-            batch.push_back(std::move(r));
-            if (batch.size() >= BATCH) push();
+    std::string seq, buf;
+    uint64_t kept = 0, kept_bp = 0;
+    for (uint32_t r : take) {
+        if (!rd.read(r, seq)) continue;
+        uint64_t a = 0, b = seq.size();
+        if (TRIM > 0) {
+            a = 0; b = seq.size();
         }
-        push();
-        { std::lock_guard<std::mutex> lk(qmtx); eof = true; }
-        cv_empty.notify_all();
-    };
-
-    auto worker = [&]() {
-        std::string buf;
-        for (;;) {
-            std::vector<Rd> batch;
-            {
-                std::unique_lock<std::mutex> lk(qmtx);
-                cv_empty.wait(lk, [&]{ return !q.empty() || eof; });
-                if (q.empty()) return;
-                batch = std::move(q.front()); q.pop(); cv_full.notify_one();
-            }
-            for (const Rd& r : batch) {
-                const uint64_t s = ++seen;
-                int n; const uint64_t *st, *en, *sg;
-                extract(r.seq.data(), (int)r.seq.size(), 0, LEVEL, &n, &st, &en, &sg);
-                int hit = 0;
-                for (int i = 0; i < n && hit < MINSH; i++) {
-                    if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > r.seq.size()) continue;
-                    hit += sigs.contains(sg[i]);
-                }
-                if (hit >= MINSH) {
-                    uint64_t a = 0, b = r.seq.size();
-                    if (TRIM > 0) {
-                        uint64_t lo_ = UINT64_MAX, hi_ = 0;
-                        for (int i = 0; i < n; i++) {
-                            if (st[i] < (uint64_t)MARGIN || en[i] + MARGIN > r.seq.size()) continue;
-                            if (!sigs.contains(sg[i])) continue;
-                            if (st[i] < lo_) lo_ = st[i];
-                            if (en[i] > hi_) hi_ = en[i];
-                        }
-                        if (lo_ != UINT64_MAX) {
-                            a = lo_ > (uint64_t)TRIM ? lo_ - (uint64_t)TRIM : 0;
-                            b = hi_ + (uint64_t)TRIM < r.seq.size() ? hi_ + (uint64_t)TRIM : r.seq.size();
-                        }
-                    }
-                    const size_t L = (size_t)(b - a);
-                    buf.assign("@"); buf += r.name; buf += "\n";
-                    buf.append(r.seq, (size_t)a, L);
-                    buf += "\n+\n"; buf.append(L, 'I'); buf += "\n";
-                    std::lock_guard<std::mutex> lk(out_mu);
-                    std::fwrite(buf.data(), 1, buf.size(), fo);
-                    kept++; kept_bp += L; seen_bp += r.seq.size();
-                }
-                if (s % 2000000 == 0)
-                    std::fprintf(stderr, "[pick]   %llu okuma, %llu secildi\n",
-                                 (unsigned long long)s, (unsigned long long)kept.load());
-            }
-        }
-    };
-    std::vector<std::thread> th;
-    th.emplace_back(reader);
-    for (int i = 1; i < std::max(2, NT); i++) th.emplace_back(worker);
-    for (auto& t : th) t.join();
-    reads_close(in); std::fclose(fo);
+        const size_t Ln = (size_t)(b - a);
+        buf.assign("@r"); buf += std::to_string(r); buf += "\n";
+        buf.append(seq, (size_t)a, Ln);
+        buf += "\n+\n"; buf.append(Ln, 'I'); buf += "\n";
+        std::fwrite(buf.data(), 1, buf.size(), fo);
+        kept++; kept_bp += Ln;
+    }
+    rd.close(); std::fclose(fo);
     if (std::rename((out + ".tmp").c_str(), out.c_str())) die("rename");
 
-    const uint64_t sn = seen.load(), kp = kept.load();
-    std::fprintf(stderr, "[pick] %llu normal okumanin %llu tanesi secildi (%%%.2f), %.3f Gbp"
-                 " (kirpma %lld bp, kirpilmadan %.3f Gbp olurdu) -> %s\n",
-                 (unsigned long long)sn, (unsigned long long)kp, sn ? 100.0 * kp / sn : 0.0,
-                 kept_bp.load() / 1e9, (long long)TRIM, seen_bp.load() / 1e9, out.c_str());
+    std::fprintf(stderr, "[pick] %zu cipa cekirdeginin %zu'si grafta -> %zu aday okuma -> "
+                 "%llu secildi (>=%d ortak cekirdek), %.3f Gbp -> %s\n",
+                 sigs.size(), found, hits.size(), (unsigned long long)kept, MINSH,
+                 kept_bp / 1e9, out.c_str());
     return 0;
 }

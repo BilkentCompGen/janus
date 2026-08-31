@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
     if (cmd == "svbidx")    return cmd_svbidx(argc - 1, argv + 1);
 
     int level = 5, margin = 10, min_mult = 3, threads = 16, supp_discover = 5, supp_assign = 2;
-    int index_n = 0, pad_cores = 50;
+    int index_n = 8, pad_cores = 50;
     std::string sheet;
     std::vector<std::string> pos;
     for (int i = 2; i < argc; i++) {
