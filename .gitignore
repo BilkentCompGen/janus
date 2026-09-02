@@ -56,3 +56,5 @@ paper/*.synctex.gz
 /results/exp2/
 /results/exp2_hcc1937/
 /results/exp1/
+archive/
+paper/measure/out/

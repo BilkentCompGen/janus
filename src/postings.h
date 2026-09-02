@@ -38,5 +38,8 @@ struct SigLookup {
 
 std::vector<uint64_t> graph_sigs(const std::string& graph_bin, uint32_t& S, uint64_t& K);
 
+std::vector<uint8_t> graph_normal_only(const std::string& graph_bin, uint32_t& S,
+                                      uint64_t& K, std::vector<uint64_t>& sig);
+
 bool core_bytes(const Index& ix, std::vector<SvbFile>& svb, uint32_t node,
                 std::string& out, std::string& scratch);

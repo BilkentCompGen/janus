@@ -24,9 +24,10 @@ static void usage() {
     std::fprintf(stderr,
         "usage:\n"
         "  snape run       --samples <sheet.tsv> <ref.fa> <dir> [--threads 16] [--level 5] [--margin 10]\n"
-        "                  [--min-mult 3] [--supp-discover 5] [--supp-assign 2]\n"
+        "                  [--min-mult 3] [--supp-discover 5] [--supp-assign 2] [--max-bases B]\n"
         "  snape graph     --samples <sheet.tsv> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
-        "                  [--index N] [--pad-cores 50]   N>0: <dir>/index.bin, dugum basina N kayit\n"
+        "                  [--index N] [--pad-cores 50] [--max-bases B]\n"
+        "                  N>0: <dir>/index.bin, dugum basina N kayit; B>0: her ornekten ilk B baz okunur\n"
         "\n"
         "  the sheet is a three-column TSV, one row per read set:\n"
         "      name  role    path\n"
@@ -81,7 +82,7 @@ static int align_checked(const std::string& reads, const std::string& ref, const
 
 static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
                         const std::string& dir, int level, int margin, int min_mult, int threads,
-                        int supp_discover, int supp_assign) {
+                        int supp_discover, int supp_assign, uint64_t max_bases) {
     mkdir(dir.c_str(), 0755);
     samples_lock(smp, dir + "/samples.tsv");
     const std::string self = self_path();
@@ -100,7 +101,7 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
     const std::string T = std::to_string(threads);
 
     if (exists(graph)) std::fprintf(stderr, "[run] atlandi graph: %s var\n", graph.c_str());
-    else run_graph_reads(smp, dir, level, margin, min_mult, threads);
+    else run_graph_reads(smp, dir, level, margin, min_mult, threads, max_bases);
 
     if (exists(drop)) std::fprintf(stderr, "[run] atlandi bubbles: %s var\n", drop.c_str());
     else {
@@ -169,6 +170,7 @@ int main(int argc, char** argv) {
 
     int level = 5, margin = 10, min_mult = 3, threads = 16, supp_discover = 5, supp_assign = 2;
     int index_n = 8, pad_cores = 50;
+    uint64_t max_bases = 0;
     std::string sheet;
     std::vector<std::string> pos;
     for (int i = 2; i < argc; i++) {
@@ -185,6 +187,7 @@ int main(int argc, char** argv) {
         else if (a == "--supp-assign") supp_assign = std::atoi(v);
         else if (a == "--index") index_n = std::atoi(v);
         else if (a == "--pad-cores") pad_cores = std::atoi(v);
+        else if (a == "--max-bases") max_bases = std::strtoull(v, nullptr, 10);
         else { std::fprintf(stderr, "[FATAL] arg: %s\n", a.c_str()); std::abort(); }
     }
     if (min_mult > (int)COV_MAX) { std::fprintf(stderr, "[FATAL] --min-mult %d exceeds the count width (%d)\n", min_mult, (int)COV_MAX); std::abort(); }
@@ -196,12 +199,12 @@ int main(int argc, char** argv) {
     }
     if (cmd == "run" && pos.size() == 2)
         return run_pipeline(samples_read(sheet), pos[0], pos[1], level, margin, min_mult, threads,
-                            supp_discover, supp_assign);
+                            supp_discover, supp_assign, max_bases);
     if (cmd == "graph" && pos.size() == 1) {
         const std::vector<Sample> smp = samples_read(sheet);
         mkdir(pos[0].c_str(), 0755);
         samples_lock(smp, pos[0] + "/samples.tsv");
-        run_graph_reads(smp, pos[0], level, margin, min_mult, threads, index_n, pad_cores);
+        run_graph_reads(smp, pos[0], level, margin, min_mult, threads, max_bases, index_n, pad_cores);
     }
     else { usage(); return 2; }
     return 0;

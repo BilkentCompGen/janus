@@ -2,6 +2,8 @@ extern "C" {
 #include "lps.h"
 #include "encoding.h"
 
+int parse1(const char* begin, const char* end, struct core* cores, uint64_t offset);
+int parse3(struct core* begin, struct core* end, struct core* cores);
 int lcp_dct(struct lps* lps_ptr);
 }
 #include "snape.h"
@@ -66,15 +68,17 @@ thread_local std::vector<uint32_t> hmap;
 bool init_alphabet() { LCP_INIT(); return true; }
 
 static void hpc(const char* s, int len, std::string& out, std::vector<uint32_t>& map) {
-    out.clear(); map.clear();
-    out.reserve((size_t)len); map.reserve((size_t)len + 1);
+    out.resize((size_t)len); map.resize((size_t)len + 1);
+    size_t k = 0;
     char prev = 0;
     for (int i = 0; i < len; i++) {
         const char c = (char)(s[i] & 0xdf);
-        if (c != prev) { out.push_back(c); map.push_back((uint32_t)i); }
+        out[k] = c; map[k] = (uint32_t)i;
+        k += (c != prev);
         prev = c;
     }
-    map.push_back((uint32_t)len);
+    map[k] = (uint32_t)len;
+    out.resize(k); map.resize(k + 1);
 }
 
 uint8_t RC_LUT[256];
@@ -111,12 +115,12 @@ bool rc_safe(const std::string& h) {
 }
 
 int parse_to_level(Scratch& s, const char* data, int n, int target) {
-    struct core* cores = grow_cores(s, (int)(n / CONSTANT_FACTOR) + 8);
+    struct core* cores = grow_cores(s, (int)(n / LCP_CONSTANT_FACTOR) + 8);
     int size = parse1(data, data + n, cores, 0);
     for (int lv = 1; lv < target && size; lv++) {
         struct lps p; p.level = lv; p.size = size; p.cores = cores;
         if (lcp_dct(&p) < 0) return 0;
-        size = parse3(cores + DCT_ITERATION_COUNT, cores + size, cores);
+        size = parse3(cores + LCP_DCT_ITERATION_COUNT, cores + size, cores);
     }
     return size;
 }

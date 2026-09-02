@@ -1,7 +1,6 @@
 CXX      := g++
-# -DLARGE_GENOME: biolcp struct core uses 64-bit start/end (no offset truncation on a
-# whole-genome reference). MUST match the flag the static lib is built with (below).
-CXXFLAGS := -std=c++17 -O3 -march=native -flto=auto -DLARGE_GENOME -Wall -Wextra -Wpedantic -MMD
+# lcptools' width/DCT choices live in lib/lcptools/config.h (LABEL=0 POS=64 DCT=1, generated below).
+CXXFLAGS := -std=c++17 -O3 -march=native -flto=auto -Wall -Wextra -Wpedantic -MMD
 INC      := -Ilib/lcptools -Isrc
 # -lhts: `snape call` reads the aligned BAMs (system htslib, headers in /usr/include/htslib).
 LDFLAGS  := -Llib/lcptools -llcptools -lm -lhts
@@ -44,10 +43,10 @@ run: snape
 install-deps: install-deps-lcptools install-deps-badread
 
 # biolcp branch: DNA-optimised lcptools. Its own Makefile installs to /usr/local (needs
-# root) so we build the static archive in-place here. -DLARGE_GENOME must match snape's
-# CXXFLAGS (64-bit core start/end). -march=native: same box builds + runs.
+# root) so we generate config.h and build the static archive in-place here.
+# LABEL=0 POS=64 DCT=1: no per-core labels (snape hashes core bytes itself), 64-bit core start/end, one DCT pass per level.
 install-deps-lcptools:
-	cd lib/lcptools && gcc -O3 -march=native -DLARGE_GENOME -c encoding.c core.c lps.c && ar rcs liblcptools.a encoding.o core.o lps.o
+	cd lib/lcptools && $(MAKE) config.h LABEL=0 POS=64 DCT=1 CORE=var ALPHABET=dna && gcc -O3 -march=native -c encoding.c core.c lps.c && ar rcs liblcptools.a encoding.o core.o lps.o
 
 # Badread HiFi read simulator (rrwick) -- only needed to regenerate the simulation benchmark.
 # Single-threaded, so scripts/sim_reads_badread.sh shards contigs across threads. Installed into a

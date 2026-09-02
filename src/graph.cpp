@@ -517,6 +517,7 @@ struct Feed {
     std::atomic<int> readers_left{1};
     std::atomic<size_t> next{0};
     std::vector<uint64_t> reads_per;
+    uint64_t max_bases = 0;
 };
 
 void read_shards(const std::vector<Shard>& shards, Feed& fd, size_t q_cap, size_t batch_n) {
@@ -541,24 +542,29 @@ void read_shards(const std::vector<Shard>& shards, Feed& fd, size_t q_cap, size_
         if (batch.seqs.empty()) batch.first = mine[col];
         const bool svb = is_svb(shards[si].path);
         FILE* f = svb ? open_svb(shards[si].path) : open_fastq(shards[si].path);
+        uint64_t bases = 0;
         if (svb) {
             while (svb_next(f, svseq)) {
                 if (batch.seqs.empty()) batch.first = mine[col];
+                bases += svseq.size();
                 mine[col]++; batch.seqs.emplace_back(std::move(svseq));
                 if (batch.seqs.size() >= batch_n) push();
+                if (fd.max_bases && bases >= fd.max_bases) break;
             }
         } else {
-            int line_no = 0; carry.clear(); int got;
-            while ((got = (int)std::fread(buf.data(), 1, BLOCK, f)) > 0) {
+            int line_no = 0; carry.clear(); int got; bool done = false;
+            while (!done && (got = (int)std::fread(buf.data(), 1, BLOCK, f)) > 0) {
                 const char* base = buf.data(); const char* end = base + got; const char* start = base;
-                for (const char* p = base; p < end; p++) if (*p == '\n') {
+                for (const char* p = base; p < end && !done; p++) if (*p == '\n') {
                     const size_t n = (size_t)(p - start);
                     if (line_no == 1) {
                         if (batch.seqs.empty()) batch.first = mine[col];
                         if (carry.empty()) batch.seqs.emplace_back(start, n);
                         else { carry.append(start, n); batch.seqs.push_back(std::move(carry)); carry.clear(); }
+                        bases += batch.seqs.back().size();
                         mine[col]++;
                         if (batch.seqs.size() >= batch_n) push();
+                        done = fd.max_bases && bases >= fd.max_bases;
                     } else if (!carry.empty()) carry.clear();
                     line_no = (line_no + 1) & 3; start = p + 1;
                 }
@@ -586,13 +592,13 @@ bool feed_take(Feed& fd, Batch& out, Prof& pf) {
     return true;
 }
 
-void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads,
+void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads, uint64_t max_bases,
                   ShTab* psn, std::mutex* nmtx,
                   std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
                   std::atomic<uint64_t>& ov_sum, std::atomic<uint64_t>& ov_cnt,
                   std::atomic<uint64_t>& flush_ns, uint64_t& reads_here) {
     const int nw = std::max(1, threads - 1);
-    Feed fd; fd.reads_per.assign(1, 0);
+    Feed fd; fd.reads_per.assign(1, 0); fd.max_bases = max_bases;
     std::vector<Shard> mine = shards;
     for (Shard& s : mine) s.col = 0;
 
@@ -658,13 +664,13 @@ void merge_sample(ShTab* psn, NodeTab* gnode, int col, int S, int min_mult, int 
     seen = nseen.load(); kept = npass.load(); one = n1.load(); two = n2.load();
 }
 
-void fill_pass(const std::vector<Shard>& shards, int level, int margin, int threads, int S,
+void fill_pass(const std::vector<Shard>& shards, int level, int margin, int threads, int S, uint64_t max_bases,
                const SigIndex& idx, const std::vector<cov_t>& cov,
                PostIdx& px, EdgeKeySet* gedge, std::mutex* emtx,
                std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
                std::atomic<uint64_t>& flush_ns, std::vector<uint64_t>& reads_per) {
     const int nw = std::max(1, threads - 1);
-    Feed fd; fd.reads_per.assign((size_t)S, 0);
+    Feed fd; fd.reads_per.assign((size_t)S, 0); fd.max_bases = max_bases;
     FillCtx cx; cx.idx = &idx; cx.cov = &cov; cx.px = &px; cx.S = S;
 
     auto worker = [&]() {
@@ -706,7 +712,7 @@ void fill_pass(const std::vector<Shard>& shards, int level, int margin, int thre
     for (int i = 0; i < S; i++) reads_per[i] = fd.reads_per[i];
 }
 
-void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, int threads,
+void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, int threads, uint64_t max_bases,
                        int min_mult, int S, int index_n, int pad_cores, const std::string& dir,
                        std::vector<SigCount>& out_nodes,
                        std::vector<cov_t>& out_ncov, std::vector<CEdge>& out_edges,
@@ -722,7 +728,7 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
         std::vector<Shard> mine;
         for (const Shard& s : shards) if (s.col == col) mine.push_back(s);
         uint64_t rd = 0, seen = 0, pass = 0, one = 0, two = 0;
-        count_sample(mine, level, margin, threads, psn, nmtx, emis_a, ext_a, ov_sum, ov_cnt, flush_a, rd);
+        count_sample(mine, level, margin, threads, max_bases, psn, nmtx, emis_a, ext_a, ov_sum, ov_cnt, flush_a, rd);
         report_bytes_a(col, psn, gnode);
         merge_sample(psn, gnode, col, S, min_mult, threads, seen, pass, one, two);
         reads_per[col] = rd;
@@ -792,7 +798,7 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
         std::fprintf(stderr, "[index] N=%d pad=%d, tampon %.2f GB\n",
                      index_n, pad_cores, px.bytes() / 1073741824.0);
     }
-    fill_pass(shards, level, margin, threads, S, idx, out_ncov, px,
+    fill_pass(shards, level, margin, threads, S, max_bases, idx, out_ncov, px,
               gedge, emtx, emis_b, ext_b, flush_b, rp_b);
     if (px.on()) {
         post_write(px, dir + "/index.bin", K, S);
@@ -825,14 +831,15 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
 }
 
 void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
-                     int level, int margin, int min_mult, int threads, int index_n, int pad_cores) {
+                     int level, int margin, int min_mult, int threads, uint64_t max_bases, int index_n, int pad_cores) {
     mkdir(dir.c_str(), 0755);
     const int S = (int)samples.size();
     std::vector<Shard> shards_all;
     for (int i = 0; i < S; i++)
         for (const auto& p : collect_shards(samples[i].path)) shards_all.push_back({p, i});
-    std::fprintf(stderr, "[graph] %d samples (%zu shards), threads=%d min_mult=%d\n",
-                 S, shards_all.size(), threads, min_mult);
+    if (max_bases && shards_all.size() != (size_t)S) { std::fprintf(stderr, "[FATAL] --max-bases needs one file per sample\n"); std::abort(); }
+    std::fprintf(stderr, "[graph] %d samples (%zu shards), threads=%d min_mult=%d max_bases=%llu\n",
+                 S, shards_all.size(), threads, min_mult, (unsigned long long)max_bases);
     Tic tic("graph");
     CLK_NS = clock_cost_ns();
     std::atomic<bool> rss_stop{false};
@@ -847,7 +854,7 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     std::vector<SigCount> nodes; std::vector<CEdge> ce;
     std::vector<cov_t> ncov; std::vector<uint64_t> nreads;
     uint64_t ov_s = 0, ov_c = 0;
-    run_pool_two_pass(shards_all, level, margin, threads, min_mult, S, index_n, pad_cores, dir,
+    run_pool_two_pass(shards_all, level, margin, threads, max_bases, min_mult, S, index_n, pad_cores, dir,
                       nodes, ncov, ce, ov_s, ov_c, nreads);
     const uint64_t K = nodes.size();
     const Snap P1 = snap();
