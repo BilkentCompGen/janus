@@ -39,11 +39,33 @@ uint64_t core_sig(const char* key, int len) {
 
 namespace {
 
+struct Soa { uint64_t *rep = nullptr, *st = nullptr, *en = nullptr; uint32_t *rep32 = nullptr, *sz = nullptr; int cap = 0; };
+
 struct Scratch {
     uint64_t *st = nullptr, *en = nullptr, *sig = nullptr; int cap = 0;
     struct core* cores = nullptr; int ccap = 0;
+    Soa a, b; uint32_t *lab = nullptr, *lsz = nullptr; int lcap = 0;
+    const Soa* fin = nullptr;
 };
 thread_local Scratch sc, sc2;
+
+void grow_soa(Soa& s, int n) {
+    if (n <= s.cap) return;
+    const int c = n < 4096 ? 4096 : n;
+    s.rep   = (uint64_t*)std::realloc(s.rep,   (size_t)c * 8);
+    s.st    = (uint64_t*)std::realloc(s.st,    (size_t)c * 8);
+    s.en    = (uint64_t*)std::realloc(s.en,    (size_t)c * 8);
+    s.rep32 = (uint32_t*)std::realloc(s.rep32, (size_t)c * 4);
+    s.sz    = (uint32_t*)std::realloc(s.sz,    (size_t)c * 4);
+    s.cap = c;
+}
+void grow_lab(Scratch& s, int n) {
+    if (n <= s.lcap) return;
+    const int c = n < 4096 ? 4096 : n;
+    s.lab = (uint32_t*)std::realloc(s.lab, (size_t)c * 4);
+    s.lsz = (uint32_t*)std::realloc(s.lsz, (size_t)c * 4);
+    s.lcap = c;
+}
 
 void grow_out(Scratch& s, int n) {
     if (n <= s.cap) return;
@@ -114,7 +136,7 @@ bool rc_safe(const std::string& h) {
     return true;
 }
 
-int parse_to_level(Scratch& s, const char* data, int n, int target) {
+int parse_to_level_struct(Scratch& s, const char* data, int n, int target) {
     struct core* cores = grow_cores(s, (int)(n / LCP_CONSTANT_FACTOR) + 8);
     int size = parse1(data, data + n, cores, 0);
     for (int lv = 1; lv < target && size; lv++) {
@@ -125,11 +147,29 @@ int parse_to_level(Scratch& s, const char* data, int n, int target) {
     return size;
 }
 
-void emit(Scratch& s, const struct core* cores, int n, const std::string& h,
-          const std::vector<uint32_t>& map, uint64_t offset) {
+int parse_to_level(Scratch& s, const char* data, int n, int target) {
+    const int cap = (int)(n / LCP_CONSTANT_FACTOR) + 8;
+    grow_soa(s.a, cap); grow_soa(s.b, cap); grow_lab(s, cap);
+    Soa* a = &s.a; Soa* b = &s.b;
+    struct lcp_soa ia = { a->rep, a->rep32, a->st, a->en, a->sz };
+    int size = parse1_soa(data, data + n, &ia, 0);
+    if (size < 0) { s.fin = nullptr; return parse_to_level_struct(s, data, n, target); }
+    for (int lv = 1; lv < target && size; lv++) {
+        if (size < 2) return 0;
+        struct lcp_soa in = { a->rep, a->rep32, a->st, a->en, a->sz }, out = { b->rep, b->rep32, b->st, b->en, b->sz };
+        lcp_dct_soa(&in, size, lv, s.lab, s.lsz);
+        size = parse3_soa(s.lab, s.lsz, &in, size, &out);
+        Soa* t = a; a = b; b = t;
+    }
+    s.fin = a;
+    return size;
+}
+
+void emit(Scratch& s, int n, const std::string& h, const std::vector<uint32_t>& map, uint64_t offset) {
     grow_out(s, n);
     for (int i = 0; i < n; i++) {
-        const uint64_t a = cores[i].start, b = cores[i].end + 1;
+        const uint64_t a = s.fin ? s.fin->st[i] : s.cores[i].start;
+        const uint64_t b = (s.fin ? s.fin->en[i] : s.cores[i].end) + 1;
         s.sig[i] = core_sig(h.data() + a, (int)(b - a));
         s.st[i] = offset + map[a];
         s.en[i] = offset + map[b < map.size() ? b : map.size() - 1];
@@ -149,7 +189,7 @@ extern "C" void extract(const char* str, int len, uint64_t offset, int target_le
     if (hn < 3) return;
     const int n = parse_to_level(sc, hs.data(), hn, target_level);
     if (n <= 0) return;
-    emit(sc, sc.cores, n, hs, hmap, offset);
+    emit(sc, n, hs, hmap, offset);
     *n_out = n; *starts_out = sc.st; *ends_out = sc.en; *sigs_out = sc.sig;
 }
 
@@ -165,7 +205,7 @@ extern "C" void extract2(const char* str, int len, int target_level,
     const int hn = (int)hs.size();
     if (hn < 3) return;
     const int n1 = parse_to_level(sc, hs.data(), hn, target_level);
-    if (n1 > 0) { emit(sc, sc.cores, n1, hs, hmap, 0); *nf = n1; *stf = sc.st; *enf = sc.en; *sgf = sc.sig; }
+    if (n1 > 0) { emit(sc, n1, hs, hmap, 0); *nf = n1; *stf = sc.st; *enf = sc.en; *sgf = sc.sig; }
 
     if (rc_safe(hs)) {
         rc_in_place(hs, hmap, len);
@@ -178,5 +218,5 @@ extern "C" void extract2(const char* str, int len, int target_level,
     const int hn2 = (int)hs.size();
     if (hn2 < 3) return;
     const int n2 = parse_to_level(sc2, hs.data(), hn2, target_level);
-    if (n2 > 0) { emit(sc2, sc2.cores, n2, hs, hmap, 0); *nr = n2; *str_ = sc2.st; *enr = sc2.en; *sgr = sc2.sig; }
+    if (n2 > 0) { emit(sc2, n2, hs, hmap, 0); *nr = n2; *str_ = sc2.st; *enr = sc2.en; *sgr = sc2.sig; }
 }
