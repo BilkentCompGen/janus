@@ -10,8 +10,11 @@ __pycache__
 /snape
 build
 
-# third-party sources built in place (lcptools, Badread, ...) and generated benchmark data
-lib
+# third-party sources built in place (Badread, ...) and generated benchmark data; lcptools (packed) is vendored
+lib/*
+!lib/lcptools/
+lib/lcptools/liblcptools.a
+lib/lcptools/config.h
 simulation
 outputs
 

@@ -1,0 +1,36 @@
+/**
+ * @file config.h.in
+ * @brief Template for the generated `config.h`.
+ *
+ * Do not include this template directly and do not edit the generated header;
+ * change the values by re-running the build, e.g.
+ *
+ *     make install LABEL=64 POS=64 DCT=1 CORE=fixed
+ *
+ */
+
+#ifndef LCPTOOLS_CONFIG_H
+#define LCPTOOLS_CONFIG_H
+
+/* Width of `lcp_label` in bits. Either 0, 32 or 64. */
+#define LCP_LABEL_BITS @LABEL@
+
+/* Width of `lcp_pos` in bits. Either 0, 32 or 64. */
+#define LCP_POS_BITS @POS@
+
+/* Default number of DCT iterations used by lcp_dct/lps_deepen. */
+#define LCP_DCT_ITERATION_COUNT @DCT@
+
+/* Alphabet. 0 for DNA (A/C/G/T). 1 for protein (25 residues) and no reverse complement */
+#define LCP_ALPHABET_PROTEIN @ALPHABET_PROTEIN@
+
+/* Bits per symbol in a level 1 core: 2 for DNA, 8 for protein. */
+#define LCP_SYMBOL_BITS @SYMBOL_BITS@
+
+/* Core-length mode. Either 0 or 1. */
+#define LCP_FIXED_CORE @FIXED_CORE@
+
+/* Allocation divisor for the initial core array. */
+#define LCP_CONSTANT_FACTOR @FACTOR@
+
+#endif

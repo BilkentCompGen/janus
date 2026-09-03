@@ -1,0 +1,13 @@
+.DS_Store
+*/.DS_Store
+.vscode
+data/chm13v2.0.fa
+
+bin/*
+out/*
+lib/*
+include/*
+lcptools
+
+.nfs*
+*.o

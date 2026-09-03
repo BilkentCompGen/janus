@@ -110,34 +110,6 @@ std::vector<uint64_t> graph_sigs(const std::string& gp, uint32_t& S, uint64_t& K
     return sig;
 }
 
-std::vector<uint8_t> graph_normal_only(const std::string& gp, uint32_t& S, uint64_t& K,
-                                       std::vector<uint64_t>& sig) {
-    FILE* f = std::fopen(gp.c_str(), "rb");
-    if (!f) { std::fprintf(stderr, "[index] FATAL: open %s\n", gp.c_str()); std::exit(1); }
-    char mg[4]; uint32_t ver = 0, resv = 0; uint64_t ovs = 0, ovc = 0;
-    if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 6) die("graph.bin version is not 6 -- rebuild it");
-    if (std::fread(&S, 4, 1, f) != 1 || S < 2) die("read S");
-    if (std::fread(&resv, 4, 1, f) != 1) die("read header");
-    if (std::fread(&ovs, 8, 1, f) != 1 || std::fread(&ovc, 8, 1, f) != 1) die("read overlap");
-    if (std::fread(&K, 8, 1, f) != 1) die("read K");
-    sig.resize(K);
-    if (K && std::fread(sig.data(), 8, K, f) != K) die("read sigs");
-    if (std::fseek(f, (long)(K * sizeof(cov_t)), SEEK_CUR) != 0) die("seek past normal plane");
-    std::vector<uint8_t> nrm(K, 1);
-    constexpr size_t CH = 1u << 20;
-    std::vector<cov_t> buf(CH);
-    for (uint32_t j = 1; j < S; j++)
-        for (uint64_t done = 0; done < K; ) {
-            const size_t m = (size_t)std::min<uint64_t>(CH, K - done);
-            if (std::fread(buf.data(), sizeof(cov_t), m, f) != m) die("read tumour plane");
-            for (size_t i = 0; i < m; i++) if (buf[i]) nrm[done + i] = 0;
-            done += m;
-        }
-    std::fclose(f);
-    return nrm;
-}
-
 bool core_bytes(const Index& ix, std::vector<SvbFile>& svb, uint32_t node,
                 std::string& out, std::string& scratch) {
     const uint32_t n = ix.count(node);
