@@ -10,9 +10,8 @@ int cmd_dump(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr, "usage: snape dump in.svb > reads.fastq\n"); return 1; }
     FILE* f = std::fopen(argv[1], "rb");
     if (!f) { std::perror("fopen"); return 1; }
-    char hdr[32];
-    if (std::fread(hdr, 1, 32, f) != 32 || std::memcmp(hdr, "SVB1", 4) != 0) {
-        std::fprintf(stderr, "[FATAL] bad .svb header %s\n", argv[1]); return 1; }
+    if (std::fseek(f, 16, SEEK_SET) != 0) {
+        std::fprintf(stderr, "[FATAL] bad .svb %s\n", argv[1]); return 1; }
 
     static const char LUT[4] = { 'A', 'C', 'G', 'T' };
     std::string seq, qual; std::vector<uint8_t> pb;

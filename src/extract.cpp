@@ -2,9 +2,6 @@ extern "C" {
 #include "lps.h"
 #include "encoding.h"
 
-int parse1(const char* begin, const char* end, struct core* cores, uint64_t offset);
-int parse3(struct core* begin, struct core* end, struct core* cores);
-int lcp_dct(struct lps* lps_ptr);
 }
 #include "snape.h"
 #include <cstdint>
@@ -43,7 +40,6 @@ struct Soa { uint64_t *rep = nullptr, *st = nullptr, *en = nullptr; uint32_t *re
 
 struct Scratch {
     uint64_t *st = nullptr, *en = nullptr, *sig = nullptr; int cap = 0;
-    struct core* cores = nullptr; int ccap = 0;
     Soa a, b; uint32_t *lab = nullptr, *lsz = nullptr; int lcap = 0;
     const Soa* fin = nullptr;
 };
@@ -74,14 +70,6 @@ void grow_out(Scratch& s, int n) {
     s.en  = (uint64_t*)std::realloc(s.en,  (size_t)c * 8);
     s.sig = (uint64_t*)std::realloc(s.sig, (size_t)c * 8);
     s.cap = c;
-}
-struct core* grow_cores(Scratch& s, int n) {
-    if (n > s.ccap) {
-        const int c = n < 4096 ? 4096 : n;
-        s.cores = (struct core*)std::realloc(s.cores, (size_t)c * sizeof(struct core));
-        s.ccap = c;
-    }
-    return s.cores;
 }
 
 thread_local std::string hs;
@@ -136,16 +124,6 @@ bool rc_safe(const std::string& h) {
     return true;
 }
 
-int parse_to_level_struct(Scratch& s, const char* data, int n, int target) {
-    struct core* cores = grow_cores(s, (int)(n / LCP_CONSTANT_FACTOR) + 8);
-    int size = parse1(data, data + n, cores, 0);
-    for (int lv = 1; lv < target && size; lv++) {
-        struct lps p; p.level = lv; p.size = size; p.cores = cores;
-        if (lcp_dct(&p) < 0) return 0;
-        size = parse3(cores + LCP_DCT_ITERATION_COUNT, cores + size, cores);
-    }
-    return size;
-}
 
 int parse_to_level(Scratch& s, const char* data, int n, int target) {
     const int cap = (int)(n / LCP_CONSTANT_FACTOR) + 8;
@@ -153,7 +131,7 @@ int parse_to_level(Scratch& s, const char* data, int n, int target) {
     Soa* a = &s.a; Soa* b = &s.b;
     struct lcp_soa ia = { a->rep, a->rep32, a->st, a->en, a->sz };
     int size = parse1_soa(data, data + n, &ia, 0);
-    if (size < 0) { s.fin = nullptr; return parse_to_level_struct(s, data, n, target); }
+    if (size <= 0) return 0;
     for (int lv = 1; lv < target && size; lv++) {
         if (size < 2) return 0;
         struct lcp_soa in = { a->rep, a->rep32, a->st, a->en, a->sz }, out = { b->rep, b->rep32, b->st, b->en, b->sz };
@@ -168,8 +146,8 @@ int parse_to_level(Scratch& s, const char* data, int n, int target) {
 void emit(Scratch& s, int n, const std::string& h, const std::vector<uint32_t>& map, uint64_t offset) {
     grow_out(s, n);
     for (int i = 0; i < n; i++) {
-        const uint64_t a = s.fin ? s.fin->st[i] : s.cores[i].start;
-        const uint64_t b = (s.fin ? s.fin->en[i] : s.cores[i].end) + 1;
+        const uint64_t a = s.fin->st[i];
+        const uint64_t b = s.fin->en[i] + 1;
         s.sig[i] = core_sig(h.data() + a, (int)(b - a));
         s.st[i] = offset + map[a];
         s.en[i] = offset + map[b < map.size() ? b : map.size() - 1];

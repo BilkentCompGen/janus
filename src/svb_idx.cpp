@@ -16,22 +16,20 @@ int cmd_svbidx(int argc, char** argv) {
     FILE* f = std::fopen(in.c_str(), "rb");
     if (!f) { std::fprintf(stderr, "[svbidx] FATAL: open %s\n", in.c_str()); return 1; }
 
-    char hdr[32];
-    if (std::fread(hdr, 1, 32, f) != 32 || std::memcmp(hdr, "SVB1", 4)) {
+    char hdr[16];
+    if (std::fread(hdr, 1, 16, f) != 16) {
         std::fprintf(stderr, "[svbidx] FATAL: %s is not a .svb\n", in.c_str()); return 1;
     }
-    uint32_t ver; std::memcpy(&ver, hdr + 4, 4);
-    if (ver != 1) { std::fprintf(stderr, "[svbidx] FATAL: .svb version %u != 1\n", ver); return 1; }
     uint64_t nreads, total;
-    std::memcpy(&nreads, hdr + 8, 8);
-    std::memcpy(&total, hdr + 16, 8);
+    std::memcpy(&nreads, hdr, 8);
+    std::memcpy(&total, hdr + 8, 8);
 
     std::vector<uint64_t> off;
     off.reserve(nreads + 1);
 
     constexpr size_t BLOCK = 1u << 22;
     std::vector<uint8_t> buf(BLOCK);
-    uint64_t pos = 32, seen = 0, bases = 0;
+    uint64_t pos = 16, seen = 0, bases = 0;
     size_t have = 0, at = 0;
     uint64_t maxlen = 0;
 
@@ -80,12 +78,10 @@ int cmd_svbidx(int argc, char** argv) {
     const std::string out = in + ".idx", tmp = out + ".tmp";
     FILE* o = std::fopen(tmp.c_str(), "wb");
     if (!o) { std::fprintf(stderr, "[svbidx] FATAL: open %s\n", tmp.c_str()); return 1; }
-    char oh[32] = {0};
-    std::memcpy(oh, "SVBI", 4);
-    const uint32_t ov = 1; std::memcpy(oh + 4, &ov, 4);
-    std::memcpy(oh + 8, &nreads, 8);
-    std::memcpy(oh + 16, &maxlen, 8);
-    if (std::fwrite(oh, 1, 32, o) != 32 ||
+    char oh[16] = {0};
+    std::memcpy(oh, &nreads, 8);
+    std::memcpy(oh + 8, &maxlen, 8);
+    if (std::fwrite(oh, 1, 16, o) != 16 ||
         std::fwrite(off.data(), 8, off.size(), o) != off.size()) {
         std::fprintf(stderr, "[svbidx] FATAL: write %s\n", tmp.c_str()); return 1;
     }

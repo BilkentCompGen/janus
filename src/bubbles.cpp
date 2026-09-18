@@ -10,16 +10,9 @@ extern "C" {
 }
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cmath>
-#include <cstring>
-#include <condition_variable>
-#include <memory>
-#include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -31,8 +24,6 @@ namespace {
 int LEVEL = 5;
 constexpr int MARGIN = 10;
 
-const char* DUMP = nullptr;
-
 struct Graph {
     uint64_t K = 0;
     std::vector<uint64_t> sig;
@@ -40,19 +31,13 @@ struct Graph {
     std::vector<uint64_t> oo, io;
     std::vector<uint32_t> on, in;
     int S = 0;
-    std::vector<uint32_t> tc;
-    uint64_t ov_s = 0, ov_c = 0;
 };
 
 Graph load_graph(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
     Graph g;
-    char mg[4]; uint32_t ver = 0, S = 0, resv = 0;
-    if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin (bad magic)");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 6) die("graph.bin version is not 6 -- rebuild it");
+    uint32_t S = 0;
     if (std::fread(&S, 4, 1, f) != 1 || S < 2 || S > 64) die("graph.bin sample count out of range");
-    if (std::fread(&resv, 4, 1, f) != 1) die("read header");
-    if (std::fread(&g.ov_s, 8, 1, f) != 1 || std::fread(&g.ov_c, 8, 1, f) != 1) die("read overlap");
     g.S = (int)S;
     if (std::fread(&g.K, 8, 1, f) != 1) die("read K");
     g.sig.resize(g.K);
@@ -67,18 +52,8 @@ Graph load_graph(const std::string& path) {
         for (size_t i = 0; i < m; i++) g.som[done + i] = (buf[i] == 0);
         done += m;
     }
-    if (DUMP) {
-        g.tc.assign(g.K, 0);
-        for (uint32_t j = 1; j < S; j++)
-            for (uint64_t done = 0; done < g.K; ) {
-                const size_t m = (size_t)std::min<uint64_t>(CH, g.K - done);
-                if (std::fread(buf.data(), sizeof(cov_t), m, f) != m) die("read tumour plane");
-                for (size_t i = 0; i < m; i++) g.tc[done + i] = std::max(g.tc[done + i], (uint32_t)buf[i]);
-                done += m;
-            }
-    } else if (std::fseek(f, (long)((size_t)(S - 1) * g.K * sizeof(cov_t)), SEEK_CUR) != 0) {
+    if (std::fseek(f, (long)((size_t)(S - 1) * g.K * sizeof(cov_t)), SEEK_CUR) != 0)
         die("seek past tumour planes");
-    }
 
     uint64_t E = 0;
     if (std::fread(&E, 8, 1, f) != 1) die("read E");
@@ -168,7 +143,7 @@ std::vector<Bub> find_bubbles(const Graph& g, int maxlen, int NT) {
         for (Bub& b : part[t]) out.push_back(std::move(b));
         std::vector<Bub>().swap(part[t]);
     }
-    std::fprintf(stderr, "[bubbles] %llu dugum, %llu dallanma -> %zu temiz bubble (maxlen=%d)\n",
+    std::fprintf(stderr, "[bubbles] %llu nodes, %llu branching sources -> %zu clean bubbles (maxlen=%d)\n",
                  (unsigned long long)g.K, (unsigned long long)srcs, out.size(), maxlen);
     return out;
 }
@@ -199,36 +174,6 @@ void diff_span(const std::string& t, const std::string& n, size_t& a, size_t& dt
     dn = n.size() - a - b;
 }
 
-size_t longest_diff_run(const std::string& x, size_t xa, size_t xn,
-                        const std::string& y, size_t ya, size_t yn) {
-    static thread_local std::vector<int32_t> prev, cur;
-    static thread_local std::vector<uint8_t> tb;
-    prev.assign(yn + 1, 0); cur.assign(yn + 1, 0);
-    tb.assign((xn + 1) * (yn + 1), 0);
-    for (size_t j = 0; j <= yn; j++) { prev[j] = (int32_t)j; tb[j] = 2; }
-    for (size_t i = 1; i <= xn; i++) {
-        cur[0] = (int32_t)i; tb[i * (yn + 1)] = 1;
-        for (size_t j = 1; j <= yn; j++) {
-            const bool eq = x[xa + i - 1] == y[ya + j - 1];
-            int32_t best = prev[j - 1] + (eq ? 0 : 1); uint8_t dir = eq ? 3 : 0;
-            if (prev[j] + 1 < best) { best = prev[j] + 1; dir = 1; }
-            if (cur[j - 1] + 1 < best) { best = cur[j - 1] + 1; dir = 2; }
-            cur[j] = best; tb[i * (yn + 1) + j] = dir;
-        }
-        prev.swap(cur);
-    }
-    size_t i = xn, j = yn, run = 0, best = 0;
-    while (i || j) {
-        const uint8_t d = tb[i * (yn + 1) + j];
-        run = (d == 3) ? 0 : run + 1;
-        if (run > best) best = run;
-        if (d == 3 || d == 0) { i--; j--; }
-        else if (d == 1) i--;
-        else j--;
-    }
-    return best;
-}
-
 }
 
 int cmd_bubbles(int argc, char** argv) {
@@ -244,7 +189,6 @@ int cmd_bubbles(int argc, char** argv) {
 
     const int MIN_DIFF = argc > 5 ? std::atoi(argv[5]) : 25;
     if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
-    DUMP = std::getenv("SNAPE_BUBBLE_TSV");
 
     const std::vector<Sample> smp = samples_read(spath);
     const Graph g = load_graph(gpath);
@@ -256,60 +200,34 @@ int cmd_bubbles(int argc, char** argv) {
     if (ix.K != g.K) die("index.bin and graph.bin disagree on the node count");
     std::vector<SvbFile> svb(smp.size());
     for (size_t i = 0; i < smp.size(); i++) svb[i].open(smp[i].path);
-    std::fprintf(stderr, "[bubbles] index.bin: %llu kayit, N=%u\n",
+    std::fprintf(stderr, "[bubbles] index.bin: %llu records, N=%u\n",
                  (unsigned long long)ix.off[ix.K], ix.N);
     const std::vector<Bub> bubs = find_bubbles(g, MAXLEN, NT);
-    if (bubs.empty()) std::fprintf(stderr, "[bubbles] temiz bubble yok\n");
-
-    FILE* dmp = nullptr;
-    if (DUMP) {
-        dmp = std::fopen(DUMP, "w");
-        if (!dmp) die("open SNAPE_BUBBLE_TSV");
-        std::fprintf(dmp, "ns\tng\tslen\tglen\tdt\tdn\trun\tsized\tdrop\tsigs\n");
-    }
-
-    const char* rule = std::getenv("SNAPE_BUBBLE_RULE");
-    const bool ALIGNALL = rule && std::strcmp(rule, "alignall") == 0;
-    const bool ALIGN = ALIGNALL || (rule && std::strcmp(rule, "align") == 0);
-    std::fprintf(stderr, "[bubbles] kural=%s, esik=%d baz\n", ALIGN ? "align" : "zip", MIN_DIFF);
+    if (bubs.empty()) std::fprintf(stderr, "[bubbles] no clean bubbles\n");
 
     ankerl::unordered_dense::set<uint64_t> drop;
-    uint64_t nbub = 0, nomiss = 0, naln = 0;
+    uint64_t nbub = 0, nomiss = 0;
     std::string ts, gs;
     for (const Bub& b : bubs) {
         const bool sized = arm_seq(ix, svb, b.som_arm, ts) && arm_seq(ix, svb, b.germ_arm, gs);
-        size_t a = 0, dt = 0, dn = 0, run = 0;
+        size_t a = 0, dt = 0, dn = 0;
         if (sized) diff_span(ts, gs, a, dt, dn);
         nomiss += !sized;
         bool dropped = sized && dt < (size_t)MIN_DIFF && dn < (size_t)MIN_DIFF;
 
-        if (ALIGN && sized && (ALIGNALL || !dropped) && dt <= 4000 && dn <= 4000) {
-            run = longest_diff_run(ts, a, dt, gs, a, dn);
-            naln++;
-            dropped = run < (size_t)MIN_DIFF;
-        }
         if (dropped) {
             for (uint32_t v : b.som_arm) drop.insert(g.sig[v]);
             nbub++;
         }
-        if (!dmp) continue;
-        std::fprintf(dmp, "%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%d\t%d\t",
-                     b.som_arm.size(), b.germ_arm.size(), ts.size(), gs.size(), dt, dn, run,
-                     (int)sized, (int)dropped);
-        for (size_t i = 0; i < b.som_arm.size(); i++)
-            std::fprintf(dmp, "%s%llu", i ? "," : "", (unsigned long long)g.sig[b.som_arm[i]]);
-        std::fputc('\n', dmp);
     }
-    if (ALIGN) std::fprintf(stderr, "[bubbles] %llu bubble hizalandi\n", (unsigned long long)naln);
-    if (dmp) { std::fclose(dmp); std::fprintf(stderr, "[bubbles] bubble istatistikleri -> %s\n", DUMP); }
 
     for (auto& v : svb) v.close();
     const std::string out = dir + "/drop.sigs";
     FILE* f = std::fopen(out.c_str(), "w"); if (!f) die("open drop.sigs");
     for (uint64_t s : drop) std::fprintf(f, "%llu\n", (unsigned long long)s);
     std::fclose(f);
-    std::fprintf(stderr, "[bubbles] iki kol farki da <%d baz -> %llu/%zu bubble, %zu cekirdek "
-                 "(%llu bubble dikilemedi, tutuldu) -> %s\n",
+    std::fprintf(stderr, "[bubbles] both arms differ by <%d bp: dropped %llu/%zu bubbles, %zu cores "
+                 "(%llu unsized bubbles kept) -> %s\n",
                  MIN_DIFF, (unsigned long long)nbub, bubs.size(), drop.size(),
                  (unsigned long long)nomiss, out.c_str());
     return 0;

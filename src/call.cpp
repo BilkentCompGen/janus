@@ -487,7 +487,7 @@ int cmd_call(int argc, char** argv) {
         const size_t bj = cl.size(), bi = ci.size();
         cl.erase(std::remove_if(cl.begin(), cl.end(), [&](const Cl& c) { return c.rep > max_rep; }), cl.end());
         ci.erase(std::remove_if(ci.begin(), ci.end(), [&](const ClIns& c) { return c.rep > max_rep; }), ci.end());
-        std::fprintf(stderr, "[call] cipasi tekrarli oldugu icin elenen: %zu (%zu + %zu kaldi)\n",
+        std::fprintf(stderr, "[call] dropped as repetitive: %zu (%zu + %zu left)\n",
                      (bj - cl.size()) + (bi - ci.size()), cl.size(), ci.size());
     }
 
@@ -502,7 +502,7 @@ int cmd_call(int argc, char** argv) {
         ci.erase(std::remove_if(ci.begin(), ci.end(), [&](const ClIns& c) {
             return germline(nrm, sam_hdr_tid2name(hdr, c.v.c), c.v.p, c.len, tol * 10, dirty_f); }), ci.end());
         st.germ = (before_j - cl.size()) + (before_i - ci.size());
-        std::fprintf(stderr, "[call] normalde de bulundugu icin elenen: %llu (%zu junction + %zu insertion kaldi)\n",
+        std::fprintf(stderr, "[call] dropped as present in normal: %llu (%zu junction + %zu insertion left)\n",
                      (unsigned long long)st.germ, cl.size(), ci.size());
     }
     write_vcf(argv[3], hdr, cl, ci, qname, sets, sup, L, assign, -1);
@@ -513,12 +513,12 @@ int cmd_call(int argc, char** argv) {
         write_vcf((base + "." + sets[(size_t)l].name + ".vcf").c_str(), hdr, cl, ci, qname, sets,
                   sup, L, assign, l);
 
-    std::fprintf(stderr, "[call] kayit %llu | atlanan: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu, mismatch>%.0f%% %llu\n",
+    std::fprintf(stderr, "[call] records %llu | skipped: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu, mismatch>%.0f%% %llu\n",
                  (unsigned long long)st.rec, (unsigned long long)st.unmapped, (unsigned long long)st.secondary,
                  min_mapq, (unsigned long long)st.lowq, (long long)min_aln, (unsigned long long)st.shortaln,
                  100*max_mm, (unsigned long long)st.highmm);
     std::fprintf(stderr, "[call] segment %llu -> split %llu + CIGAR DEL %llu | INS %llu "
-                 "(bunun %llu tanesi referansi kaldigi yerden suren iki segment arasindan)\n",
+                 "(%llu of them between the two segments spanning the reference position)\n",
                  (unsigned long long)st.seg, (unsigned long long)st.split,
                  (unsigned long long)st.cigar_del, (unsigned long long)st.cigar_ins,
                  (unsigned long long)st.ins_split);

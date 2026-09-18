@@ -24,10 +24,8 @@ int cmd_pack(int argc, char** argv) {
     FILE* out = std::fopen(argv[1], "wb");
     if (!out) { std::perror("fopen out"); return 1; }
 
-    char hdr[32] = {0};
-    std::memcpy(hdr, "SVB1", 4);
-    uint32_t ver = 1; std::memcpy(hdr + 4, &ver, 4);
-    std::fwrite(hdr, 1, 32, out);
+    char hdr[16] = {0};
+    std::fwrite(hdr, 1, 16, out);
 
     uint64_t nreads = 0, total = 0;
     char* line = nullptr; size_t cap = 0; ssize_t got; int ln = 0;
@@ -54,10 +52,10 @@ int cmd_pack(int argc, char** argv) {
     }
     std::free(line);
 
-    std::memcpy(hdr + 8, &nreads, 8);
-    std::memcpy(hdr + 16, &total, 8);
+    std::memcpy(hdr, &nreads, 8);
+    std::memcpy(hdr + 8, &total, 8);
     std::fseek(out, 0, SEEK_SET);
-    std::fwrite(hdr, 1, 32, out);
+    std::fwrite(hdr, 1, 16, out);
     std::fclose(out);
     std::fprintf(stderr, "[svb_pack] %s: %llu reads, %llu bases\n",
                  argv[1], (unsigned long long)nreads, (unsigned long long)total);

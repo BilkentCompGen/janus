@@ -43,5 +43,4 @@ void reads_close(Reads& r);
 
 FILE* xopen(const std::string& p, const char* m);
 void  wr(FILE* f, const void* p, size_t n);
-void  rd(FILE* f, void* p, size_t n);
 void  atomic_close(FILE* f, const std::string& tmp, const std::string& dst);

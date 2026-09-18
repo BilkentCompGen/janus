@@ -5,14 +5,9 @@
 #include "samples.h"
 
 #include <sys/stat.h>
-#include <sys/resource.h>
-#include <time.h>
-#include <unistd.h>
-#include <sched.h>
 #include <dirent.h>
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -29,88 +24,10 @@
 
 FILE* xopen(const std::string& p, const char* m) { FILE* f = std::fopen(p.c_str(), m); if (!f) { std::fprintf(stderr, "[FATAL] fopen %s\n", p.c_str()); std::abort(); } return f; }
 void wr(FILE* f, const void* p, size_t n) { if (n && std::fwrite(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] fwrite\n"); std::abort(); } }
-void rd(FILE* f, void* p, size_t n) { if (n && std::fread(p, 1, n, f) != n) { std::fprintf(stderr, "[FATAL] truncated checkpoint\n"); std::abort(); } }
 void atomic_close(FILE* f, const std::string& tmp, const std::string& dst) { std::fclose(f); if (std::rename(tmp.c_str(), dst.c_str())) { std::fprintf(stderr, "[FATAL] rename %s\n", dst.c_str()); std::abort(); } }
 
-static inline uint64_t thr_ns() { struct timespec ts; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec; }
-static double self_cpu_s()  { struct rusage r; getrusage(RUSAGE_SELF, &r);     return r.ru_utime.tv_sec + r.ru_utime.tv_usec / 1e6 + r.ru_stime.tv_sec + r.ru_stime.tv_usec / 1e6; }
-static double peak_gb()     { struct rusage r; getrusage(RUSAGE_SELF, &r);     return r.ru_maxrss / 1048576.0; }
-static double rss_gb() {
-    FILE* f = std::fopen("/proc/self/statm", "r"); if (!f) return 0.0;
-    long total = 0, res = 0;
-    if (std::fscanf(f, "%ld %ld", &total, &res) != 2) res = 0;
-    std::fclose(f);
-    return (double)res * 4096.0 / 1073741824.0;
-}
-
 namespace {
-using SEdge = std::pair<uint64_t, uint64_t>;
-
-struct Tic { std::chrono::steady_clock::time_point t0, prev; const char* tag;
-    explicit Tic(const char* tg) : t0(std::chrono::steady_clock::now()), prev(t0), tag(tg) {}
-    void mark(const char* lbl) {
-        const auto now = std::chrono::steady_clock::now();
-        const double dprev = std::chrono::duration<double>(now - prev).count();
-        const double dtot = std::chrono::duration<double>(now - t0).count();
-        std::fprintf(stderr, "[%s/%s] +%.2fs  (total %.2fs)\n", tag, lbl, dprev, dtot);
-        prev = now;
-    }
-};
-
-struct EdgeHash { uint64_t operator()(const SEdge& e) const { return e.first * 0x9e3779b97f4a7c15ULL + e.second; } };
-using EdgeSet = ankerl::unordered_dense::set<SEdge, EdgeHash>;
-
-struct Prof {
-    uint64_t ins_ns = 0;
-    uint64_t seq_ns = 0;
-    uint64_t seq_smp = 0;
-    uint64_t seq_n = 0;
-    uint64_t seq_bp = 0;
-    uint64_t seq_rev = 0;
-    uint64_t edge_n = 0;
-    uint64_t wait_ns = 0;
-    uint64_t read_ns = 0;
-    uint64_t local_hw = 0;
-};
-Prof PROF;
-std::mutex PROF_MTX;
-
-uint64_t CLK_NS = 0;
-
-constexpr uint64_t SEQ_SAMPLE = 1024;
-
-void prof_merge(const Prof& p) {
-    std::lock_guard<std::mutex> lk(PROF_MTX);
-    PROF.ins_ns += p.ins_ns; PROF.seq_ns += p.seq_ns; PROF.seq_smp += p.seq_smp;
-    PROF.seq_n  += p.seq_n;  PROF.seq_bp += p.seq_bp; PROF.seq_rev += p.seq_rev;
-    PROF.edge_n += p.edge_n; PROF.wait_ns += p.wait_ns; PROF.read_ns += p.read_ns;
-    PROF.local_hw += p.local_hw;
-}
-
-uint64_t clock_cost_ns() {
-    uint64_t best = ~0ull;
-    for (int i = 0; i < 1000; i++) {
-        const uint64_t a = thr_ns(), b = thr_ns();
-        best = std::min(best, b - a);
-    }
-    return best;
-}
-
 static inline void bump(cov_t& c) { c += (c != COV_MAX); }
-
-
-static inline uint32_t b2(char c) {
-    const uint32_t v = ((uint32_t)(uint8_t)c >> 1) & 3;
-    return v ^ (v >> 1);
-}
-
-constexpr uint32_t ACGT_WORD = 0x54474341u;
-
-static inline uint32_t acgt_bad(uint8_t c, uint32_t v) {
-    return ((ACGT_WORD >> (v * 8)) & 0xff) ^ (uint32_t)(c & 0xdfu);
-}
-
-
 
 static inline void addsat(cov_t& d, cov_t v) { const uint32_t t = (uint32_t)d + v; d = t > COV_MAX ? COV_MAX : (cov_t)t; }
 
@@ -187,11 +104,7 @@ static const uint32_t* quad_table() {
 static FILE* open_svb(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) { std::fprintf(stderr, "[FATAL] fopen svb %s\n", path.c_str()); std::abort(); }
-    char hdr[32];
-    if (std::fread(hdr, 1, 32, f) != 32 || std::memcmp(hdr, "SVB1", 4) != 0) {
-        std::fprintf(stderr, "[FATAL] bad .svb header %s\n", path.c_str()); std::abort(); }
-    uint32_t ver; std::memcpy(&ver, hdr + 4, 4);
-    if (ver != 1) { std::fprintf(stderr, "[FATAL] .svb version %u != 1 (%s)\n", ver, path.c_str()); std::abort(); }
+    if (std::fseek(f, 16, SEEK_SET) != 0) { std::fprintf(stderr, "[FATAL] bad .svb %s\n", path.c_str()); std::abort(); }
     return f;
 }
 
@@ -296,64 +209,22 @@ using EdgeKeySet = ankerl::unordered_dense::set<uint64_t>;
 constexpr int NSHARD = 64;
 
 
-void report_bytes_a(int col, const ShTab* psn, const NodeTab* gnode) {
-    size_t pm = 0, gm = 0, ga = 0;
-    for (int sh = 0; sh < NSHARD; sh++) {
-        pm += psn[sh].m.values().capacity() * sizeof(std::pair<uint64_t, cov_t>) + psn[sh].m.bucket_count() * 8;
-        gm += gnode[sh].m.values().capacity() * sizeof(std::pair<uint64_t, uint32_t>) + gnode[sh].m.bucket_count() * 8;
-        ga += gnode[sh].a.capacity() * sizeof(cov_t);
-    }
-    const double G = 1073741824.0;
-    std::fprintf(stderr, "[bytes] A sample %d, before merge: sample-map %.2f || graph-map %.2f | "
-                 "graph-cov %.2f || sum %.2f GB, RSS %.2f GB\n",
-                 col, pm / G, gm / G, ga / G, (pm + gm + ga) / G, rss_gb());
-}
 
-void report_bytes_b(const EdgeKeySet* ge, size_t idx_bytes, size_t cov_bytes, size_t post_bytes) {
-    size_t e = 0;
-    for (int sh = 0; sh < NSHARD; sh++) e += ge[sh].values().capacity() * 8 + ge[sh].bucket_count() * 8;
-    const double G = 1073741824.0;
-    std::fprintf(stderr, "[bytes] B: survivor-index %.2f | graph-cov %.2f | edges %.2f | "
-                 "postings %.2f || sum %.2f GB, RSS %.2f GB\n",
-                 idx_bytes / G, cov_bytes / G, e / G, post_bytes / G,
-                 (idx_bytes + cov_bytes + e + post_bytes) / G, rss_gb());
-}
-
-void rss_poll(std::atomic<bool>* stop, std::string path, double* peak, double* peak_t) {
-    FILE* f = xopen(path + ".tmp", "w");
-    std::fprintf(f, "t_s\trss_gb\n");
-    const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
-    while (!stop->load()) {
-        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        const double r = rss_gb();
-        std::fprintf(f, "%.2f\t%.3f\n", t, r);
-        if (r > *peak) { *peak = r; *peak_t = t; }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    atomic_close(f, path + ".tmp", path);
-}
-
-void count_read(std::string& s, int level, int margin, SigCntMap& lo,
-                uint64_t& cpu_ext, uint64_t& ncores, uint64_t& ov_s, uint64_t& ov_n, Prof& pf) {
+void count_read(std::string& s, int level, int margin, SigCntMap& lo, uint64_t& ncores) {
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
     int nf, nr; const uint64_t *stf, *enf, *sgf, *strv, *enr, *sgr;
-    const uint64_t te = thr_ns();
     extract2(s.data(), (int)len, level, &nf, &stf, &enf, &sgf, &nr, &strv, &enr, &sgr);
-    cpu_ext += thr_ns() - te;
     const uint64_t mg = (uint64_t)margin;
     auto chain = [&](int n, const uint64_t* st, const uint64_t* en, const uint64_t* sig) {
-        for (int i = 0; i + 1 < n; i++) if (en[i] > st[i + 1]) { ov_s += en[i] - st[i + 1]; ov_n++; }
         for (int i = 0; i < n; i++) {
             if (st[i] < mg || en[i] + mg > len) continue;
             ncores++;
             bump(lo[sig[i]]);
         }
     };
-    const uint64_t ti = thr_ns();
     chain(nf, stf, enf, sgf);
     chain(nr, strv, enr, sgr);
-    pf.ins_ns += thr_ns() - ti;
 }
 
 struct SigIndex {
@@ -419,14 +290,13 @@ void post_offer(PostIdx& px, uint32_t node, uint64_t w0, uint64_t w1) {
     if (c == px.N) px.worst[node] = post_key(row[(size_t)(px.N - 1) * 2]);
 }
 
-void post_write(const PostIdx& px, const std::string& path, uint64_t K, int S) {
+void post_write(const PostIdx& px, const std::string& path, uint64_t K) {
     std::vector<uint32_t> off(K + 1, 0);
     for (uint64_t i = 0; i < K; i++) off[i + 1] = off[i] + px.cnt[i];
     const uint64_t E = off[K];
     FILE* f = xopen(path + ".tmp", "wb");
-    const uint32_t ver = 1, Sw = (uint32_t)S, pad = px.pad, N = px.N, resv = 0;
-    wr(f, "SNPI", 4); wr(f, &ver, 4); wr(f, &Sw, 4); wr(f, &pad, 4);
-    uint64_t Kw = K; wr(f, &Kw, 8); wr(f, &N, 4); wr(f, &resv, 4);
+    wr(f, &px.pad, 4); wr(f, &px.N, 4);
+    uint64_t Kw = K; wr(f, &Kw, 8);
     wr(f, off.data(), (K + 1) * 4);
     std::vector<uint64_t> buf; buf.reserve(1u << 20);
     for (uint64_t i = 0; i < K; i++) {
@@ -438,11 +308,11 @@ void post_write(const PostIdx& px, const std::string& path, uint64_t K, int S) {
     atomic_close(f, path + ".tmp", path);
     uint64_t full = 0;
     for (uint64_t i = 0; i < K; i++) full += (px.cnt[i] >= px.N);
-    std::fprintf(stderr, "[index] alanina sigmadigi icin atlanan kayit: %llu\n",
+    std::fprintf(stderr, "[index] records skipped (no room in slot): %llu\n",
                  (unsigned long long)POST_SKIP.load());
-    std::fprintf(stderr, "[index] %llu kayit, %.3f M dugumun %.1f%%'i dolu (N=%u), %.2f GB -> %s\n",
+    std::fprintf(stderr, "[index] %llu records, %.3f M nodes %.1f%% full (N=%u), %.2f GB -> %s\n",
                  (unsigned long long)E, K / 1e6, K ? 100.0 * (double)full / (double)K : 0.0, px.N,
-                 (16.0 * (double)E + 4.0 * (double)(K + 1) + 24.0) / 1073741824.0, path.c_str());
+                 (16.0 * (double)E + 4.0 * (double)(K + 1) + 16.0) / 1073741824.0, path.c_str());
 }
 
 struct FillCtx {
@@ -455,13 +325,11 @@ struct FillCtx {
 struct LocalB { EdgeKeySet e; };
 
 void fill_read(std::string& s, int level, int margin, int col, uint64_t rno,
-               const FillCtx& cx, LocalB& lo, uint64_t& cpu_ext, uint64_t& ncores, Prof& pf) {
+               const FillCtx& cx, LocalB& lo, uint64_t& ncores) {
     const uint64_t len = s.size();
     if (len < (uint64_t)(2 * margin + 4)) return;
     int nf, nr; const uint64_t *stf, *enf, *sgf, *strv, *enr, *sgr;
-    const uint64_t te = thr_ns();
     extract2(s.data(), (int)len, level, &nf, &stf, &enf, &sgf, &nr, &strv, &enr, &sgr);
-    cpu_ext += thr_ns() - te;
     const uint64_t mg = (uint64_t)margin;
     const int S = cx.S;
     const cov_t* cov = cx.cov->data();
@@ -480,7 +348,6 @@ void fill_read(std::string& s, int level, int margin, int col, uint64_t rno,
             if (have_prev && prev_sig != sig[i] && prev != UINT32_MAX && node != UINT32_MAX &&
                 prev != node && cov[(size_t)prev * S + col] != 0 && cov[(size_t)node * S + col] != 0) {
                 lo.e.insert(((uint64_t)prev << 32) | (uint64_t)node);
-                pf.edge_n++;
             }
             if (wantpost) { ci.push_back(i); cnode.push_back(node); }
             prev = node; prev_sig = sig[i]; have_prev = true;
@@ -504,10 +371,8 @@ void fill_read(std::string& s, int level, int margin, int col, uint64_t rno,
                        post_w1((uint32_t)a, (uint32_t)(a - ws), (uint32_t)(we - b)));
         }
     };
-    const uint64_t ti = thr_ns();
     chain(false, nf, stf, enf, sgf);
     chain(true, nr, strv, enr, sgr);
-    pf.ins_ns += thr_ns() - ti;
 }
 
 struct Feed {
@@ -521,7 +386,6 @@ struct Feed {
 };
 
 void read_shards(const std::vector<Shard>& shards, Feed& fd, size_t q_cap, size_t batch_n) {
-    const uint64_t r0 = thr_ns();
     constexpr unsigned BLOCK = 1u << 20;
     std::vector<char> buf(BLOCK);
     Batch batch; batch.seqs.reserve(batch_n);
@@ -578,39 +442,29 @@ void read_shards(const std::vector<Shard>& shards, Feed& fd, size_t q_cap, size_
     { std::lock_guard<std::mutex> lk(fd.qmtx);
       for (size_t i = 0; i < mine.size(); i++) fd.reads_per[i] += mine[i]; }
     if (fd.readers_left.fetch_sub(1) == 1) { std::lock_guard<std::mutex> lk(fd.qmtx); fd.cv_empty.notify_all(); }
-    Prof rp; rp.read_ns = thr_ns() - r0; prof_merge(rp);
 }
-
-bool feed_take(Feed& fd, Batch& out, Prof& pf) {
+bool feed_take(Feed& fd, Batch& out) {
     std::unique_lock<std::mutex> lk(fd.qmtx);
-    const std::chrono::steady_clock::time_point w0 = std::chrono::steady_clock::now();
     fd.cv_empty.wait(lk, [&]{ return !fd.q.empty() || fd.readers_left.load() == 0; });
-    pf.wait_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
-                      std::chrono::steady_clock::now() - w0).count();
     if (fd.q.empty()) return false;
     out = std::move(fd.q.front()); fd.q.pop(); fd.cv_full.notify_one();
     return true;
 }
-
 void count_sample(const std::vector<Shard>& shards, int level, int margin, int threads, uint64_t max_bases,
                   ShTab* psn, std::mutex* nmtx,
-                  std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
-                  std::atomic<uint64_t>& ov_sum, std::atomic<uint64_t>& ov_cnt,
-                  std::atomic<uint64_t>& flush_ns, uint64_t& reads_here) {
+                  std::atomic<uint64_t>& emissions, uint64_t& reads_here) {
     const int nw = std::max(1, threads - 1);
     Feed fd; fd.reads_per.assign(1, 0); fd.max_bases = max_bases;
     std::vector<Shard> mine = shards;
     for (Shard& s : mine) s.col = 0;
 
     auto worker = [&]() {
-        uint64_t ext = 0, emis = 0, ovs = 0, ovn = 0;
+        uint64_t emis = 0;
         const char* fe = std::getenv("SNAPE_FLUSH");
         const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 20);
-        Prof pf;
         SigCntMap lo; lo.reserve(1u << 20);
         std::vector<std::vector<std::pair<uint64_t, cov_t>>> bn(NSHARD);
         auto flush = [&]() {
-            const uint64_t tf = thr_ns();
             for (auto& v : bn) v.clear();
             for (const auto& kv : lo) bn[kv.first & (NSHARD - 1)].push_back(kv);
             for (int sh = 0; sh < NSHARD; sh++) {
@@ -619,18 +473,14 @@ void count_sample(const std::vector<Shard>& shards, int level, int margin, int t
                 for (const auto& kv : bn[sh]) addsat(psn[sh].m[kv.first], kv.second);
             }
             lo.clear();
-            flush_ns += thr_ns() - tf;
         };
         Batch b;
-        while (feed_take(fd, b, pf)) {
-            for (std::string& s : b.seqs) count_read(s, level, margin, lo, ext, emis, ovs, ovn, pf);
-            pf.local_hw = std::max(pf.local_hw,
-                lo.values().capacity() * sizeof(std::pair<uint64_t, cov_t>) + lo.bucket_count() * 8);
+        while (feed_take(fd, b)) {
+            for (std::string& s : b.seqs) count_read(s, level, margin, lo, emis);
             if (lo.size() >= FLUSH) flush();
         }
         flush();
-        emissions += emis; extract_ns += ext; ov_sum += ovs; ov_cnt += ovn;
-        prof_merge(pf);
+        emissions += emis;
     };
 
     { std::vector<std::thread> th;
@@ -667,21 +517,18 @@ void merge_sample(ShTab* psn, NodeTab* gnode, int col, int S, int min_mult, int 
 void fill_pass(const std::vector<Shard>& shards, int level, int margin, int threads, int S, uint64_t max_bases,
                const SigIndex& idx, const std::vector<cov_t>& cov,
                PostIdx& px, EdgeKeySet* gedge, std::mutex* emtx,
-               std::atomic<uint64_t>& emissions, std::atomic<uint64_t>& extract_ns,
-               std::atomic<uint64_t>& flush_ns, std::vector<uint64_t>& reads_per) {
+               std::atomic<uint64_t>& emissions, std::vector<uint64_t>& reads_per) {
     const int nw = std::max(1, threads - 1);
     Feed fd; fd.reads_per.assign((size_t)S, 0); fd.max_bases = max_bases;
     FillCtx cx; cx.idx = &idx; cx.cov = &cov; cx.px = &px; cx.S = S;
 
     auto worker = [&]() {
-        uint64_t ext = 0, emis = 0;
+        uint64_t emis = 0;
         const char* fe = std::getenv("SNAPE_FLUSH");
         const size_t FLUSH = fe ? (size_t)std::atoll(fe) : (size_t)(1u << 20);
-        Prof pf;
         LocalB lo; lo.e.reserve(1u << 20);
         std::vector<std::vector<uint64_t>> be(NSHARD);
         auto flush = [&]() {
-            const uint64_t tf = thr_ns();
             for (auto& v : be) v.clear();
             for (uint64_t e : lo.e) be[(size_t)((e >> 32) ^ (e * 0x9e3779b97f4a7c15ULL)) & (NSHARD - 1)].push_back(e);
             for (int sh = 0; sh < NSHARD; sh++) {
@@ -690,19 +537,15 @@ void fill_pass(const std::vector<Shard>& shards, int level, int margin, int thre
                 for (uint64_t e : be[sh]) gedge[sh].insert(e);
             }
             lo.e.clear();
-            flush_ns += thr_ns() - tf;
         };
         Batch b;
-        while (feed_take(fd, b, pf)) {
+        while (feed_take(fd, b)) {
             for (size_t k = 0; k < b.seqs.size(); k++)
-                fill_read(b.seqs[k], level, margin, b.col, b.first + k, cx, lo, ext, emis, pf);
-            const size_t lb = lo.e.values().capacity() * 8 + lo.e.bucket_count() * 8;
-            pf.local_hw = std::max(pf.local_hw, lb);
+                fill_read(b.seqs[k], level, margin, b.col, b.first + k, cx, lo, emis);
             if (lo.e.size() >= FLUSH) flush();
         }
         flush();
-        emissions += emis; extract_ns += ext;
-        prof_merge(pf);
+        emissions += emis;
     };
 
     { std::vector<std::thread> th;
@@ -716,11 +559,11 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
                        int min_mult, int S, int index_n, int pad_cores, const std::string& dir,
                        std::vector<SigCount>& out_nodes,
                        std::vector<cov_t>& out_ncov, std::vector<CEdge>& out_edges,
-                       uint64_t& ov_s, uint64_t& ov_c, std::vector<uint64_t>& reads_per) {
+                       std::vector<uint64_t>& reads_per) {
     NodeTab gnode[NSHARD];
     ShTab psn[NSHARD];
     std::mutex nmtx[NSHARD], emtx[NSHARD], smtx[NSHARD];
-    std::atomic<uint64_t> emis_a{0}, ext_a{0}, ov_sum{0}, ov_cnt{0}, flush_a{0};
+    std::atomic<uint64_t> emis_a{0};
     reads_per.assign((size_t)S, 0);
     uint64_t distinct = 0, kept = 0;
 
@@ -728,8 +571,7 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
         std::vector<Shard> mine;
         for (const Shard& s : shards) if (s.col == col) mine.push_back(s);
         uint64_t rd = 0, seen = 0, pass = 0, one = 0, two = 0;
-        count_sample(mine, level, margin, threads, max_bases, psn, nmtx, emis_a, ext_a, ov_sum, ov_cnt, flush_a, rd);
-        report_bytes_a(col, psn, gnode);
+        count_sample(mine, level, margin, threads, max_bases, psn, nmtx, emis_a, rd);
         merge_sample(psn, gnode, col, S, min_mult, threads, seen, pass, one, two);
         reads_per[col] = rd;
         distinct += seen; kept += pass;
@@ -785,7 +627,7 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
                  K / 1e6, (idx.bytes() + K * 8) / 1073741824.0);
 
     EdgeKeySet gedge[NSHARD];
-    std::atomic<uint64_t> emis_b{0}, ext_b{0}, flush_b{0};
+    std::atomic<uint64_t> emis_b{0};
     std::vector<uint64_t> rp_b((size_t)S, 0);
 
     PostIdx px;
@@ -795,18 +637,17 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
         px.cnt.assign(K, 0);
         px.worst.assign(K, 0);
         px.mtx = smtx;
-        std::fprintf(stderr, "[index] N=%d pad=%d, tampon %.2f GB\n",
+        std::fprintf(stderr, "[index] N=%d pad=%d, buffer %.2f GB\n",
                      index_n, pad_cores, px.bytes() / 1073741824.0);
     }
     fill_pass(shards, level, margin, threads, S, max_bases, idx, out_ncov, px,
-              gedge, emtx, emis_b, ext_b, flush_b, rp_b);
+              gedge, emtx, emis_b, rp_b);
     if (px.on()) {
-        post_write(px, dir + "/index.bin", K, S);
+        post_write(px, dir + "/index.bin", K);
         std::vector<uint64_t>().swap(px.w);
         std::vector<uint8_t>().swap(px.cnt);
         std::vector<uint64_t>().swap(px.worst);
     }
-    report_bytes_b(gedge, idx.bytes() + K * 8, out_ncov.capacity(), px.bytes());
 
     {
         uint64_t ne = 0;
@@ -817,15 +658,12 @@ void run_pool_two_pass(const std::vector<Shard>& shards, int level, int margin, 
             EdgeKeySet().swap(gedge[sh]);
         }
     }
-    ov_s = ov_sum.load(); ov_c = ov_cnt.load();
-    std::fprintf(stderr, "[graphA] emissions=%.3f M, extract %.1f CPU-s, flush %.1f CPU-s\n",
-                 emis_a.load() / 1e6, ext_a.load() / 1e9, flush_a.load() / 1e9);
-    std::fprintf(stderr, "[graphB] emissions=%.3f M, extract %.1f CPU-s, flush %.1f CPU-s\n",
-                 emis_b.load() / 1e6, ext_b.load() / 1e9, flush_b.load() / 1e9);
+    std::fprintf(stderr, "[graphA] emissions=%.3f M\n", emis_a.load() / 1e6);
+    std::fprintf(stderr, "[graphB] emissions=%.3f M\n", emis_b.load() / 1e6);
     std::fprintf(stderr, "[graph1] per-sample distinct sigs=%.3f M -> passed mm=%d: %.3f M (%.2f%%)\n",
                  distinct / 1e6, min_mult, kept / 1e6, distinct ? 100.0 * kept / distinct : 0.0);
-    std::fprintf(stderr, "[graph1] merged nodes=%.3f M | edges=%.3f M | ardisik cekirdek ortusme %.1f bp\n",
-                 K / 1e6, out_edges.size() / 1e6, ov_c ? (double)ov_s / (double)ov_c : 0.0);
+    std::fprintf(stderr, "[graph1] merged nodes=%.3f M | edges=%.3f M\n",
+                 K / 1e6, out_edges.size() / 1e6);
 }
 
 }
@@ -840,38 +678,20 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
     if (max_bases && shards_all.size() != (size_t)S) { std::fprintf(stderr, "[FATAL] --max-bases needs one file per sample\n"); std::abort(); }
     std::fprintf(stderr, "[graph] %d samples (%zu shards), threads=%d min_mult=%d max_bases=%llu\n",
                  S, shards_all.size(), threads, min_mult, (unsigned long long)max_bases);
-    Tic tic("graph");
-    CLK_NS = clock_cost_ns();
-    std::atomic<bool> rss_stop{false};
-    double rss_peak = 0, rss_peak_t = 0;
-    std::thread rss_th(rss_poll, &rss_stop, dir + "/rss_trace.tsv", &rss_peak, &rss_peak_t);
-
-    struct Snap { double wall, self, rss, peak; };
-    const auto torig = std::chrono::steady_clock::now();
-    auto snap = [&]() -> Snap { return { std::chrono::duration<double>(std::chrono::steady_clock::now() - torig).count(), self_cpu_s(), rss_gb(), peak_gb() }; };
-    const Snap P0 = snap();
 
     std::vector<SigCount> nodes; std::vector<CEdge> ce;
     std::vector<cov_t> ncov; std::vector<uint64_t> nreads;
-    uint64_t ov_s = 0, ov_c = 0;
     run_pool_two_pass(shards_all, level, margin, threads, max_bases, min_mult, S, index_n, pad_cores, dir,
-                      nodes, ncov, ce, ov_s, ov_c, nreads);
+                      nodes, ncov, ce, nreads);
     const uint64_t K = nodes.size();
-    const Snap P1 = snap();
-    tic.mark("pool_both");
     std::fprintf(stderr, "[graph]   survivors=%lu\n", (unsigned long)K);
 
-    const Snap P2 = snap();
-
     psort(ce, threads, [](const CEdge& x, const CEdge& y){ return x.src != y.src ? x.src < y.src : x.dst < y.dst; });
-    const Snap P4 = snap();
-    tic.mark("sort_edges");
 
     const std::string gp = dir + "/graph.bin";
     FILE* fg = xopen(gp + ".tmp", "wb");
-    const uint32_t ver = 6, Sw = (uint32_t)S, resv = 0;
-    wr(fg, "SNPG", 4); wr(fg, &ver, 4); wr(fg, &Sw, 4); wr(fg, &resv, 4);
-    wr(fg, &ov_s, 8); wr(fg, &ov_c, 8);
+    const uint32_t Sw = (uint32_t)S;
+    wr(fg, &Sw, 4);
     uint64_t Kw = K; wr(fg, &Kw, 8);
     { std::vector<uint64_t> sig(K);
       for (uint64_t i = 0; i < K; i++) sig[i] = nodes[i].sig;
@@ -890,44 +710,9 @@ void run_graph_reads(const std::vector<Sample>& samples, const std::string& dir,
       for (uint64_t i = 0; i < E; i++) col[i] = ce[i].dst;
       wr(fg, col.data(), E * 4); }
     atomic_close(fg, gp + ".tmp", gp);
-    const Snap P5 = snap();
-    tic.mark("write");
     for (int i = 0; i < S; i++)
         std::fprintf(stderr, "[graph]   %-8s %-6s %lu reads\n", samples[i].name.c_str(),
                      samples[i].normal ? "normal" : "tumor", (unsigned long)nreads[i]);
     std::fprintf(stderr, "[graph] nodes=%lu edges=%lu S=%d -> %s/graph.bin\n",
                  (unsigned long)K, (unsigned long)E, S, dir.c_str());
-
-    rss_stop.store(true); rss_th.join();
-    cpu_set_t cs; CPU_ZERO(&cs);
-    const double ncpu = (sched_getaffinity(0, sizeof(cs), &cs) == 0 && CPU_COUNT(&cs) > 0) ? (double)CPU_COUNT(&cs) : (double)sysconf(_SC_NPROCESSORS_ONLN);
-    auto row = [&](const char* name, const Snap& lo, const Snap& hi) {
-        const double wall = hi.wall - lo.wall, cpu = hi.self - lo.self;
-        std::fprintf(stderr, "[eff] %-16s wall=%8.1fs  CPU=%9.1f  eff=%5.1f%%  RSS=%6.2fGB  peak=%6.2fGB\n",
-                     name, wall, cpu, 100.0 * cpu / (ncpu * wall + 1e-9), hi.rss, hi.peak);
-    };
-    std::fprintf(stderr, "\n===== graph build CPU-seconds & execution efficiency (ncpu=%.0f) =====\n", ncpu);
-    std::fprintf(stderr, "[eff] %-16s %9s  %9s  %6s  %9s %9s\n", "phase", "wall_s", "CPU_s", "eff", "RSS_end", "peak");
-    row("count(pool_both)", P0, P1);
-    row("sig arrays",       P1, P2);
-    row("sort_edges",       P2, P4);
-    row("write",            P4, P5);
-    row("TOTAL",            P0, P5);
-    std::fprintf(stderr, "=====================================================================\n");
-
-    const double seq_net = (double)PROF.seq_ns - (double)(PROF.seq_smp * CLK_NS);
-    const double seq_est = PROF.seq_smp ? seq_net * (double)PROF.seq_n / (double)PROF.seq_smp : 0.0;
-    std::fprintf(stderr, "[prof] per-core bookkeeping  %9.1f CPU-s\n", PROF.ins_ns / 1e9);
-    std::fprintf(stderr, "[prof]   of which packing    %9.1f CPU-s (estimated from %llu of %llu blocks, "
-                 "%.2f Gbp packed, %.1f%% of them reverse-strand)\n",
-                 seq_est / 1e9, (unsigned long long)PROF.seq_smp, (unsigned long long)PROF.seq_n,
-                 PROF.seq_bp / 1e9, PROF.seq_n ? 100.0 * PROF.seq_rev / PROF.seq_n : 0.0);
-    std::fprintf(stderr, "[prof] worker-local tables    %9.2f GB (sum of per-worker high water) | "
-                 "clock pair %llu ns, subtracted\n",
-                 PROF.local_hw / 1073741824.0, (unsigned long long)CLK_NS);
-    std::fprintf(stderr, "[prof] edge insertions       %9.3f G\n", PROF.edge_n / 1e9);
-    std::fprintf(stderr, "[prof] reader thread CPU     %9.1f s | workers blocked on empty queue %9.1f s (wall, summed)\n",
-                 PROF.read_ns / 1e9, PROF.wait_ns / 1e9);
-    std::fprintf(stderr, "[prof] RSS trace peak %.2f GB at t=%.1fs -> %s/rss_trace.tsv\n",
-                 rss_peak, rss_peak_t, dir.c_str());
 }

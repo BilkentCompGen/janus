@@ -9,14 +9,10 @@ extern "C" {
 #include "encoding.h"
 }
 
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <condition_variable>
-#include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
 #include <vector>
@@ -97,18 +93,16 @@ size_t anchor_cores(const char* fa, const ankerl::unordered_dense::set<std::stri
 int cmd_pick(int argc, char** argv) {
     if (argc < 5) {
         std::fprintf(stderr, "usage: snape pick <ctg.fa[,ctg.fa...]> <calls.vcf> <normal reads> <out.fastq> "
-                             "[threads=16] [min_shared=5] [trim_bp=0]\n");
+                             "[min_shared=5] [trim_bp=0]\n");
         return 2;
     }
     const std::string fa = argv[1], vcf = argv[2], reads = argv[3], out = argv[4];
-    const int NT = argc > 5 ? std::atoi(argv[5]) : 16; (void)NT;
-
-    const int MINSH = argc > 6 ? std::atoi(argv[6]) : 5;
-    const int64_t TRIM = argc > 7 ? std::atoll(argv[7]) : 0;
+    const int MINSH = argc > 5 ? std::atoi(argv[5]) : 5;
+    const int64_t TRIM = argc > 6 ? std::atoll(argv[6]) : 0;
     if (const char* lv = std::getenv("SNAPE_LEVEL")) LEVEL = std::atoi(lv);
 
     const auto want = wanted_contigs(vcf.c_str());
-    if (want.empty()) { std::fprintf(stderr, "[pick] adayda CTG= yok, secilecek bir sey yok\n"); return 1; }
+    if (want.empty()) { std::fprintf(stderr, "[pick] no CTG= in candidates, nothing to pick\n"); return 1; }
 
     ankerl::unordered_dense::set<uint64_t> sigs;
     size_t nctg = 0;
@@ -117,18 +111,18 @@ int cmd_pick(int argc, char** argv) {
         nctg += anchor_cores(fa.substr(i, c - i).c_str(), want, sigs);
         i = c + 1;
     }
-    std::fprintf(stderr, "[pick] %zu aday contig -> %zu contig bulundu -> %zu cipa cekirdegi\n",
+    std::fprintf(stderr, "[pick] %zu candidate contigs -> %zu found -> %zu anchor cores\n",
                  want.size(), nctg, sigs.size());
     if (sigs.empty()) die("no anchor cores");
 
     const size_t cut = fa.find_last_of('/');
     const std::string dir = cut == std::string::npos ? std::string(".") : fa.substr(0, cut);
-    uint32_t S = 0; uint64_t K = 0;
-    const std::vector<uint64_t> gsig = graph_sigs(dir + "/graph.bin", S, K);
+    uint64_t K = 0;
+    const std::vector<uint64_t> gsig = graph_sigs(dir + "/graph.bin", K);
     SigLookup sl; sl.build(gsig);
     Index ix; ix.load(dir + "/index.bin");
     if (ix.K != K) die("index.bin and graph.bin disagree on the node count");
-    std::fprintf(stderr, "[pick] index.bin: %llu kayit, N=%u\n",
+    std::fprintf(stderr, "[pick] index.bin: %llu records, N=%u\n",
                  (unsigned long long)ix.off[ix.K], ix.N);
 
     ankerl::unordered_dense::map<uint32_t, uint32_t> hits;
@@ -168,9 +162,9 @@ int cmd_pick(int argc, char** argv) {
     rd.close(); std::fclose(fo);
     if (std::rename((out + ".tmp").c_str(), out.c_str())) die("rename");
 
-    std::fprintf(stderr, "[pick] %zu cipa cekirdeginin %zu'si grafta -> %zu aday okuma -> "
-                 "%llu secildi (>=%d ortak cekirdek), %.3f Gbp -> %s\n",
-                 sigs.size(), found, hits.size(), (unsigned long long)kept, MINSH,
+    std::fprintf(stderr, "[pick] %zu of %zu anchor cores in the graft -> %zu candidate reads -> "
+                 "%llu selected (>=%d shared cores), %.3f Gbp -> %s\n",
+                 found, sigs.size(), hits.size(), (unsigned long long)kept, MINSH,
                  kept_bp / 1e9, out.c_str());
     return 0;
 }

@@ -12,14 +12,9 @@ namespace {
 void Index::load(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) { std::fprintf(stderr, "[index] FATAL: open %s\n", path.c_str()); std::exit(1); }
-    char mg[4]; uint32_t ver = 0, resv = 0;
-    if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPI", 4)) die("not an index.bin");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 1) die("index.bin version is not 1");
-    if (std::fread(&S, 4, 1, f) != 1) die("read S");
     if (std::fread(&pad, 4, 1, f) != 1) die("read pad");
-    if (std::fread(&K, 8, 1, f) != 1) die("read K");
     if (std::fread(&N, 4, 1, f) != 1) die("read N");
-    if (std::fread(&resv, 4, 1, f) != 1) die("read header");
+    if (std::fread(&K, 8, 1, f) != 1) die("read K");
     off.resize(K + 1);
     if (std::fread(off.data(), 4, K + 1, f) != K + 1) die("read off");
     const uint64_t E = off[K];
@@ -45,17 +40,16 @@ Post Index::get(uint32_t node, uint32_t j) const {
 void SvbFile::open(const std::string& svb) {
     f = std::fopen(svb.c_str(), "rb");
     if (!f) { std::fprintf(stderr, "[index] FATAL: open %s\n", svb.c_str()); std::exit(1); }
-    char hdr[32];
-    if (std::fread(hdr, 1, 32, f) != 32 || std::memcmp(hdr, "SVB1", 4)) die("not a .svb");
+    if (std::fseek(f, 16, SEEK_SET) != 0) die("skip .svb header");
 
     const std::string ip = svb + ".idx";
     FILE* g = std::fopen(ip.c_str(), "rb");
-    if (!g) { std::fprintf(stderr, "[index] FATAL: %s yok, `snape svbidx %s` calistir\n",
+    if (!g) { std::fprintf(stderr, "[index] FATAL: %s missing, run: snape svbidx %s\n",
                            ip.c_str(), svb.c_str()); std::exit(1); }
-    char ih[32];
-    if (std::fread(ih, 1, 32, g) != 32 || std::memcmp(ih, "SVBI", 4)) die("not a .svb.idx");
-    std::memcpy(&nreads, ih + 8, 8);
-    std::memcpy(&maxlen, ih + 16, 8);
+    char ih[16];
+    if (std::fread(ih, 1, 16, g) != 16) die("not a .svb.idx");
+    std::memcpy(&nreads, ih, 8);
+    std::memcpy(&maxlen, ih + 8, 8);
     off.resize(nreads + 1);
     if (std::fread(off.data(), 8, nreads + 1, g) != nreads + 1) die("read .svb.idx");
     std::fclose(g);
@@ -94,15 +88,10 @@ uint32_t SigLookup::find(uint64_t s) const {
     return UINT32_MAX;
 }
 
-std::vector<uint64_t> graph_sigs(const std::string& gp, uint32_t& S, uint64_t& K) {
+std::vector<uint64_t> graph_sigs(const std::string& gp, uint64_t& K) {
     FILE* f = std::fopen(gp.c_str(), "rb");
     if (!f) { std::fprintf(stderr, "[index] FATAL: open %s\n", gp.c_str()); std::exit(1); }
-    char mg[4]; uint32_t ver = 0, resv = 0; uint64_t ovs = 0, ovc = 0;
-    if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 6) die("graph.bin version is not 6 -- rebuild it");
-    if (std::fread(&S, 4, 1, f) != 1) die("read S");
-    if (std::fread(&resv, 4, 1, f) != 1) die("read header");
-    if (std::fread(&ovs, 8, 1, f) != 1 || std::fread(&ovc, 8, 1, f) != 1) die("read overlap");
+    if (std::fseek(f, 4, SEEK_SET) != 0) die("skip S");
     if (std::fread(&K, 8, 1, f) != 1) die("read K");
     std::vector<uint64_t> sig(K);
     if (K && std::fread(sig.data(), 8, K, f) != K) die("read sigs");

@@ -1,23 +1,17 @@
 CXX      := g++
-# lcptools' width/DCT choices live in lib/lcptools/config.h (LABEL=0 POS=64 DCT=1, generated below).
 CXXFLAGS := -std=c++17 -O3 -march=native -flto=auto -Wall -Wextra -Wpedantic -MMD
 INC      := -Ilib/lcptools -Isrc
-# -lhts: `snape call` reads the aligned BAMs (system htslib, headers in /usr/include/htslib).
 LDFLAGS  := -Llib/lcptools -llcptools -lm -lhts
-# mold linker if installed (faster links); default linker otherwise. -flto link uses CXXFLAGS.
 LDFLAGS  += $(shell command -v mold >/dev/null 2>&1 && echo -fuse-ld=mold)
 
 BUILD  := build
 
-# src/ holds the pipeline and nothing else, and all of it links into ONE binary: `snape`.
-# scripts/ is measurement, never part of calling.
 SRC := $(wildcard src/*.cpp)
 OBJ := $(patsubst src/%.cpp,$(BUILD)/%.o,$(SRC))
 
 LEVEL   ?= 5
 THREADS ?= 16
 MINMULT ?= 3
-# box rule: never rm -- move to a timestamped trash dir (resolved once per make run)
 TRASH   := /home/yuio/trash/svp-clean-$(shell date +%Y%m%d-%H%M%S)
 
 snape: $(OBJ)
@@ -29,8 +23,6 @@ $(BUILD)/%.o: src/%.cpp | $(BUILD)
 $(BUILD):
 	mkdir -p $@
 
-# ---------- the pipeline, end to end (reads only -- an assembly is never a caller input) ----------
-# make run NORMAL=hifi/hcc1954/n.svb TUMOUR=hifi/hcc1954/t.svb DIR=outputs/svp/hcc1954
 NORMAL ?=
 TUMOUR ?=
 REF    ?= /home/datasets/references/genomes/hg38/hg38.fa
@@ -38,19 +30,14 @@ DIR    ?= outputs/svp/run
 run: snape
 	@test -n "$(NORMAL)" -a -n "$(TUMOUR)" || { echo "usage: make run NORMAL=<n.svb|fq> TUMOUR=<t.svb|fq> [REF=... DIR=...]"; exit 2; }
 	@mkdir -p $(DIR)
-	taskset -c 0-15 ./snape run $(NORMAL) $(TUMOUR) $(REF) $(DIR) --level $(LEVEL) --min-mult $(MINMULT) --threads $(THREADS)
+	printf 'name\trole\tpath\nN01\tnormal\t$(NORMAL)\nT01\ttumor\t$(TUMOUR)\n' > $(DIR)/sheet.tsv
+	taskset -c 0-15 ./snape run --samples $(DIR)/sheet.tsv $(REF) $(DIR) --level $(LEVEL) --min-mult $(MINMULT) --threads $(THREADS)
 
 install-deps: install-deps-lcptools install-deps-badread
 
-# biolcp branch: DNA-optimised lcptools. Its own Makefile installs to /usr/local (needs
-# root) so we generate config.h and build the static archive in-place here.
-# LABEL=0 POS=64 DCT=1: no per-core labels (snape hashes core bytes itself), 64-bit core start/end, one DCT pass per level.
 install-deps-lcptools:
 	cd lib/lcptools && $(MAKE) config.h LABEL=0 POS=64 DCT=1 CORE=var ALPHABET=dna && gcc -O3 -march=native -c encoding.c core.c lps.c && ar rcs liblcptools.a encoding.o core.o lps.o
 
-# Badread HiFi read simulator (rrwick) -- only needed to regenerate the simulation benchmark.
-# Single-threaded, so scripts/sim_reads_badread.sh shards contigs across threads. Installed into a
-# self-contained venv; the system python is left untouched.
 install-deps-badread: lib/Badread/venv/bin/badread
 lib/Badread/venv/bin/badread:
 	@if [ ! -d lib/Badread ]; then \
@@ -60,8 +47,6 @@ lib/Badread/venv/bin/badread:
 	cd lib/Badread && python3 -m venv venv && ./venv/bin/pip install --quiet --upgrade pip && ./venv/bin/pip install --quiet .
 	@./lib/Badread/venv/bin/badread --version
 
-# clean: build artifacts only (binary + objects). Run outputs are expensive -- a graph.bin is tens of
-# minutes -- so they are NOT swept by a plain `make clean`.
 clean:
 	@mkdir -p $(TRASH) && mv -f $(BUILD) snape $(TRASH)/ 2>/dev/null || true
 	@echo "clean: build/ + snape -> $(TRASH)"

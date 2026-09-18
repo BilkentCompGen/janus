@@ -10,7 +10,7 @@ struct Post {
 };
 
 struct Index {
-    uint32_t S = 0, pad = 0, N = 0;
+    uint32_t pad = 0, N = 0;
     uint64_t K = 0;
     std::vector<uint32_t> off;
     std::vector<uint64_t> w;
@@ -36,7 +36,7 @@ struct SigLookup {
     uint32_t find(uint64_t s) const;
 };
 
-std::vector<uint64_t> graph_sigs(const std::string& graph_bin, uint32_t& S, uint64_t& K);
+std::vector<uint64_t> graph_sigs(const std::string& graph_bin, uint64_t& K);
 
 bool core_bytes(const Index& ix, std::vector<SvbFile>& svb, uint32_t node,
                 std::string& out, std::string& scratch);

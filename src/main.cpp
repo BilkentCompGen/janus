@@ -27,16 +27,18 @@ static void usage() {
         "                  [--min-mult 3] [--supp-discover 5] [--supp-assign 2] [--max-bases B]\n"
         "  snape graph     --samples <sheet.tsv> <dir> [--level 5] [--margin 10] [--min-mult 3] [--threads 16]\n"
         "                  [--index N] [--pad-cores 50] [--max-bases B]\n"
-        "                  N>0: <dir>/index.bin, dugum basina N kayit; B>0: her ornekten ilk B baz okunur\n"
+        "                  N>0: <dir>/index.bin, N records per node; B>0: first B bases of each sample are read\n"
         "\n"
         "  the sheet is a three-column TSV, one row per read set:\n"
         "      name  role    path\n"
         "      N01   normal  hifi/normal.svb        exactly one normal\n"
         "      T01   tumor   hifi/t01.svb           one or more tumour lines\n"
         "  snape junctions <graph.bin> <sheet.tsv> <outdir> [threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"
-        "  snape bubbles   <graph.bin> <sheet.tsv> [threads=16] [k=21] [w=22] [maxlen=40] [max_dbp=50] [max_unmatched=20]\n"
-        "  snape call      <ctg.bam> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5]\n"
-        "  snape pick      <ctg.fa> <calls.vcf> <normal reads> <out.fastq> [threads=16] [min_shared=5]\n"
+        "  snape bubbles   <graph.bin> <sheet.tsv> [threads=16] [maxlen=6] [min_diff=25]\n"
+        "  snape call      <ctg.bam|name=bam,name=bam,...> <normal.bam|-> <out.vcf> [min_mapq=10] [min_aln=0] [min_sv=50] "
+        "[cluster=50] [min_supp=5] [shred_n=6] [shred_win=300] [max_mm=0.01] [shred_rep=0.40] "
+        "[anchor_rep=0.50] [normal_dirty=0.25] [supp_assign=2]\n"
+        "  snape pick      <ctg.fa[,ctg.fa...]> <calls.vcf> <normal reads> <out.fastq> [min_shared=5] [trim_bp=0]\n"
         "  snape pack      <out.svb> < reads.fastq\n"
         "  snape dump      <in.svb> > reads.fastq\n"
         "  snape svbidx    <in.svb>            per-read offsets -> in.svb.idx\n");
@@ -100,17 +102,17 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
     const std::string cand = dir + "/candidates.vcf", nfq = dir + "/normal_at_candidates.fastq";
     const std::string T = std::to_string(threads);
 
-    if (exists(graph)) std::fprintf(stderr, "[run] atlandi graph: %s var\n", graph.c_str());
+    if (exists(graph)) std::fprintf(stderr, "[run] skipped graph: %s exists\n", graph.c_str());
     else run_graph_reads(smp, dir, level, margin, min_mult, threads, max_bases);
 
-    if (exists(drop)) std::fprintf(stderr, "[run] atlandi bubbles: %s var\n", drop.c_str());
+    if (exists(drop)) std::fprintf(stderr, "[run] skipped bubbles: %s exists\n", drop.c_str());
     else {
         std::vector<std::string> a{"bubbles", graph, dir + "/samples.tsv", T};
         std::vector<char*> v; for (auto& s : a) v.push_back(&s[0]);
         if (int rc = cmd_bubbles((int)v.size(), v.data())) return rc;
     }
 
-    if (exists(ctg)) std::fprintf(stderr, "[run] atlandi junctions: %s var\n", ctg.c_str());
+    if (exists(ctg)) std::fprintf(stderr, "[run] skipped junctions: %s exists\n", ctg.c_str());
     else {
         std::vector<std::string> a{"junctions", graph, dir + "/samples.tsv", dir, T};
         std::vector<char*> v; for (auto& s : a) v.push_back(&s[0]);
@@ -119,12 +121,12 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
 
     for (size_t i = 1; i < smp.size(); i++) {
         const std::string bam = dir + "/ctg." + smp[i].name + ".bam";
-        if (exists(bam)) { std::fprintf(stderr, "[run] atlandi align %s: %s var\n", smp[i].name.c_str(), bam.c_str()); continue; }
+        if (exists(bam)) { std::fprintf(stderr, "[run] skipped align %s: %s exists\n", smp[i].name.c_str(), bam.c_str()); continue; }
         if (align_checked(dir + "/ctg." + smp[i].name + ".fa", ref, bam, dir + "/stc." + smp[i].name,
                           threads, self, T)) return 1;
     }
 
-    if (exists(cand)) std::fprintf(stderr, "[run] atlandi aday call: %s var\n", cand.c_str());
+    if (exists(cand)) std::fprintf(stderr, "[run] skipped candidate call: %s exists\n", cand.c_str());
     else {
         std::vector<std::string> a{"call", ctg_bam, "-", cand, "10", "0", "50", "50",
                                    std::to_string(supp_discover > 1 ? supp_discover - 1 : 1)};
@@ -132,19 +134,19 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
         if (int rc = cmd_call((int)v.size(), v.data())) return rc;
     }
 
-    if (exists(nfq)) std::fprintf(stderr, "[run] atlandi pick: %s var\n", nfq.c_str());
+    if (exists(nfq)) std::fprintf(stderr, "[run] skipped pick: %s exists\n", nfq.c_str());
     else {
-        std::vector<std::string> a{"pick", ctg_fa, cand, normal, nfq, T};
+        std::vector<std::string> a{"pick", ctg_fa, cand, normal, nfq};
         std::vector<char*> v; for (auto& s : a) v.push_back(&s[0]);
         if (int rc = cmd_pick((int)v.size(), v.data())) return rc;
     }
 
-    if (exists(nbam)) std::fprintf(stderr, "[run] atlandi normal align: %s var\n", nbam.c_str());
+    if (exists(nbam)) std::fprintf(stderr, "[run] skipped normal align: %s exists\n", nbam.c_str());
     else {
         if (align_checked(nfq, ref, nbam, dir + "/stn", threads, self, T)) return 1;
     }
 
-    if (exists(vcf)) std::fprintf(stderr, "[run] atlandi call: %s var\n", vcf.c_str());
+    if (exists(vcf)) std::fprintf(stderr, "[run] skipped call: %s exists\n", vcf.c_str());
     else {
         std::vector<std::string> a{"call", ctg_bam, nbam, vcf, "10", "0", "50", "50",
                                    std::to_string(supp_discover), "6", "300", "0.01", "0.40",
@@ -152,7 +154,7 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
         std::vector<char*> v; for (auto& s : a) v.push_back(&s[0]);
         if (int rc = cmd_call((int)v.size(), v.data())) return rc;
     }
-    std::fprintf(stderr, "[run] bitti -> %s\n", vcf.c_str());
+    std::fprintf(stderr, "[run] done -> %s\n", vcf.c_str());
     return 0;
 }
 

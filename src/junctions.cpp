@@ -42,24 +42,18 @@ ankerl::unordered_dense::set<uint64_t> load_drop(const std::string& graph) {
     const size_t cut = graph.find_last_of('/');
     const std::string p = (cut == std::string::npos ? std::string(".") : graph.substr(0, cut)) + "/drop.sigs";
     FILE* f = std::fopen(p.c_str(), "r");
-    if (!f) { std::fprintf(stderr, "[jcontigs] %s yok - bubble filtresi uygulanmiyor\n", p.c_str()); return d; }
+    if (!f) { std::fprintf(stderr, "[jcontigs] %s missing - no bubble filter applied\n", p.c_str()); return d; }
     unsigned long long v;
     while (std::fscanf(f, "%llu", &v) == 1) d.insert((uint64_t)v);
     std::fclose(f);
-    std::fprintf(stderr, "[jcontigs] %s: %zu cekirdek atlanacak\n", p.c_str(), d.size());
+    std::fprintf(stderr, "[jcontigs] %s: %zu cores to skip\n", p.c_str(), d.size());
     return d;
 }
 
 Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double min_vaf) {
     FILE* f = std::fopen(path.c_str(), "rb"); if (!f) die("open graph.bin");
-    char mg[4]; uint32_t ver = 0, S = 0, resv = 0;
-    if (std::fread(mg, 1, 4, f) != 4 || std::memcmp(mg, "SNPG", 4)) die("not a graph.bin (bad magic)");
-    if (std::fread(&ver, 4, 1, f) != 1 || ver != 6) die("graph.bin version is not 6 -- rebuild it");
+    uint32_t S = 0;
     if (std::fread(&S, 4, 1, f) != 1 || S < 2 || S > 64) die("graph.bin sample count out of range");
-    if (std::fread(&resv, 4, 1, f) != 1) die("read header");
-    uint64_t ov_s = 0, ov_c = 0;
-    if (std::fread(&ov_s, 8, 1, f) != 1 || std::fread(&ov_c, 8, 1, f) != 1) die("read overlap");
-    (void)ov_s; (void)ov_c;
     const uint32_t L = S - 1;
     if (std::fread(&K, 8, 1, f) != 1) die("read K");
     std::vector<uint64_t> sig(K);
@@ -84,7 +78,7 @@ Chunks build_chunks(const std::string& path, uint64_t& K, size_t& nsom, double m
         som[i] = (nc[i] == 0);
         if (som[i] && drop.contains(sig[i])) { som[i] = 0; ndrop++; }
     }
-    if (ndrop) std::fprintf(stderr, "[jcontigs] %llu somatik cekirdek drop.sigs ile elendi\n", (unsigned long long)ndrop);
+    if (ndrop) std::fprintf(stderr, "[jcontigs] %llu somatic cores dropped by drop.sigs\n", (unsigned long long)ndrop);
     std::vector<uint32_t> par(K);
     for (uint64_t i = 0; i < K; i++) par[i] = (uint32_t)i;
     for (uint64_t e = 0; e < E; e++) {
@@ -209,7 +203,7 @@ int cmd_junctions(int argc, char** argv) {
     }
     if (ix.K != K) die("index.bin and graph.bin disagree on the node count");
     if ((int)ix.pad != PAD) die("index.bin was built with a different pad_cores");
-    std::fprintf(stderr, "[jcontigs] index.bin: %llu kayit, N=%u, pad=%u\n",
+    std::fprintf(stderr, "[jcontigs] index.bin: %llu records, N=%u, pad=%u\n",
                  (unsigned long long)ix.off[ix.K], ix.N, ix.pad);
 
     struct Hit { uint32_t read, ord, chunk, st, clen, dl, dr; };
@@ -218,7 +212,7 @@ int cmd_junctions(int argc, char** argv) {
         std::vector<uint64_t> sig(K);
         FILE* f = std::fopen(gpath.c_str(), "rb");
         if (!f) die("open graph.bin");
-        std::fseek(f, 40, SEEK_SET);
+        std::fseek(f, 12, SEEK_SET);
         if (K && std::fread(sig.data(), 8, K, f) != K) die("read sigs");
         std::fclose(f);
         for (uint64_t i = 0; i < K; i++) {
@@ -284,7 +278,7 @@ int cmd_junctions(int argc, char** argv) {
     }
     rd.close(); std::fclose(out);
     if (std::rename((opath + ".tmp").c_str(), opath.c_str())) die("rename");
-    std::fprintf(stderr, "[jcontigs] %-8s %llu okuma acildi -> %llu contigs (%.2f Gbp) -> %s\n",
+    std::fprintf(stderr, "[jcontigs] %-8s %llu reads taken -> %llu contigs (%.2f Gbp) -> %s\n",
                  sm.name.c_str(), (unsigned long long)nreads,
                  (unsigned long long)emitted, emit_bp / 1e9, opath.c_str());
     sf_total += short_flank;
