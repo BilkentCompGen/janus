@@ -15,14 +15,14 @@ struct Index {
     std::vector<uint32_t> off;
     std::vector<uint64_t> w;
     void load(const std::string& path);
-    uint32_t count(uint32_t node) const { return off[node + 1] - off[node]; }
+    uint32_t count(uint32_t node) const;
     Post get(uint32_t node, uint32_t j) const;
 };
 
 struct SvbFile {
     FILE* f = nullptr;
     std::vector<uint64_t> off;
-    uint64_t nreads = 0, maxlen = 0;
+    uint64_t nreads = 0;
     void open(const std::string& svb);
     void close();
     bool read(uint64_t no, std::string& seq);
@@ -36,7 +36,7 @@ struct SigLookup {
     uint32_t find(uint64_t s) const;
 };
 
+bool svb_read_seq(FILE* f, std::string& seq);
 std::vector<uint64_t> graph_sigs(const std::string& graph_bin, uint64_t& K);
-
 bool core_bytes(const Index& ix, std::vector<SvbFile>& svb, uint32_t node,
                 std::string& out, std::string& scratch);

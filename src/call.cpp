@@ -1,5 +1,5 @@
-#include "call.h"
-
+#include "cmd.h"
+#include "log.h"
 #include "unordered_dense.h"
 #include <algorithm>
 #include <cstdint>
@@ -11,63 +11,33 @@
 
 #include <htslib/sam.h>
 
-namespace {
-
-[[noreturn]] void die(const char* m) { std::fprintf(stderr, "[call] FATAL: %s\n", m); std::exit(1); }
-
-struct Ctg { std::string name, bam; };
-
-std::vector<Ctg> parse_ctg(const char* arg) {
+static std::vector<Ctg> parse_ctg(const char* arg) {
     std::vector<Ctg> v;
     const std::string in(arg);
     for (size_t i = 0; i <= in.size();) {
         const size_t c = std::min(in.find(',', i), in.size());
         const std::string f = in.substr(i, c - i);
-        if (f.empty()) die("empty contig-set entry");
+        if (f.empty()) die("call", "empty contig-set entry");
         const size_t e = f.find('=');
         if (e == std::string::npos) v.push_back({"t", f});
         else v.push_back({f.substr(0, e), f.substr(e + 1)});
-        if (v.back().name.empty() || v.back().bam.empty()) die("contig set needs <name>=<bam>");
+        if (v.back().name.empty() || v.back().bam.empty()) die("call", "contig set needs <name>=<bam>");
         i = c + 1;
     }
-    if (v.size() > 64) die("at most 64 contig sets");
+    if (v.size() > 64) die("call", "at most 64 contig sets");
     for (size_t i = 1; i < v.size(); i++)
         for (size_t j = 0; j < i; j++)
-            if (v[i].name == v[j].name) die("duplicate contig-set name");
+            if (v[i].name == v[j].name) die("call", "duplicate contig-set name");
     return v;
 }
 
-struct Seg {
-    uint32_t q;
-    int32_t tid;
-    hts_pos_t rs, re;
-    int32_t qs, qe;
-    uint8_t rev;
-    double rep_s, rep_e;
-};
-
-struct Jn {
-    int32_t c1, c2;
-    hts_pos_t p1, p2;
-    int8_t d1, d2;
-    uint32_t q;
-    double rep;
-};
-
-struct Ins { int32_t c; hts_pos_t p; int32_t len; uint32_t q; double rep; };
-
-struct Stats {
-    uint64_t rec = 0, unmapped = 0, secondary = 0, lowq = 0, shortaln = 0, highmm = 0, germ = 0;
-    uint64_t seg = 0, split = 0, cigar_del = 0, cigar_ins = 0, ins_split = 0;
-};
-
-double qident(const uint8_t* s, int32_t a, int32_t b, int32_t len) {
+static double qident(const uint8_t* s, int32_t a, int32_t b, int32_t len) {
     int m = 0;
     for (int32_t i = 0; i < len; i++) m += bam_seqi(s, a + i) == bam_seqi(s, b + i);
     return (double)m / len;
 }
 
-double repeat_score(const uint8_t* sq, int32_t a, int32_t b) {
+static double repeat_score(const uint8_t* sq, int32_t a, int32_t b) {
     const int32_t n = b - a;
     if (n < 12) return 1.0;
     double best = 0;
@@ -81,18 +51,18 @@ double repeat_score(const uint8_t* sq, int32_t a, int32_t b) {
 
 constexpr int32_t REP_WIN = 300;
 
-double rep_before(const bam1_t* b, int32_t q) {
+static double rep_before(const bam1_t* b, int32_t q) {
     const int32_t a = std::max(0, q - REP_WIN);
     return q > a ? repeat_score(bam_get_seq(b), a, q) : 1.0;
 }
 
-double rep_after(const bam1_t* b, int32_t q) {
+static double rep_after(const bam1_t* b, int32_t q) {
     const int32_t e = std::min((int32_t)b->core.l_qseq, q + REP_WIN);
     return e > q ? repeat_score(bam_get_seq(b), q, e) : 1.0;
 }
 
-bool tandem(const bam1_t* b, int32_t qp, int len, hts_pos_t rp, int32_t tid, uint32_t q,
-            std::vector<Jn>& jn) {
+static bool tandem(const bam1_t* b, int32_t qp, int len, hts_pos_t rp, int32_t tid, uint32_t q,
+                   std::vector<Jn>& jn) {
     const uint8_t* sq = bam_get_seq(b);
     const double aft = qp + 2 * len <= b->core.l_qseq ? qident(sq, qp, qp + len, len) : 0;
     const double bef = qp - len >= 0 ? qident(sq, qp, qp - len, len) : 0;
@@ -104,8 +74,8 @@ bool tandem(const bam1_t* b, int32_t qp, int len, hts_pos_t rp, int32_t tid, uin
     return true;
 }
 
-void shred(const std::vector<std::pair<hts_pos_t, int32_t>>& ops, const bam1_t* b, int32_t tid,
-           uint32_t q, int min_sv, int nmin, hts_pos_t win, double max_rep, std::vector<Jn>& jn) {
+static void shred(const std::vector<std::pair<hts_pos_t, int32_t>>& ops, const bam1_t* b, int32_t tid,
+                  uint32_t q, int min_sv, int nmin, hts_pos_t win, double max_rep, std::vector<Jn>& jn) {
     const uint8_t* sq = bam_get_seq(b);
     for (size_t i = 0; i < ops.size();) {
         size_t j = i;
@@ -120,8 +90,8 @@ void shred(const std::vector<std::pair<hts_pos_t, int32_t>>& ops, const bam1_t* 
     }
 }
 
-void walk(const bam1_t* b, uint32_t q, int min_sv, Seg& s, std::vector<Jn>& jn, std::vector<Ins>& ins,
-          int nmin, hts_pos_t win, double max_rep) {
+static void walk(const bam1_t* b, uint32_t q, int min_sv, Seg& s, std::vector<Jn>& jn, std::vector<Ins>& ins,
+                 int nmin, hts_pos_t win, double max_rep) {
     const uint32_t* cg = bam_get_cigar(b);
     hts_pos_t rp = b->core.pos;
     int32_t lead = 0, qaln = 0, qtot = 0, qp = 0;
@@ -151,17 +121,19 @@ void walk(const bam1_t* b, uint32_t q, int min_sv, Seg& s, std::vector<Jn>& jn, 
     s.rep_e = rep_before(b, s.qe);
 }
 
-Jn chain(const Seg& a, const Seg& b) {
+static Jn chain(const Seg& a, const Seg& b) {
     Jn j{a.tid, b.tid, a.rev ? a.rs + 1 : a.re, b.rev ? b.re : b.rs + 1,
          a.rev ? (int8_t)-1 : (int8_t)1, b.rev ? (int8_t)1 : (int8_t)-1, a.q,
          std::max(a.rep_e, b.rep_s)};
     if (j.c1 > j.c2 || (j.c1 == j.c2 && j.p1 > j.p2)) {
-        std::swap(j.c1, j.c2); std::swap(j.p1, j.p2); std::swap(j.d1, j.d2);
+        std::swap(j.c1, j.c2);
+        std::swap(j.p1, j.p2);
+        std::swap(j.d1, j.d2);
     }
     return j;
 }
 
-double mm_rate(const bam1_t* b) {
+static double mm_rate(const bam1_t* b) {
     const uint8_t* nm = bam_aux_get(b, "NM");
     if (!nm) return 0;
     const uint32_t* cg = bam_get_cigar(b);
@@ -175,7 +147,7 @@ double mm_rate(const bam1_t* b) {
     return aln > 0 && sub > 0 ? (double)sub / (double)aln : 0;
 }
 
-bool keep(const bam1_t* b, int min_mapq, hts_pos_t min_aln, double max_mm, Stats& st) {
+static bool keep(const bam1_t* b, int min_mapq, hts_pos_t min_aln, double max_mm, Stats& st) {
     st.rec++;
     if (b->core.flag & (BAM_FUNMAP | BAM_FQCFAIL | BAM_FDUP)) { st.unmapped++; return false; }
     if (b->core.flag & BAM_FSECONDARY) { st.secondary++; return false; }
@@ -185,33 +157,26 @@ bool keep(const bam1_t* b, int min_mapq, hts_pos_t min_aln, double max_mm, Stats
     return true;
 }
 
-struct Normal {
-    samFile* fp = nullptr;
-    hts_idx_t* idx = nullptr;
-    sam_hdr_t* hdr = nullptr;
-    bam1_t* b = nullptr;
-    bool on() const { return fp != nullptr; }
-};
-
-Normal open_normal(const char* path) {
+static Normal open_normal(const char* path) {
     Normal n;
     if (!path || !std::strcmp(path, "-")) return n;
     n.fp = sam_open(path, "r");
-    if (!n.fp) die("open normal bam");
+    if (!n.fp) die("call", "open normal bam");
     n.hdr = sam_hdr_read(n.fp);
     n.idx = sam_index_load(n.fp, path);
-    if (!n.hdr || !n.idx) die("normal bam needs an index");
+    if (!n.hdr || !n.idx) die("call", "normal bam needs an index");
     n.b = bam_init1();
     return n;
 }
 
-bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_pos_t win, double dirty_f) {
-    if (!n.on()) return false;
+static bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_pos_t win, double dirty_f) {
+    if (!n.fp) return false;
     const int tid = sam_hdr_name2tid(n.hdr, chrom);
     if (tid < 0) return false;
     hts_itr_t* it = sam_itr_queryi(n.idx, tid, (int)std::max<hts_pos_t>(0, pos - win), (int)(pos + win));
     if (!it) return false;
-    int seen = 0, dirty = 0; bool same = false;
+    int seen = 0, dirty = 0;
+    bool same = false;
     while (sam_itr_next(n.fp, it, n.b) >= 0) {
         if (n.b->core.flag & (BAM_FUNMAP | BAM_FSECONDARY)) continue;
         if (n.b->core.qual < 10) continue;
@@ -220,7 +185,8 @@ bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_po
         const uint32_t* cg = bam_get_cigar(n.b);
         hts_pos_t rp = n.b->core.pos;
         for (uint32_t i = 0; i < n.b->core.n_cigar && !same; i++) {
-            const int op = bam_cigar_op(cg[i]); const hts_pos_t L = bam_cigar_oplen(cg[i]);
+            const int op = bam_cigar_op(cg[i]);
+            const hts_pos_t L = bam_cigar_oplen(cg[i]);
             if ((op == BAM_CINS || op == BAM_CDEL) && len > 0 &&
                 L * 2 >= len && L <= len * 2 && std::llabs(rp - pos) <= win) same = true;
             if (op == BAM_CMATCH || op == BAM_CDEL || op == BAM_CREF_SKIP ||
@@ -231,23 +197,32 @@ bool germline(Normal& n, const char* chrom, hts_pos_t pos, hts_pos_t len, hts_po
     return same || (seen >= 4 && (double)dirty >= dirty_f * seen);
 }
 
-void same_refs(sam_hdr_t* a, sam_hdr_t* b) {
+static void same_refs(sam_hdr_t* a, sam_hdr_t* b) {
     bool ok = sam_hdr_nref(a) == sam_hdr_nref(b);
     for (int i = 0; ok && i < sam_hdr_nref(a); i++)
         ok = std::strcmp(sam_hdr_tid2name(a, i), sam_hdr_tid2name(b, i)) == 0 &&
              sam_hdr_tid2len(a, i) == sam_hdr_tid2len(b, i);
-    if (!ok) die("contig BAMs were aligned to different references");
+    if (!ok) die("call", "contig BAMs were aligned to different references");
 }
 
-void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int min_sv,
-             std::vector<Jn>& jn, std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin,
-             hts_pos_t win, double max_mm, double max_rep, std::vector<std::string>& qname,
-             std::vector<uint8_t>& qline) {
+static bool seg_cmp(const Seg& x, const Seg& y) { return x.qs < y.qs; }
+
+static bool resumes(const Seg& a, const Seg& c, hts_pos_t min_sv, hts_pos_t& pos) {
+    if (a.tid != c.tid || a.rev != c.rev) return false;
+    pos = a.rev ? a.rs + 1 : a.re;
+    return std::llabs((long long)(a.rev ? a.rs - c.re : c.rs - a.re)) < min_sv;
+}
+
+static void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int min_sv,
+                    std::vector<Jn>& jn, std::vector<Ins>& ins, sam_hdr_t** hdr, Stats& st, int nmin,
+                    hts_pos_t win, double max_mm, double max_rep, std::vector<std::string>& qname,
+                    std::vector<uint8_t>& qline) {
     samFile* fp = sam_open(bam, "r");
-    if (!fp) die("open bam");
+    if (!fp) die("call", "open bam");
     sam_hdr_t* h = sam_hdr_read(fp);
-    if (!h) die("read bam header");
-    if (!*hdr) *hdr = h; else same_refs(*hdr, h);
+    if (!h) die("call", "read bam header");
+    if (!*hdr) *hdr = h;
+    else same_refs(*hdr, h);
     bam1_t* b = bam_init1();
     ankerl::unordered_dense::map<std::string, uint32_t> qid;
     std::vector<std::vector<Seg>> byq;
@@ -257,8 +232,10 @@ void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int
         const char* nm = bam_get_qname(b);
         auto it = qid.find(nm);
         if (it == qid.end()) {
-            it = qid.emplace(nm, (uint32_t)byq.size()).first; byq.emplace_back();
-            qname.emplace_back(nm); qline.push_back(line);
+            it = qid.emplace(nm, (uint32_t)byq.size()).first;
+            byq.emplace_back();
+            qname.emplace_back(nm);
+            qline.push_back(line);
         }
         Seg s{base + it->second, b->core.tid, b->core.pos, 0, 0, 0,
               (uint8_t)((b->core.flag & BAM_FREVERSE) != 0), 1.0, 1.0};
@@ -273,18 +250,13 @@ void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int
     if (h != *hdr) sam_hdr_destroy(h);
     st.cigar_ins = ins.size();
 
-    auto resumes = [&](const Seg& a, const Seg& c, hts_pos_t& pos) {
-        if (a.tid != c.tid || a.rev != c.rev) return false;
-        pos = a.rev ? a.rs + 1 : a.re;
-        return std::llabs((long long)(a.rev ? a.rs - c.re : c.rs - a.re)) < min_sv;
-    };
     for (auto& v : byq) {
-        std::sort(v.begin(), v.end(), [](const Seg& x, const Seg& y) { return x.qs < y.qs; });
+        std::sort(v.begin(), v.end(), seg_cmp);
         st.split += v.size() ? v.size() - 1 : 0;
         size_t i = 1;
         while (i < v.size()) {
             hts_pos_t pos;
-            if (i + 1 < v.size() && resumes(v[i - 1], v[i + 1], pos) &&
+            if (i + 1 < v.size() && resumes(v[i - 1], v[i + 1], min_sv, pos) &&
                 v[i + 1].qs - v[i - 1].qe >= min_sv) {
                 ins.push_back({v[i - 1].tid, pos, v[i + 1].qs - v[i - 1].qe, v[i - 1].q,
                                std::max(v[i - 1].rep_e, v[i + 1].rep_s)});
@@ -292,7 +264,7 @@ void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int
                 i += 2;
                 continue;
             }
-            if (resumes(v[i - 1], v[i], pos) && v[i].qs - v[i - 1].qe >= min_sv) {
+            if (resumes(v[i - 1], v[i], min_sv, pos) && v[i].qs - v[i - 1].qe >= min_sv) {
                 ins.push_back({v[i - 1].tid, pos, v[i].qs - v[i - 1].qe, v[i - 1].q,
                                std::max(v[i - 1].rep_e, v[i].rep_s)});
                 st.ins_split++;
@@ -305,9 +277,7 @@ void collect(const char* bam, uint8_t line, int min_mapq, hts_pos_t min_aln, int
     }
 }
 
-struct Cl { Jn j; hts_pos_t p1, p2; uint32_t supp, slot; double rep; };
-
-uint32_t distinct(std::vector<uint32_t>& q, const std::vector<uint8_t>& qline, uint32_t* cnt, int L) {
+static uint32_t distinct(std::vector<uint32_t>& q, const std::vector<uint8_t>& qline, uint32_t* cnt, int L) {
     std::sort(q.begin(), q.end());
     const size_t n = (size_t)(std::unique(q.begin(), q.end()) - q.begin());
     for (int l = 0; l < L; l++) cnt[l] = 0;
@@ -315,29 +285,43 @@ uint32_t distinct(std::vector<uint32_t>& q, const std::vector<uint8_t>& qline, u
     return (uint32_t)n;
 }
 
-uint32_t best_of(const uint32_t* cnt, int L) {
+static uint32_t best_of(const uint32_t* cnt, int L) {
     uint32_t b = 0;
     for (int l = 0; l < L; l++) if (cnt[l] > b) b = cnt[l];
     return b;
 }
 
-std::vector<Cl> cluster(std::vector<Jn>& jn, const std::vector<uint8_t>& qline, hts_pos_t tol,
-                        uint32_t min_supp, int L, std::vector<uint32_t>& sup) {
-    std::sort(jn.begin(), jn.end(), [](const Jn& a, const Jn& b) {
-        return std::tie(a.c1, a.c2, a.d1, a.d2, a.p1, a.p2) < std::tie(b.c1, b.c2, b.d1, b.d2, b.p1, b.p2);
-    });
+static bool jn_cmp(const Jn& a, const Jn& b) {
+    if (a.c1 != b.c1) return a.c1 < b.c1;
+    if (a.c2 != b.c2) return a.c2 < b.c2;
+    if (a.d1 != b.d1) return a.d1 < b.d1;
+    if (a.d2 != b.d2) return a.d2 < b.d2;
+    if (a.p1 != b.p1) return a.p1 < b.p1;
+    return a.p2 < b.p2;
+}
+
+static std::vector<Cl> cluster(std::vector<Jn>& jn, const std::vector<uint8_t>& qline, hts_pos_t tol,
+                               uint32_t min_supp, int L, std::vector<uint32_t>& sup) {
+    std::sort(jn.begin(), jn.end(), jn_cmp);
     std::vector<Cl> out;
     std::vector<uint32_t> cnt((size_t)L);
     for (size_t i = 0; i < jn.size();) {
         size_t k = i + 1;
         while (k < jn.size() && jn[k].c1 == jn[i].c1 && jn[k].c2 == jn[i].c2 && jn[k].d1 == jn[i].d1 &&
                jn[k].d2 == jn[i].d2 && jn[k].p1 - jn[i].p1 <= tol && std::llabs(jn[k].p2 - jn[i].p2) <= tol) k++;
-        std::vector<uint32_t> q; std::vector<hts_pos_t> a, c; std::vector<double> rp;
+        std::vector<uint32_t> q;
+        std::vector<hts_pos_t> a, c;
+        std::vector<double> rp;
         for (size_t m = i; m < k; m++) {
-            q.push_back(jn[m].q); a.push_back(jn[m].p1); c.push_back(jn[m].p2); rp.push_back(jn[m].rep);
+            q.push_back(jn[m].q);
+            a.push_back(jn[m].p1);
+            c.push_back(jn[m].p2);
+            rp.push_back(jn[m].rep);
         }
         const uint32_t s = distinct(q, qline, cnt.data(), L);
-        std::sort(a.begin(), a.end()); std::sort(c.begin(), c.end()); std::sort(rp.begin(), rp.end());
+        std::sort(a.begin(), a.end());
+        std::sort(c.begin(), c.end());
+        std::sort(rp.begin(), rp.end());
 
         if (best_of(cnt.data(), L) >= min_supp) {
             out.push_back({jn[i], a[a.size() / 2], c[c.size() / 2], s,
@@ -349,22 +333,26 @@ std::vector<Cl> cluster(std::vector<Jn>& jn, const std::vector<uint8_t>& qline, 
     return out;
 }
 
-struct ClIns { Ins v; int32_t len; uint32_t supp, slot; double rep; };
+static bool ins_cmp(const Ins& a, const Ins& b) {
+    if (a.c != b.c) return a.c < b.c;
+    return a.p < b.p;
+}
 
-std::vector<ClIns> cluster_ins(std::vector<Ins>& ins, const std::vector<uint8_t>& qline, hts_pos_t tol,
-                               uint32_t min_supp, int L, std::vector<uint32_t>& sup) {
-    std::sort(ins.begin(), ins.end(), [](const Ins& a, const Ins& b) {
-        return std::tie(a.c, a.p) < std::tie(b.c, b.p);
-    });
+static std::vector<ClIns> cluster_ins(std::vector<Ins>& ins, const std::vector<uint8_t>& qline, hts_pos_t tol,
+                                      uint32_t min_supp, int L, std::vector<uint32_t>& sup) {
+    std::sort(ins.begin(), ins.end(), ins_cmp);
     std::vector<ClIns> out;
     std::vector<uint32_t> cnt((size_t)L);
     for (size_t i = 0; i < ins.size();) {
         size_t k = i + 1;
         while (k < ins.size() && ins[k].c == ins[i].c && ins[k].p - ins[i].p <= tol) k++;
-        std::vector<uint32_t> q; std::vector<int32_t> Ln; std::vector<double> rp;
+        std::vector<uint32_t> q;
+        std::vector<int32_t> Ln;
+        std::vector<double> rp;
         for (size_t m = i; m < k; m++) { q.push_back(ins[m].q); Ln.push_back(ins[m].len); rp.push_back(ins[m].rep); }
         const uint32_t s = distinct(q, qline, cnt.data(), L);
-        std::sort(Ln.begin(), Ln.end()); std::sort(rp.begin(), rp.end());
+        std::sort(Ln.begin(), Ln.end());
+        std::sort(rp.begin(), rp.end());
         if (best_of(cnt.data(), L) >= min_supp) {
             out.push_back({ins[i], Ln[Ln.size() / 2], s, (uint32_t)(sup.size() / (size_t)L),
                            rp[rp.size() / 2]});
@@ -375,19 +363,19 @@ std::vector<ClIns> cluster_ins(std::vector<Ins>& ins, const std::vector<uint8_t>
     return out;
 }
 
-const char* svtype(const Cl& c) {
+static const char* svtype(const Cl& c) {
     if (c.j.c1 != c.j.c2) return "BND";
     if (c.j.d1 == c.j.d2) return "INV";
     return c.j.d1 > 0 ? "DEL" : "DUP";
 }
 
-std::string bnd_alt(const Cl& c, sam_hdr_t* h) {
+static std::string bnd_alt(const Cl& c, sam_hdr_t* h) {
     const std::string m = std::string(sam_hdr_tid2name(h, c.j.c2)) + ":" + std::to_string(c.p2);
     const std::string br = c.j.d2 < 0 ? "[" + m + "[" : "]" + m + "]";
     return c.j.d1 > 0 ? "N" + br : br + "N";
 }
 
-void fmt_cols(FILE* f, const std::vector<uint32_t>& sup, uint32_t slot, int L, uint32_t assign, int only) {
+static void fmt_cols(FILE* f, const std::vector<uint32_t>& sup, uint32_t slot, int L, uint32_t assign, int only) {
     for (int l = 0; l < L; l++) {
         if (only >= 0 && l != only) continue;
         const uint32_t d = sup[(size_t)slot * (size_t)L + (size_t)l];
@@ -396,12 +384,11 @@ void fmt_cols(FILE* f, const std::vector<uint32_t>& sup, uint32_t slot, int L, u
     std::fputc('\n', f);
 }
 
-void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const std::vector<ClIns>& ci,
-               const std::vector<std::string>& qname, const std::vector<Ctg>& sets,
-               const std::vector<uint32_t>& sup, int L, uint32_t assign, int only) {
+static void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const std::vector<ClIns>& ci,
+                      const std::vector<std::string>& qname, const std::vector<Ctg>& sets,
+                      const std::vector<uint32_t>& sup, int L, uint32_t assign, int only) {
     const std::string tmp = std::string(path) + ".tmp";
-    FILE* f = std::fopen(tmp.c_str(), "w");
-    if (!f) die("open out.vcf");
+    FILE* f = xopen(tmp.c_str(), "w");
     std::fprintf(f, "##fileformat=VCFv4.2\n##source=snape call\n");
     for (int i = 0; i < sam_hdr_nref(h); i++)
         std::fprintf(f, "##contig=<ID=%s,length=%" PRIhts_pos ">\n", sam_hdr_tid2name(h, i), sam_hdr_tid2len(h, i));
@@ -439,13 +426,10 @@ void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const 
                      sam_hdr_tid2name(h, c.v.c), c.v.p, n++, c.len, c.supp, qname[c.v.q].c_str());
         fmt_cols(f, sup, c.slot, L, assign, only);
     }
-    std::fclose(f);
-    if (std::rename(tmp.c_str(), path) != 0) die("rename out.vcf");
+    atomic_close(f, tmp.c_str(), path);
 }
 
-}
-
-int cmd_call(int argc, char** argv) {
+int cmd_call(int argc, const char** argv) {
     if (argc < 4) {
         std::fprintf(stderr, "usage: snape call <ctg.bam|name=bam,name=bam,...> <normal.bam|-> <out.vcf> "
                              "[min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5] [shred_n=6] "
@@ -457,53 +441,82 @@ int cmd_call(int argc, char** argv) {
     const hts_pos_t min_aln = argc > 5 ? std::atoll(argv[5]) : 0;
     const int min_sv     = argc >  6 ? std::atoi(argv[6])  : 50;
     const hts_pos_t tol  = argc >  7 ? std::atoll(argv[7]) : 50;
-
     const uint32_t min_supp = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 5;
     const int shred_n    = argc >  9 ? std::atoi(argv[9])  : 6;
     const hts_pos_t shred_win = argc > 10 ? std::atoll(argv[10]) : 300;
     const double max_mm  = argc > 11 ? std::atof(argv[11]) : 0.01;
     const double shred_rep = argc > 12 ? std::atof(argv[12]) : 0.40;
-
     const double max_rep   = argc > 13 ? std::atof(argv[13]) : 0.50;
     const double dirty_f   = argc > 14 ? std::atof(argv[14]) : 0.25;
-
     const uint32_t assign = argc > 15 ? (uint32_t)std::atoi(argv[15]) : 2;
 
     const std::vector<Ctg> sets = parse_ctg(argv[1]);
     const int L = (int)sets.size();
-    std::vector<Jn> jn; std::vector<Ins> ins; sam_hdr_t* hdr = nullptr; Stats st;
-    std::vector<std::string> qname; std::vector<uint8_t> qline;
+    std::vector<Jn> jn;
+    std::vector<Ins> ins;
+    sam_hdr_t* hdr = nullptr;
+    Stats st;
+    std::vector<std::string> qname;
+    std::vector<uint8_t> qline;
     for (int l = 0; l < L; l++)
         collect(sets[(size_t)l].bam.c_str(), (uint8_t)l, min_mapq, min_aln, min_sv, jn, ins, &hdr, st,
                 shred_n, shred_win, max_mm, shred_rep, qname, qline);
 
-    jn.erase(std::remove_if(jn.begin(), jn.end(), [&](const Jn& j) {
-        return j.c1 == j.c2 && j.p2 - j.p1 < min_sv; }), jn.end());
+    {
+        size_t k = 0;
+        for (size_t i = 0; i < jn.size(); i++) {
+            const Jn& j = jn[i];
+            if (!(j.c1 == j.c2 && j.p2 - j.p1 < min_sv)) jn[k++] = j;
+        }
+        jn.resize(k);
+    }
     std::vector<uint32_t> sup;
     std::vector<Cl> cl = cluster(jn, qline, tol, min_supp, L, sup);
     std::vector<ClIns> ci = cluster_ins(ins, qline, tol, min_supp, L, sup);
 
     if (max_rep < 1.0) {
         const size_t bj = cl.size(), bi = ci.size();
-        cl.erase(std::remove_if(cl.begin(), cl.end(), [&](const Cl& c) { return c.rep > max_rep; }), cl.end());
-        ci.erase(std::remove_if(ci.begin(), ci.end(), [&](const ClIns& c) { return c.rep > max_rep; }), ci.end());
-        std::fprintf(stderr, "[call] dropped as repetitive: %zu (%zu + %zu left)\n",
-                     (bj - cl.size()) + (bi - ci.size()), cl.size(), ci.size());
+        {
+            size_t k = 0;
+            for (size_t i = 0; i < cl.size(); i++) if (cl[i].rep <= max_rep) cl[k++] = cl[i];
+            cl.resize(k);
+        }
+        {
+            size_t k = 0;
+            for (size_t i = 0; i < ci.size(); i++) if (ci[i].rep <= max_rep) ci[k++] = ci[i];
+            ci.resize(k);
+        }
+        say("call", "dropped as repetitive: %zu (%zu + %zu left)",
+            (bj - cl.size()) + (bi - ci.size()), cl.size(), ci.size());
     }
 
     Normal nrm = open_normal(argv[2]);
-    if (nrm.on()) {
+    if (nrm.fp) {
         const size_t before_j = cl.size(), before_i = ci.size();
-        cl.erase(std::remove_if(cl.begin(), cl.end(), [&](const Cl& c) {
-            const char* n1 = sam_hdr_tid2name(hdr, c.j.c1);
-            if (c.j.c1 == c.j.c2) return germline(nrm, n1, c.p1, c.p2 - c.p1, tol * 10, dirty_f);
-            return germline(nrm, n1, c.p1, 0, tol * 10, dirty_f) ||
-                   germline(nrm, sam_hdr_tid2name(hdr, c.j.c2), c.p2, 0, tol * 10, dirty_f); }), cl.end());
-        ci.erase(std::remove_if(ci.begin(), ci.end(), [&](const ClIns& c) {
-            return germline(nrm, sam_hdr_tid2name(hdr, c.v.c), c.v.p, c.len, tol * 10, dirty_f); }), ci.end());
+        {
+            size_t k = 0;
+            for (size_t i = 0; i < cl.size(); i++) {
+                const Cl& c = cl[i];
+                const char* n1 = sam_hdr_tid2name(hdr, c.j.c1);
+                bool drop;
+                if (c.j.c1 == c.j.c2) drop = germline(nrm, n1, c.p1, c.p2 - c.p1, tol * 10, dirty_f);
+                else drop = germline(nrm, n1, c.p1, 0, tol * 10, dirty_f) ||
+                            germline(nrm, sam_hdr_tid2name(hdr, c.j.c2), c.p2, 0, tol * 10, dirty_f);
+                if (!drop) cl[k++] = c;
+            }
+            cl.resize(k);
+        }
+        {
+            size_t k = 0;
+            for (size_t i = 0; i < ci.size(); i++) {
+                const ClIns& c = ci[i];
+                if (!germline(nrm, sam_hdr_tid2name(hdr, c.v.c), c.v.p, c.len, tol * 10, dirty_f)) ci[k++] = c;
+            }
+            ci.resize(k);
+        }
         st.germ = (before_j - cl.size()) + (before_i - ci.size());
-        std::fprintf(stderr, "[call] dropped as present in normal: %llu (%zu junction + %zu insertion left)\n",
-                     (unsigned long long)st.germ, cl.size(), ci.size());
+        say("call", "dropped as present in normal: %llu (%zu junction + %zu insertion left)",
+            (unsigned long long)st.germ, cl.size(), ci.size());
     }
     write_vcf(argv[3], hdr, cl, ci, qname, sets, sup, L, assign, -1);
 
@@ -511,19 +524,19 @@ int cmd_call(int argc, char** argv) {
     if (base.size() > 4 && base.compare(base.size() - 4, 4, ".vcf") == 0) base.resize(base.size() - 4);
     for (int l = 0; l < L; l++)
         write_vcf((base + "." + sets[(size_t)l].name + ".vcf").c_str(), hdr, cl, ci, qname, sets,
-                  sup, L, assign, l);
+                 sup, L, assign, l);
 
-    std::fprintf(stderr, "[call] records %llu | skipped: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu, mismatch>%.0f%% %llu\n",
-                 (unsigned long long)st.rec, (unsigned long long)st.unmapped, (unsigned long long)st.secondary,
-                 min_mapq, (unsigned long long)st.lowq, (long long)min_aln, (unsigned long long)st.shortaln,
-                 100*max_mm, (unsigned long long)st.highmm);
-    std::fprintf(stderr, "[call] segment %llu -> split %llu + CIGAR DEL %llu | INS %llu "
-                 "(%llu of them between the two segments spanning the reference position)\n",
-                 (unsigned long long)st.seg, (unsigned long long)st.split,
-                 (unsigned long long)st.cigar_del, (unsigned long long)st.cigar_ins,
-                 (unsigned long long)st.ins_split);
-    std::fprintf(stderr, "[call] aday %zu junction + %zu insertion -> supp>=%u: %zu + %zu -> %s\n",
-                 jn.size(), ins.size(), min_supp, cl.size(), ci.size(), argv[3]);
+    say("call", "records %llu | skipped: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu, mismatch>%.0f%% %llu",
+        (unsigned long long)st.rec, (unsigned long long)st.unmapped, (unsigned long long)st.secondary,
+        min_mapq, (unsigned long long)st.lowq, (long long)min_aln, (unsigned long long)st.shortaln,
+        100 * max_mm, (unsigned long long)st.highmm);
+    say("call", "segment %llu -> split %llu + CIGAR DEL %llu | INS %llu "
+               "(%llu of them between the two segments spanning the reference position)",
+        (unsigned long long)st.seg, (unsigned long long)st.split,
+        (unsigned long long)st.cigar_del, (unsigned long long)st.cigar_ins,
+        (unsigned long long)st.ins_split);
+    say("call", "aday %zu junction + %zu insertion -> supp>=%u: %zu + %zu -> %s",
+        jn.size(), ins.size(), min_supp, cl.size(), ci.size(), argv[3]);
     sam_hdr_destroy(hdr);
     return 0;
 }

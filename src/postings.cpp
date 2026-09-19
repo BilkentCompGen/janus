@@ -1,26 +1,22 @@
 #include "postings.h"
 
-#include <algorithm>
-#include <cstdio>
-#include <cstdlib>
+#include <stdlib.h>
 #include <cstring>
 
-namespace {
-[[noreturn]] void die(const char* m) { std::fprintf(stderr, "[index] FATAL: %s\n", m); std::exit(1); }
+void Index::load(const std::string& path) {
+    FILE* f = xopen(path.c_str(), "rb");
+    if (std::fread(&pad, 4, 1, f) != 1 || std::fread(&N, 4, 1, f) != 1 || std::fread(&K, 8, 1, f) != 1)
+        die("index", "bad index.bin %s", path.c_str());
+    off.resize(K + 1);
+    if (std::fread(off.data(), 4, K + 1, f) != K + 1) die("index", "read off from %s", path.c_str());
+    const uint64_t E = off[K];
+    w.assign(E * 2, 0);
+    if (E && std::fread(w.data(), 8, E * 2, f) != E * 2) die("index", "read postings from %s", path.c_str());
+    std::fclose(f);
 }
 
-void Index::load(const std::string& path) {
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) { std::fprintf(stderr, "[index] FATAL: open %s\n", path.c_str()); std::exit(1); }
-    if (std::fread(&pad, 4, 1, f) != 1) die("read pad");
-    if (std::fread(&N, 4, 1, f) != 1) die("read N");
-    if (std::fread(&K, 8, 1, f) != 1) die("read K");
-    off.resize(K + 1);
-    if (std::fread(off.data(), 4, K + 1, f) != K + 1) die("read off");
-    const uint64_t E = off[K];
-    w.resize(2 * E);
-    if (E && std::fread(w.data(), 8, 2 * E, f) != 2 * E) die("read postings");
-    std::fclose(f);
+uint32_t Index::count(uint32_t node) const {
+    return off[node + 1] - off[node];
 }
 
 Post Index::get(uint32_t node, uint32_t j) const {
@@ -38,20 +34,17 @@ Post Index::get(uint32_t node, uint32_t j) const {
 }
 
 void SvbFile::open(const std::string& svb) {
-    f = std::fopen(svb.c_str(), "rb");
-    if (!f) { std::fprintf(stderr, "[index] FATAL: open %s\n", svb.c_str()); std::exit(1); }
-    if (std::fseek(f, 16, SEEK_SET) != 0) die("skip .svb header");
+    f = xopen(svb.c_str(), "rb");
+    if (std::fseek(f, 16, SEEK_SET) != 0) die("index", "skip .svb header %s", svb.c_str());
 
     const std::string ip = svb + ".idx";
     FILE* g = std::fopen(ip.c_str(), "rb");
-    if (!g) { std::fprintf(stderr, "[index] FATAL: %s missing, run: snape svbidx %s\n",
-                           ip.c_str(), svb.c_str()); std::exit(1); }
+    if (!g) die("index", "%s missing, run: snape svbidx %s", ip.c_str(), svb.c_str());
     char ih[16];
-    if (std::fread(ih, 1, 16, g) != 16) die("not a .svb.idx");
+    if (std::fread(ih, 1, 16, g) != 16) die("index", "not a .svb.idx %s", ip.c_str());
     std::memcpy(&nreads, ih, 8);
-    std::memcpy(&maxlen, ih + 8, 8);
     off.resize(nreads + 1);
-    if (std::fread(off.data(), 8, nreads + 1, g) != nreads + 1) die("read .svb.idx");
+    if (std::fread(off.data(), 8, nreads + 1, g) != nreads + 1) die("index", "read %s", ip.c_str());
     std::fclose(g);
 }
 
@@ -60,18 +53,42 @@ void SvbFile::close() { if (f) std::fclose(f); f = nullptr; }
 bool SvbFile::read(uint64_t no, std::string& seq) {
     if (no >= nreads) return false;
     if (std::fseek(f, (long)off[no], SEEK_SET) != 0) return false;
+    return svb_read_seq(f, seq);
+}
+
+static const uint32_t* quad_table(void) {
+    static uint32_t q[256];
+    static bool ready = false;
+    if (!ready) {
+        static const char L[4] = { 'A', 'C', 'G', 'T' };
+        for (int b = 0; b < 256; b++) {
+            const char c[4] = { L[(b >> 6) & 3], L[(b >> 4) & 3], L[(b >> 2) & 3], L[b & 3] };
+            std::memcpy(&q[b], c, 4);
+        }
+        ready = true;
+    }
+    return q;
+}
+
+bool svb_read_seq(FILE* f, std::string& seq) {
     uint32_t tag;
     if (std::fread(&tag, 4, 1, f) != 1) return false;
     const uint32_t L = tag & 0x7fffffffu;
-    const bool raw = (tag & 0x80000000u) != 0;
     seq.resize(L);
-    if (raw) return std::fread(&seq[0], 1, L, f) == L;
+    if (tag >> 31) {
+        if (L && std::fread(&seq[0], 1, L, f) != L) die("svb", ".svb raw truncated");
+        return true;
+    }
     const uint32_t nb = (L + 3) >> 2;
-    static thread_local std::vector<uint8_t> buf;
-    buf.resize(nb);
-    if (nb && std::fread(buf.data(), 1, nb, f) != nb) return false;
+    static thread_local std::vector<uint8_t> pb;
+    pb.resize(nb);
+    if (nb && std::fread(pb.data(), 1, nb, f) != nb) die("svb", ".svb packed truncated");
+    static const uint32_t* QUAD = quad_table();
     static const char T[4] = { 'A', 'C', 'G', 'T' };
-    for (uint32_t i = 0; i < L; i++) seq[i] = T[(buf[i >> 2] >> (6 - 2 * (i & 3))) & 3];
+    const uint32_t full = L >> 2;
+    char* out = &seq[0];
+    for (uint32_t i = 0; i < full; i++) std::memcpy(out + 4 * i, &QUAD[pb[i]], 4);
+    for (uint32_t i = full << 2; i < L; i++) seq[i] = T[(pb[i >> 2] >> (6 - 2 * (i & 3))) & 3];
     return true;
 }
 
@@ -89,12 +106,12 @@ uint32_t SigLookup::find(uint64_t s) const {
 }
 
 std::vector<uint64_t> graph_sigs(const std::string& gp, uint64_t& K) {
-    FILE* f = std::fopen(gp.c_str(), "rb");
-    if (!f) { std::fprintf(stderr, "[index] FATAL: open %s\n", gp.c_str()); std::exit(1); }
-    if (std::fseek(f, 4, SEEK_SET) != 0) die("skip S");
-    if (std::fread(&K, 8, 1, f) != 1) die("read K");
+    FILE* f = xopen(gp.c_str(), "rb");
+    uint32_t S;
+    if (std::fread(&S, 4, 1, f) != 1) die("index", "bad graph.bin %s", gp.c_str());
+    if (std::fread(&K, 8, 1, f) != 1) die("index", "read K from %s", gp.c_str());
     std::vector<uint64_t> sig(K);
-    if (K && std::fread(sig.data(), 8, K, f) != K) die("read sigs");
+    if (K && std::fread(sig.data(), 8, K, f) != K) die("index", "read sigs from %s", gp.c_str());
     std::fclose(f);
     return sig;
 }
