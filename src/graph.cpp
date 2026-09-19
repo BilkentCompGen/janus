@@ -3,6 +3,7 @@
 #endif
 #include "graph.h"
 #include "postings.h"
+#include "log.h"
 
 #include <sys/stat.h>
 #include <dirent.h>
@@ -89,19 +90,6 @@ static void psort(std::vector<T>& v, int threads, bool (*cmp)(const T&, const T&
         for (int k = 0; k < nm; k++) th.emplace_back(merge_job<T>, &jobs[k]);
         for (auto& t : th) t.join();
     }
-}
-
-static FILE* open_fastq(const std::string& path) {
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) die("graph", "fopen %s (input must be uncompressed FASTQ)", path.c_str());
-    return f;
-}
-
-static FILE* open_svb(const std::string& path) {
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) die("graph", "fopen svb %s", path.c_str());
-    if (std::fseek(f, 16, SEEK_SET) != 0) die("graph", "bad .svb %s", path.c_str());
-    return f;
 }
 
 static void count_chain(int n, const uint64_t* st, const uint64_t* en, const uint64_t* sg,
@@ -250,7 +238,8 @@ static void reader_thread(ReaderJob* j) {
         batch.col = col;
         if (batch.seqs.empty()) batch.first = mine[col];
         const bool svb = is_svb(sh.path.c_str());
-        FILE* f = svb ? open_svb(sh.path) : open_fastq(sh.path);
+        FILE* f = xopen(sh.path.c_str(), "rb");
+        if (svb && std::fseek(f, 16, SEEK_SET) != 0) die("graph", "bad .svb %s", sh.path.c_str());
         uint64_t bases = 0;
         if (svb) {
             while (svb_read_seq(f, svseq)) {

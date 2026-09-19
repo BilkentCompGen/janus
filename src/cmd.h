@@ -1,10 +1,17 @@
 #pragma once
+#include "samples.h"
 #include "postings.h"
 #include "unordered_dense.h"
 #include <htslib/sam.h>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
+
+// argv carries the subcommand name at argv[0] (main passes argc-1, argv+1)
+static inline int argi(int argc, const char** argv, int i, int def) { return i < argc ? std::atoi(argv[i]) : def; }
+static inline long long argll(int argc, const char** argv, int i, long long def) { return i < argc ? std::atoll(argv[i]) : def; }
+static inline double argd(int argc, const char** argv, int i, double def) { return i < argc ? std::atof(argv[i]) : def; }
 
 int cmd_bubbles(int argc, const char** argv);
 int cmd_junctions(int argc, const char** argv);
@@ -69,3 +76,26 @@ struct Normal {
 
 struct Cl { Jn j; hts_pos_t p1, p2; uint32_t supp, slot; double rep; };
 struct ClIns { Ins v; int32_t len; uint32_t supp, slot; double rep; };
+
+struct CallArgs {
+    int min_mapq = 10;
+    hts_pos_t min_aln = 0;
+    int min_sv = 50;
+    hts_pos_t tol = 50;
+    uint32_t min_supp = 5;
+    int shred_n = 6;
+    hts_pos_t shred_win = 300;
+    double max_mm = 0.01;
+    double shred_rep = 0.40;
+    double max_rep = 0.50;
+    double dirty_f = 0.25;
+    uint32_t assign = 2;
+};
+
+// typed entry points, used by `snape run` instead of rebuilding argv arrays
+int run_bubbles(const std::string& graph, const std::vector<Sample>& smp, int nt, int maxlen, int mindiff);
+int run_junctions(const std::string& graph, const std::vector<Sample>& smp, const std::string& odir,
+                  int nt, int pad, uint32_t per, int64_t minf, double minvaf);
+int run_call(const std::vector<Ctg>& sets, const char* normal, const std::string& out, const CallArgs& a);
+int run_pick(const std::string& fa, const std::string& vcf, const std::string& reads,
+             const std::string& out, int minsh);

@@ -165,18 +165,7 @@ static void diff_span(const std::string& t, const std::string& n, size_t& a, siz
     dn = n.size() - a - b;
 }
 
-int cmd_bubbles(int argc, const char** argv) {
-    if (argc < 4) {
-        std::fprintf(stderr, "usage: snape bubbles <graph.bin> <sheet.tsv> [threads=16] [maxlen=6] "
-                             "[min_diff=25]\n");
-        return 2;
-    }
-    const std::string gpath = argv[1], spath = argv[2];
-    const int NT = argc > 3 ? std::atoi(argv[3]) : 16;
-    const int MAXLEN = argc > 4 ? std::atoi(argv[4]) : 6;
-    const int MIN_DIFF = argc > 5 ? std::atoi(argv[5]) : 25;
-
-    const std::vector<Sample> smp = samples_read(spath);
+int run_bubbles(const std::string& gpath, const std::vector<Sample>& smp, int NT, int MAXLEN, int MIN_DIFF) {
     const Graph g = load_graph(gpath);
     if ((size_t)g.S != smp.size()) die("bubbles", "sheet and graph.bin disagree on the sample count");
 
@@ -208,12 +197,22 @@ int cmd_bubbles(int argc, const char** argv) {
 
     for (auto& v : svb) v.close();
     const std::string out = dir + "/drop.sigs";
-    FILE* f = xopen(out.c_str(), "w");
+    FILE* f = xopen((out + ".tmp").c_str(), "w");
     for (uint64_t s : drop) std::fprintf(f, "%llu\n", (unsigned long long)s);
-    std::fclose(f);
+    atomic_close(f, (out + ".tmp").c_str(), out.c_str());
     say("bubbles", "both arms differ by <%d bp: dropped %llu/%zu bubbles, %zu cores "
                    "(%llu unsized bubbles kept) -> %s",
         MIN_DIFF, (unsigned long long)nbub, bubs.size(), drop.size(),
         (unsigned long long)nomiss, out.c_str());
     return 0;
+}
+
+int cmd_bubbles(int argc, const char** argv) {
+    if (argc < 4) {
+        std::fprintf(stderr, "usage: snape bubbles <graph.bin> <sheet.tsv> [threads=16] [maxlen=6] "
+                             "[min_diff=25]\n");
+        return 2;
+    }
+    return run_bubbles(argv[1], samples_read(argv[2]), argi(argc, argv, 3, 16),
+                       argi(argc, argv, 4, 6), argi(argc, argv, 5, 25));
 }

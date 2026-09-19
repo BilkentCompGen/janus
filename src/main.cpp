@@ -91,11 +91,12 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
     const std::string graph = dir + "/graph.bin", drop = dir + "/drop.sigs";
     const std::string ctg = dir + "/ctg." + smp.back().name + ".fa";
 
-    std::string ctg_fa, ctg_bam;
+    std::string ctg_fa;
+    std::vector<Ctg> sets;
     for (size_t i = 1; i < smp.size(); i++) {
-        if (i > 1) { ctg_fa += ','; ctg_bam += ','; }
-        ctg_fa  += dir + "/ctg." + smp[i].name + ".fa";
-        ctg_bam += smp[i].name + "=" + dir + "/ctg." + smp[i].name + ".bam";
+        if (i > 1) ctg_fa += ',';
+        ctg_fa += dir + "/ctg." + smp[i].name + ".fa";
+        sets.push_back({smp[i].name, dir + "/ctg." + smp[i].name + ".bam"});
     }
     const std::string nbam = dir + "/normal.bam", vcf = dir + "/calls.vcf";
     const std::string cand = dir + "/candidates.vcf", nfq = dir + "/normal_at_candidates.fastq";
@@ -105,18 +106,10 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
     else run_graph_reads(smp, dir, level, margin, min_mult, threads, max_bases);
 
     if (exists(drop)) say("run", "skipped bubbles: %s exists", drop.c_str());
-    else {
-        std::string a1 = "bubbles", a2 = graph, a3 = dir + "/samples.tsv", a4 = T;
-        const char* av[] = {a1.c_str(), a2.c_str(), a3.c_str(), a4.c_str()};
-        if (int rc = cmd_bubbles(4, av)) return rc;
-    }
+    else if (int rc = run_bubbles(graph, smp, threads, 6, 25)) return rc;
 
     if (exists(ctg)) say("run", "skipped junctions: %s exists", ctg.c_str());
-    else {
-        std::string a1 = "junctions", a2 = graph, a3 = dir + "/samples.tsv", a4 = dir, a5 = T;
-        const char* av[] = {a1.c_str(), a2.c_str(), a3.c_str(), a4.c_str(), a5.c_str()};
-        if (int rc = cmd_junctions(5, av)) return rc;
-    }
+    else if (int rc = run_junctions(graph, smp, dir, threads, 50, 5, 300, 0.0)) return rc;
 
     for (size_t i = 1; i < smp.size(); i++) {
         const std::string bam = dir + "/ctg." + smp[i].name + ".bam";
@@ -127,19 +120,13 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
 
     if (exists(cand)) say("run", "skipped candidate call: %s exists", cand.c_str());
     else {
-        std::string a1 = "call", a2 = ctg_bam, a3 = "-", a4 = cand, a5 = "10", a6 = "0", a7 = "50", a8 = "50",
-                   a9 = std::to_string(supp_discover > 1 ? supp_discover - 1 : 1);
-        const char* av[] = {a1.c_str(), a2.c_str(), a3.c_str(), a4.c_str(), a5.c_str(), a6.c_str(),
-                            a7.c_str(), a8.c_str(), a9.c_str()};
-        if (int rc = cmd_call(9, av)) return rc;
+        CallArgs a;
+        a.min_supp = supp_discover > 1 ? (uint32_t)supp_discover - 1 : 1;
+        if (int rc = run_call(sets, "-", cand, a)) return rc;
     }
 
     if (exists(nfq)) say("run", "skipped pick: %s exists", nfq.c_str());
-    else {
-        std::string a1 = "pick", a2 = ctg_fa, a3 = cand, a4 = normal, a5 = nfq;
-        const char* av[] = {a1.c_str(), a2.c_str(), a3.c_str(), a4.c_str(), a5.c_str()};
-        if (int rc = cmd_pick(5, av)) return rc;
-    }
+    else if (int rc = run_pick(ctg_fa, cand, normal, nfq, 5)) return rc;
 
     if (exists(nbam)) say("run", "skipped normal align: %s exists", nbam.c_str());
     else {
@@ -148,13 +135,10 @@ static int run_pipeline(const std::vector<Sample>& smp, const std::string& ref,
 
     if (exists(vcf)) say("run", "skipped call: %s exists", vcf.c_str());
     else {
-        std::string a1 = "call", a2 = ctg_bam, a3 = nbam, a4 = vcf, a5 = "10", a6 = "0", a7 = "50", a8 = "50",
-                   a9 = std::to_string(supp_discover), a10 = "6", a11 = "300", a12 = "0.01", a13 = "0.40",
-                   a14 = "0.50", a15 = "0.25", a16 = std::to_string(supp_assign);
-        const char* av[] = {a1.c_str(), a2.c_str(), a3.c_str(), a4.c_str(), a5.c_str(), a6.c_str(),
-                            a7.c_str(), a8.c_str(), a9.c_str(), a10.c_str(), a11.c_str(), a12.c_str(),
-                            a13.c_str(), a14.c_str(), a15.c_str(), a16.c_str()};
-        if (int rc = cmd_call(16, av)) return rc;
+        CallArgs a;
+        a.min_supp = (uint32_t)supp_discover;
+        a.assign = (uint32_t)supp_assign;
+        if (int rc = run_call(sets, nbam.c_str(), vcf, a)) return rc;
     }
     say("run", "done -> %s", vcf.c_str());
     return 0;

@@ -429,28 +429,7 @@ static void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl,
     atomic_close(f, tmp.c_str(), path);
 }
 
-int cmd_call(int argc, const char** argv) {
-    if (argc < 4) {
-        std::fprintf(stderr, "usage: snape call <ctg.bam|name=bam,name=bam,...> <normal.bam|-> <out.vcf> "
-                             "[min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5] [shred_n=6] "
-                             "[shred_win=300] [max_mm=0.01] [shred_rep=0.40] [anchor_rep=0.50] "
-                             "[normal_dirty=0.25] [supp_assign=2]\n");
-        return 2;
-    }
-    const int min_mapq   = argc >  4 ? std::atoi(argv[4])  : 10;
-    const hts_pos_t min_aln = argc > 5 ? std::atoll(argv[5]) : 0;
-    const int min_sv     = argc >  6 ? std::atoi(argv[6])  : 50;
-    const hts_pos_t tol  = argc >  7 ? std::atoll(argv[7]) : 50;
-    const uint32_t min_supp = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 5;
-    const int shred_n    = argc >  9 ? std::atoi(argv[9])  : 6;
-    const hts_pos_t shred_win = argc > 10 ? std::atoll(argv[10]) : 300;
-    const double max_mm  = argc > 11 ? std::atof(argv[11]) : 0.01;
-    const double shred_rep = argc > 12 ? std::atof(argv[12]) : 0.40;
-    const double max_rep   = argc > 13 ? std::atof(argv[13]) : 0.50;
-    const double dirty_f   = argc > 14 ? std::atof(argv[14]) : 0.25;
-    const uint32_t assign = argc > 15 ? (uint32_t)std::atoi(argv[15]) : 2;
-
-    const std::vector<Ctg> sets = parse_ctg(argv[1]);
+int run_call(const std::vector<Ctg>& sets, const char* normal, const std::string& out, const CallArgs& a) {
     const int L = (int)sets.size();
     std::vector<Jn> jn;
     std::vector<Ins> ins;
@@ -459,38 +438,38 @@ int cmd_call(int argc, const char** argv) {
     std::vector<std::string> qname;
     std::vector<uint8_t> qline;
     for (int l = 0; l < L; l++)
-        collect(sets[(size_t)l].bam.c_str(), (uint8_t)l, min_mapq, min_aln, min_sv, jn, ins, &hdr, st,
-                shred_n, shred_win, max_mm, shred_rep, qname, qline);
+        collect(sets[(size_t)l].bam.c_str(), (uint8_t)l, a.min_mapq, a.min_aln, a.min_sv, jn, ins, &hdr, st,
+                a.shred_n, a.shred_win, a.max_mm, a.shred_rep, qname, qline);
 
     {
         size_t k = 0;
         for (size_t i = 0; i < jn.size(); i++) {
             const Jn& j = jn[i];
-            if (!(j.c1 == j.c2 && j.p2 - j.p1 < min_sv)) jn[k++] = j;
+            if (!(j.c1 == j.c2 && j.p2 - j.p1 < a.min_sv)) jn[k++] = j;
         }
         jn.resize(k);
     }
     std::vector<uint32_t> sup;
-    std::vector<Cl> cl = cluster(jn, qline, tol, min_supp, L, sup);
-    std::vector<ClIns> ci = cluster_ins(ins, qline, tol, min_supp, L, sup);
+    std::vector<Cl> cl = cluster(jn, qline, a.tol, a.min_supp, L, sup);
+    std::vector<ClIns> ci = cluster_ins(ins, qline, a.tol, a.min_supp, L, sup);
 
-    if (max_rep < 1.0) {
+    if (a.max_rep < 1.0) {
         const size_t bj = cl.size(), bi = ci.size();
         {
             size_t k = 0;
-            for (size_t i = 0; i < cl.size(); i++) if (cl[i].rep <= max_rep) cl[k++] = cl[i];
+            for (size_t i = 0; i < cl.size(); i++) if (cl[i].rep <= a.max_rep) cl[k++] = cl[i];
             cl.resize(k);
         }
         {
             size_t k = 0;
-            for (size_t i = 0; i < ci.size(); i++) if (ci[i].rep <= max_rep) ci[k++] = ci[i];
+            for (size_t i = 0; i < ci.size(); i++) if (ci[i].rep <= a.max_rep) ci[k++] = ci[i];
             ci.resize(k);
         }
         say("call", "dropped as repetitive: %zu (%zu + %zu left)",
             (bj - cl.size()) + (bi - ci.size()), cl.size(), ci.size());
     }
 
-    Normal nrm = open_normal(argv[2]);
+    Normal nrm = open_normal(normal);
     if (nrm.fp) {
         const size_t before_j = cl.size(), before_i = ci.size();
         {
@@ -499,9 +478,9 @@ int cmd_call(int argc, const char** argv) {
                 const Cl& c = cl[i];
                 const char* n1 = sam_hdr_tid2name(hdr, c.j.c1);
                 bool drop;
-                if (c.j.c1 == c.j.c2) drop = germline(nrm, n1, c.p1, c.p2 - c.p1, tol * 10, dirty_f);
-                else drop = germline(nrm, n1, c.p1, 0, tol * 10, dirty_f) ||
-                            germline(nrm, sam_hdr_tid2name(hdr, c.j.c2), c.p2, 0, tol * 10, dirty_f);
+                if (c.j.c1 == c.j.c2) drop = germline(nrm, n1, c.p1, c.p2 - c.p1, a.tol * 10, a.dirty_f);
+                else drop = germline(nrm, n1, c.p1, 0, a.tol * 10, a.dirty_f) ||
+                            germline(nrm, sam_hdr_tid2name(hdr, c.j.c2), c.p2, 0, a.tol * 10, a.dirty_f);
                 if (!drop) cl[k++] = c;
             }
             cl.resize(k);
@@ -510,7 +489,7 @@ int cmd_call(int argc, const char** argv) {
             size_t k = 0;
             for (size_t i = 0; i < ci.size(); i++) {
                 const ClIns& c = ci[i];
-                if (!germline(nrm, sam_hdr_tid2name(hdr, c.v.c), c.v.p, c.len, tol * 10, dirty_f)) ci[k++] = c;
+                if (!germline(nrm, sam_hdr_tid2name(hdr, c.v.c), c.v.p, c.len, a.tol * 10, a.dirty_f)) ci[k++] = c;
             }
             ci.resize(k);
         }
@@ -518,25 +497,49 @@ int cmd_call(int argc, const char** argv) {
         say("call", "dropped as present in normal: %llu (%zu junction + %zu insertion left)",
             (unsigned long long)st.germ, cl.size(), ci.size());
     }
-    write_vcf(argv[3], hdr, cl, ci, qname, sets, sup, L, assign, -1);
+    write_vcf(out.c_str(), hdr, cl, ci, qname, sets, sup, L, a.assign, -1);
 
-    std::string base(argv[3]);
+    std::string base(out);
     if (base.size() > 4 && base.compare(base.size() - 4, 4, ".vcf") == 0) base.resize(base.size() - 4);
     for (int l = 0; l < L; l++)
         write_vcf((base + "." + sets[(size_t)l].name + ".vcf").c_str(), hdr, cl, ci, qname, sets,
-                 sup, L, assign, l);
+                 sup, L, a.assign, l);
 
     say("call", "records %llu | skipped: unmapped %llu, secondary %llu, MAPQ<%d %llu, <%lldbp %llu, mismatch>%.0f%% %llu",
         (unsigned long long)st.rec, (unsigned long long)st.unmapped, (unsigned long long)st.secondary,
-        min_mapq, (unsigned long long)st.lowq, (long long)min_aln, (unsigned long long)st.shortaln,
-        100 * max_mm, (unsigned long long)st.highmm);
+        a.min_mapq, (unsigned long long)st.lowq, (long long)a.min_aln, (unsigned long long)st.shortaln,
+        100 * a.max_mm, (unsigned long long)st.highmm);
     say("call", "segment %llu -> split %llu + CIGAR DEL %llu | INS %llu "
                "(%llu of them between the two segments spanning the reference position)",
         (unsigned long long)st.seg, (unsigned long long)st.split,
         (unsigned long long)st.cigar_del, (unsigned long long)st.cigar_ins,
         (unsigned long long)st.ins_split);
     say("call", "aday %zu junction + %zu insertion -> supp>=%u: %zu + %zu -> %s",
-        jn.size(), ins.size(), min_supp, cl.size(), ci.size(), argv[3]);
+        jn.size(), ins.size(), a.min_supp, cl.size(), ci.size(), out.c_str());
     sam_hdr_destroy(hdr);
     return 0;
+}
+
+int cmd_call(int argc, const char** argv) {
+    if (argc < 4) {
+        std::fprintf(stderr, "usage: snape call <ctg.bam|name=bam,name=bam,...> <normal.bam|-> <out.vcf> "
+                             "[min_mapq=10] [min_aln=0] [min_sv=50] [cluster=50] [min_supp=5] [shred_n=6] "
+                             "[shred_win=300] [max_mm=0.01] [shred_rep=0.40] [anchor_rep=0.50] "
+                             "[normal_dirty=0.25] [supp_assign=2]\n");
+        return 2;
+    }
+    CallArgs a;
+    a.min_mapq   = argi(argc, argv, 4, 10);
+    a.min_aln    = (hts_pos_t)argll(argc, argv, 5, 0);
+    a.min_sv     = argi(argc, argv, 6, 50);
+    a.tol        = (hts_pos_t)argll(argc, argv, 7, 50);
+    a.min_supp   = (uint32_t)argi(argc, argv, 8, 5);
+    a.shred_n    = argi(argc, argv, 9, 6);
+    a.shred_win  = (hts_pos_t)argll(argc, argv, 10, 300);
+    a.max_mm     = argd(argc, argv, 11, 0.01);
+    a.shred_rep  = argd(argc, argv, 12, 0.40);
+    a.max_rep    = argd(argc, argv, 13, 0.50);
+    a.dirty_f    = argd(argc, argv, 14, 0.25);
+    a.assign     = (uint32_t)argi(argc, argv, 15, 2);
+    return run_call(parse_ctg(argv[1]), argv[2], argv[3], a);
 }

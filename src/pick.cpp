@@ -83,15 +83,8 @@ static size_t anchor_cores(const char* fa, const ankerl::unordered_dense::set<st
     return nctg;
 }
 
-int cmd_pick(int argc, const char** argv) {
-    if (argc < 5) {
-        std::fprintf(stderr, "usage: snape pick <ctg.fa[,ctg.fa...]> <calls.vcf> <normal reads> <out.fastq> "
-                             "[min_shared=5] [trim_bp=0]\n");
-        return 2;
-    }
-    const std::string fa = argv[1], vcf = argv[2], reads = argv[3], out = argv[4];
-    const int MINSH = argc > 5 ? std::atoi(argv[5]) : 5;
-
+int run_pick(const std::string& fa, const std::string& vcf, const std::string& reads,
+             const std::string& out, int MINSH) {
     const auto want = wanted_contigs(vcf.c_str());
     if (want.empty()) { say("pick", "no CTG= in candidates, nothing to pick"); return 1; }
 
@@ -159,4 +152,13 @@ int cmd_pick(int argc, const char** argv) {
         found, sigs.size(), hits.size(), (unsigned long long)kept, MINSH,
         kept_bp / 1e9, out.c_str());
     return 0;
+}
+
+int cmd_pick(int argc, const char** argv) {
+    if (argc < 5) {
+        std::fprintf(stderr, "usage: snape pick <ctg.fa[,ctg.fa...]> <calls.vcf> <normal reads> <out.fastq> "
+                             "[min_shared=5] [trim_bp=0]\n");
+        return 2;
+    }
+    return run_pick(argv[1], argv[2], argv[3], argv[4], argi(argc, argv, 5, 5));
 }

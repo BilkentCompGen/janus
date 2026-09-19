@@ -148,24 +148,15 @@ static bool hit_cmp(const JHit& a, const JHit& b) {
     return a.read != b.read ? a.read < b.read : a.ord < b.ord;
 }
 
-int cmd_junctions(int argc, const char** argv) {
-    if (argc < 4) { std::fprintf(stderr, "usage: snape junctions <graph.bin> <sheet.tsv> <outdir> "
-                                 "[threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"); return 2; }
-    const std::string gpath = argv[1], spath = argv[2], odir = argv[3];
-    const int NT = argc > 4 ? std::atoi(argv[4]) : 16;
-    const int PAD = argc > 5 ? std::atoi(argv[5]) : 50;
-    const uint32_t PER = argc > 6 ? (uint32_t)std::atoi(argv[6]) : 5;
-    const int64_t MINF = argc > 7 ? std::atoll(argv[7]) : 300;
-    const double MINVAF = argc > 8 ? std::atof(argv[8]) : 0.0;
+int run_junctions(const std::string& gpath, const std::vector<Sample>& smp, const std::string& odir,
+                  int NT, int PAD, uint32_t PER, int64_t MINF, double MINVAF) {
     const int LEVEL = level_env();
 
-    const std::vector<Sample> smp = samples_read(spath);
     uint64_t K = 0;
     size_t nsom = 0;
-
     const Chunks C = build_chunks(gpath, K, nsom, MINVAF);
     const size_t L = (size_t)C.lines;
-    if ((size_t)smp.size() != L + 1) die("jcontigs", "sheet and graph.bin disagree on the sample count");
+    if (smp.size() != L + 1) die("jcontigs", "sheet and graph.bin disagree on the sample count");
     say("jcontigs", "%s: %llu nodes, %zu somatic -> %zu chunks over %zu lines; pad=%d cores, "
                    "<=%u reads/chunk/line, min flank %lld bp, min VAF %.2f, level=%d, %d threads",
         gpath.c_str(), (unsigned long long)K, nsom, C.n, L, PAD, PER, (long long)MINF, MINVAF, LEVEL, NT);
@@ -273,4 +264,13 @@ int cmd_junctions(int argc, const char** argv) {
                    "cross-read merge would be for), %llu windows rejected for short flanks",
         C.n, seen_ch, got, seen_ch - got, (long long)MINF, (unsigned long long)sf_total);
     return 0;
+}
+
+int cmd_junctions(int argc, const char** argv) {
+    if (argc < 4) { std::fprintf(stderr, "usage: snape junctions <graph.bin> <sheet.tsv> <outdir> "
+                                 "[threads=16] [pad_cores=50] [per_chunk=5] [min_flank=300] [min_vaf=0]\n"); return 2; }
+    return run_junctions(argv[1], samples_read(argv[2]), argv[3],
+                          argi(argc, argv, 4, 16), argi(argc, argv, 5, 50),
+                          (uint32_t)argi(argc, argv, 6, 5), (int64_t)argll(argc, argv, 7, 300),
+                          argd(argc, argv, 8, 0.0));
 }
