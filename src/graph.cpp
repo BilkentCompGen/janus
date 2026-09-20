@@ -82,7 +82,13 @@ static void psort(std::vector<T>& v, int threads, bool (*cmp)(const T&, const T&
         for (auto& t : th) t.join();
     }
     for (int w = 1; w < nt; w *= 2) {
-        const int nm = (nt - w) / (2 * w);
+        // Number of (i, i+w, min(i+2w,nt)) merge triples the loop below emits
+        // for i = 0, 2w, 4w, ... while i+w < nt. Plain floor((nt-w)/(2w))
+        // undercounts by one whenever (nt-w) isn't a multiple of 2w -- e.g.
+        // nt=4,w=1 needs 2 slots but that gives 1, so the fill loop wrote past
+        // the vector's end and the launch loop below silently dropped the
+        // last merge (found via AddressSanitizer: heap-buffer-overflow here).
+        const int nm = nt > w ? (nt - w - 1) / (2 * w) + 1 : 0;
         std::vector<MergeJob<T>> jobs(nm);
         std::vector<std::thread> th;
         for (int i = 0, k = 0; i + w < nt; i += 2 * w)
@@ -238,8 +244,7 @@ static void reader_thread(ReaderJob* j) {
         batch.col = col;
         if (batch.seqs.empty()) batch.first = mine[col];
         const bool svb = is_svb(sh.path.c_str());
-        FILE* f = xopen(sh.path.c_str(), "rb");
-        if (svb && std::fseek(f, 16, SEEK_SET) != 0) die("graph", "bad .svb %s", sh.path.c_str());
+        FILE* f = svb ? open_svb(sh.path) : xopen(sh.path.c_str(), "rb");
         uint64_t bases = 0;
         if (svb) {
             while (svb_read_seq(f, svseq)) {

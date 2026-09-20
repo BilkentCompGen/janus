@@ -36,6 +36,12 @@ struct SigLookup {
     uint32_t find(uint64_t s) const;
 };
 
+// Opens a .svb, validates its 32-byte header ("SVB1" magic + version), and
+// leaves the file positioned right after it, ready for svb_read_seq(). The
+// same 32-byte layout (magic[4] + ver[4] + nreads[8] + total[8] + reserved[8])
+// is written by `snape pack` and walked by `snape svbidx` -- keep all three
+// in sync if it ever changes.
+FILE* open_svb(const std::string& path);
 bool svb_read_seq(FILE* f, std::string& seq);
 std::vector<uint64_t> graph_sigs(const std::string& graph_bin, uint64_t& K);
 bool core_bytes(const Index& ix, std::vector<SvbFile>& svb, uint32_t node,

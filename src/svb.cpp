@@ -23,8 +23,13 @@ int cmd_pack(int argc, const char** argv) {
     if (argc < 2) { std::fprintf(stderr, "usage: snape pack out.svb < reads.fastq\n"); return 1; }
     FILE* out = xopen(argv[1], "wb");
 
-    char hdr[16] = {0};
-    wr(out, hdr, 16);
+    // 32-byte header: "SVB1" magic + version so a wrong/corrupt file dies
+    // fast in open_svb() instead of silently desyncing every record after it.
+    char hdr[32] = {0};
+    std::memcpy(hdr, "SVB1", 4);
+    uint32_t ver = 1;
+    std::memcpy(hdr + 4, &ver, 4);
+    wr(out, hdr, 32);
 
     uint64_t nreads = 0, total = 0;
     char* line = nullptr;
@@ -55,10 +60,10 @@ int cmd_pack(int argc, const char** argv) {
     }
     std::free(line);
 
-    std::memcpy(hdr, &nreads, 8);
-    std::memcpy(hdr + 8, &total, 8);
+    std::memcpy(hdr + 8, &nreads, 8);
+    std::memcpy(hdr + 16, &total, 8);
     std::fseek(out, 0, SEEK_SET);
-    wr(out, hdr, 16);
+    wr(out, hdr, 32);
     std::fclose(out);
     say("svb_pack", "%s: %llu reads, %llu bases", argv[1], (unsigned long long)nreads, (unsigned long long)total);
     return 0;
@@ -66,8 +71,7 @@ int cmd_pack(int argc, const char** argv) {
 
 int cmd_dump(int argc, const char** argv) {
     if (argc < 2) { std::fprintf(stderr, "usage: snape dump in.svb > reads.fastq\n"); return 1; }
-    FILE* f = xopen(argv[1], "rb");
-    if (std::fseek(f, 16, SEEK_SET) != 0) die("svb", "bad .svb %s", argv[1]);
+    FILE* f = open_svb(argv[1]);
 
     std::string seq, qual;
     uint64_t idx = 0;
@@ -83,19 +87,19 @@ int cmd_svbidx(int argc, const char** argv) {
     if (argc < 2) { std::fprintf(stderr, "usage: snape svbidx <in.svb>\n"); return 1; }
     const std::string in = argv[1];
     FILE* f = xopen(in.c_str(), "rb");
-
-    char hdr[16];
-    if (std::fread(hdr, 1, 16, f) != 16) die("svbidx", "%s is not a .svb", in.c_str());
+    char hdr[32];
+    if (std::fread(hdr, 1, 32, f) != 32 || std::memcmp(hdr, "SVB1", 4) != 0)
+        die("svbidx", "%s is not a .svb", in.c_str());
     uint64_t nreads, total;
-    std::memcpy(&nreads, hdr, 8);
-    std::memcpy(&total, hdr + 8, 8);
+    std::memcpy(&nreads, hdr + 8, 8);
+    std::memcpy(&total, hdr + 16, 8);
 
     std::vector<uint64_t> off;
     off.reserve(nreads + 1);
 
     constexpr size_t BLOCK = 1u << 22;
     std::vector<uint8_t> buf(BLOCK);
-    uint64_t pos = 16, seen = 0, bases = 0;
+    uint64_t pos = 32, seen = 0, bases = 0;
     size_t have = 0, at = 0;
     uint64_t maxlen = 0;
 
@@ -135,10 +139,15 @@ int cmd_svbidx(int argc, const char** argv) {
 
     const std::string out = in + ".idx", tmp = out + ".tmp";
     FILE* o = xopen(tmp.c_str(), "wb");
-    char oh[16] = {0};
-    std::memcpy(oh, &nreads, 8);
-    std::memcpy(oh + 8, &maxlen, 8);
-    wr(o, oh, 16);
+    // 32-byte header, same magic-validated shape as .svb: "SVBI" + version +
+    // nreads + maxlen + reserved. Kept in sync with SvbFile::open's reader.
+    char oh[32] = {0};
+    std::memcpy(oh, "SVBI", 4);
+    uint32_t ver = 1;
+    std::memcpy(oh + 4, &ver, 4);
+    std::memcpy(oh + 8, &nreads, 8);
+    std::memcpy(oh + 16, &maxlen, 8);
+    wr(o, oh, 32);
     wr(o, off.data(), off.size() * 8);
     atomic_close(o, tmp.c_str(), out.c_str());
     say("svbidx", "%s: %llu reads, longest %llu bp -> %s (%.1f MB)",

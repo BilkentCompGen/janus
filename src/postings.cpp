@@ -34,15 +34,17 @@ Post Index::get(uint32_t node, uint32_t j) const {
 }
 
 void SvbFile::open(const std::string& svb) {
-    f = xopen(svb.c_str(), "rb");
-    if (std::fseek(f, 16, SEEK_SET) != 0) die("index", "skip .svb header %s", svb.c_str());
+    f = open_svb(svb);
 
     const std::string ip = svb + ".idx";
     FILE* g = std::fopen(ip.c_str(), "rb");
     if (!g) die("index", "%s missing, run: snape svbidx %s", ip.c_str(), svb.c_str());
-    char ih[16];
-    if (std::fread(ih, 1, 16, g) != 16) die("index", "not a .svb.idx %s", ip.c_str());
-    std::memcpy(&nreads, ih, 8);
+    // 32-byte header: "SVBI" magic + version + nreads + maxlen + reserved --
+    // same magic-validated layout as .svb itself (see open_svb).
+    char ih[32];
+    if (std::fread(ih, 1, 32, g) != 32 || std::memcmp(ih, "SVBI", 4) != 0)
+        die("index", "not a .svb.idx %s", ip.c_str());
+    std::memcpy(&nreads, ih + 8, 8);
     off.resize(nreads + 1);
     if (std::fread(off.data(), 8, nreads + 1, g) != nreads + 1) die("index", "read %s", ip.c_str());
     std::fclose(g);
@@ -68,6 +70,17 @@ static const uint32_t* quad_table(void) {
         ready = true;
     }
     return q;
+}
+
+FILE* open_svb(const std::string& path) {
+    FILE* f = xopen(path.c_str(), "rb");
+    char hdr[32];
+    if (std::fread(hdr, 1, 32, f) != 32 || std::memcmp(hdr, "SVB1", 4) != 0)
+        die("svb", "bad .svb header %s", path.c_str());
+    uint32_t ver;
+    std::memcpy(&ver, hdr + 4, 4);
+    if (ver != 1) die("svb", ".svb version %u != 1 (%s)", ver, path.c_str());
+    return f;
 }
 
 bool svb_read_seq(FILE* f, std::string& seq) {
