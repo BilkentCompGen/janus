@@ -384,6 +384,33 @@ static void fmt_cols(FILE* f, const std::vector<uint32_t>& sup, uint32_t slot, i
     std::fputc('\n', f);
 }
 
+// idea 1: report only the 24 primary chromosomes; drop GL*/KI* alt-contig calls
+static bool is_primary(const char* n) {
+    if (!n || std::strncmp(n, "chr", 3) != 0) return false;
+    const char* d = n + 3;
+    if ((*d == 'X' || *d == 'Y' || *d == 'M') && d[1] == '\0') return true;
+    if (*d >= '1' && *d <= '9') {
+        int v = 0;
+        while (*d >= '0' && *d <= '9') v = v * 10 + (*d++ - '0');
+        return *d == '\0' && v <= 22;
+    }
+    return false;
+}
+
+// idea 3: mask (flag, never drop) calls inside the hg38 pseudoautosomal regions
+static const struct {
+    const char* n;
+    long s, e;
+} kPar[] = {
+    {"chrX", 10002, 2800000}, {"chrX", 155700000, 156040895},
+    {"chrY", 10002, 2781474},  {"chrY", 56887143, 57217401},
+};
+static bool in_par(const char* n, hts_pos_t p) {
+    for (const auto& r : kPar)
+        if (std::strcmp(r.n, n) == 0 && p >= r.s && p <= r.e) return true;
+    return false;
+}
+
 static void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl, const std::vector<ClIns>& ci,
                       const std::vector<std::string>& qname, const std::vector<Ctg>& sets,
                       const std::vector<uint32_t>& sup, int L, uint32_t assign, int only) {
@@ -403,27 +430,42 @@ static void write_vcf(const char* path, sam_hdr_t* h, const std::vector<Cl>& cl,
                     "##ALT=<ID=INV,Description=\"Inversion\">\n##ALT=<ID=INS,Description=\"Insertion\">\n"
                     "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n"
                     "##FORMAT=<ID=DV,Number=1,Type=Integer,Description=\"Supporting contigs from this line\">\n");
+    std::fprintf(f, "##INFO=<ID=PAR,Number=0,Type=Flag,Description=\"Call lies within a pseudoautosomal region (masked, not dropped)\">\n");
     std::fprintf(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
     for (int l = 0; l < L; l++) if (only < 0 || l == only) std::fprintf(f, "\t%s", sets[(size_t)l].name.c_str());
     std::fputc('\n', f);
     int n = 0;
     for (const Cl& c : cl) {
         if (only >= 0 && sup[(size_t)c.slot * (size_t)L + (size_t)only] < assign) { n++; continue; }
+        const char* nm1 = sam_hdr_tid2name(h, c.j.c1);
+        if (!is_primary(nm1)) { n++; continue; }
+        bool par = in_par(nm1, c.p1);
+        if (c.j.c1 != c.j.c2) {
+            const char* nm2 = sam_hdr_tid2name(h, c.j.c2);
+            if (!is_primary(nm2)) { n++; continue; }
+            par = par || in_par(nm2, c.p2);
+        }
         const char* t = svtype(c);
         const std::string alt = c.j.c1 == c.j.c2 ? "<" + std::string(t) + ">" : bnd_alt(c, h);
-        std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_%s%d\tN\t%s\t.\tPASS\tSVTYPE=%s;", sam_hdr_tid2name(h, c.j.c1),
+        std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_%s%d\tN\t%s\t.\tPASS\tSVTYPE=%s;", nm1,
                      c.p1, t, n++, alt.c_str(), t);
         if (c.j.c1 == c.j.c2)
             std::fprintf(f, "SVLEN=%" PRIhts_pos ";END=%" PRIhts_pos ";", c.p2 - c.p1, c.p2);
-        std::fprintf(f, "STRANDS=%c%c;SUPP=%u;REP=%.3f;CTG=%s\tGT:DV",
+        std::fprintf(f, "STRANDS=%c%c;SUPP=%u;REP=%.3f;CTG=%s",
                      c.j.d1 > 0 ? '+' : '-', c.j.d2 > 0 ? '+' : '-', c.supp, c.rep,
                      qname[c.j.q].c_str());
+        if (par) std::fprintf(f, ";PAR");
+        std::fprintf(f, "\tGT:DV");
         fmt_cols(f, sup, c.slot, L, assign, only);
     }
     for (const ClIns& c : ci) {
         if (only >= 0 && sup[(size_t)c.slot * (size_t)L + (size_t)only] < assign) { n++; continue; }
-        std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_INS%d\tN\t<INS>\t.\tPASS\tSVTYPE=INS;SVLEN=%d;SUPP=%u;CTG=%s\tGT:DV",
-                     sam_hdr_tid2name(h, c.v.c), c.v.p, n++, c.len, c.supp, qname[c.v.q].c_str());
+        const char* nmi = sam_hdr_tid2name(h, c.v.c);
+        if (!is_primary(nmi)) { n++; continue; }
+        std::fprintf(f, "%s\t%" PRIhts_pos "\tsvp_INS%d\tN\t<INS>\t.\tPASS\tSVTYPE=INS;SVLEN=%d;SUPP=%u;CTG=%s",
+                     nmi, c.v.p, n++, c.len, c.supp, qname[c.v.q].c_str());
+        if (in_par(nmi, c.v.p)) std::fprintf(f, ";PAR");
+        std::fprintf(f, "\tGT:DV");
         fmt_cols(f, sup, c.slot, L, assign, only);
     }
     atomic_close(f, tmp.c_str(), path);
