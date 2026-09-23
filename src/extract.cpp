@@ -12,7 +12,7 @@ static const char SYM[5] = "ACGT";
 struct scr {
     uint64_t* rep[2]; uint32_t* rep32[2]; uint64_t* st[2]; uint64_t* en[2]; uint32_t* sz[2];
     uint32_t *lab, *lsz, *map; char* hs;
-    uint64_t acc; int pos, cap, cur;
+    bits bw; int cap, cur;
 };
 
 struct ectx { scr* s; uint64_t* nc; int lev, w; };
@@ -33,27 +33,10 @@ static void sgrow(scr* s, int n) {
     s->hs = (char*)std::realloc(s->hs, (size_t)n);
 }
 
-static void wbits(block* bl, scr* s, uint32_t v, int w) {
-    s->acc = (s->acc << w) | v;
-    s->pos += w;
-    while (s->pos >= 8) {
-        s->pos -= 8;
-        char c = (char)(s->acc >> s->pos);
-        bput(bl, &c, 1);
-    }
-}
-
-static void wflush(block* bl, scr* s) {
-    if (!s->pos) return;
-    char c = (char)(s->acc << (8 - s->pos));
-    bput(bl, &c, 1);
-    s->pos = 0;
-}
-
 static void wrec(block* bl, scr* s, uint32_t dst, uint32_t len, int w) {
     uint32_t m = (1u << w) - 1;
-    if (dst >= m || len > m) { wbits(bl, s, m, w); wbits(bl, s, dst, 32); wbits(bl, s, len, 32); }
-    else { wbits(bl, s, dst, w); wbits(bl, s, len, w); }
+    if (dst >= m || len > m) { wbits(bl, &s->bw, m, w); wbits(bl, &s->bw, dst, 32); wbits(bl, &s->bw, len, 32); }
+    else { wbits(bl, &s->bw, dst, w); wbits(bl, &s->bw, len, w); }
 }
 
 static int parse_lev(scr* s, int k, int lev) {
@@ -115,6 +98,9 @@ static void ex_work(block* bl) {
             prev = v;
         }
         s->map[k] = len;
+        size_t t0 = bl->outlen;
+        char tb[6] = {0};
+        bput(bl, tb, 6);
         int nf = 0, nr = 0;
         if (k >= 3) {
             nf = parse_lev(s, (int)k, c->lev);
@@ -123,9 +109,10 @@ static void ex_work(block* bl) {
             nr = parse_lev(s, (int)k, c->lev);
             emit(bl, s, nr, c->w);
         }
-        wflush(bl, s);
-        wbits(bl, s, (uint32_t)(nf + nr), 16);
-        wbits(bl, s, (uint32_t)nf, 16);
+        wflush(bl, &s->bw);
+        uint8_t* u = (uint8_t*)bl->out + t0;
+        size_t ub = bl->outlen - t0;
+        u[0] = (nf + nr) >> 8; u[1] = nf + nr; u[2] = nf >> 8; u[3] = nf; u[4] = ub >> 8; u[5] = ub;
         c->nc[bl->id] += (uint64_t)(nf + nr);
         off += svb_size((const char*)p, bl->inlen - off);
         off2 += svb_size((const char*)h, bl->inlen2 - off2);
@@ -155,7 +142,7 @@ int cmd_extract(const char* in, const char* out, int t, int l) {
     }
     std::free(c.s);
     std::free(c.nc);
-    bin_header o = {{'S', 'V', 'B', 'X'}, 2, n, cores, {0}};
+    bin_header o = {{'S', 'V', 'B', 'X'}, 3, n, cores, {0}};
     o.resv[0] = (uint8_t)l;
     o.resv[1] = (uint8_t)(l + 4);
     std::fseek(fo, 0, SEEK_SET);

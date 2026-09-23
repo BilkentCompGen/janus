@@ -1,12 +1,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "count.h"
 #include "extract.h"
 #include "hpc.h"
 
 struct opts { const char* in; const char* out; int t, l; };
 
-static void usage() { printf("usage: snape <pack|hpc|extract> [-i in] [-o out] [-t N] [-l L]\n"); }
+static void usage() { printf("usage: snape <pack|hpc|extract|count> [-i in] [-o out] [-t N] [-l L]\n"); }
 
 static bool parse_opts(int argc, char** argv, opts* o) {
     for (int i = 0; i < argc; i++)
@@ -34,6 +35,10 @@ int main(int argc, char** argv) {
     else if (!strcmp(argv[1], "extract")) {
         if (!o.in) { usage(); return 1; }
         return cmd_extract(o.in, o.out, o.t, o.l);
+    }
+    else if (!strcmp(argv[1], "count")) {
+        if (!o.in) { usage(); return 1; }
+        return cmd_count(o.in, o.out, o.t);
     }
     else { usage(); return 1; }
     return 0;

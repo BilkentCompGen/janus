@@ -1,47 +1,20 @@
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include "core.h"
 #include "hpc.h"
 #include "io.h"
 
-static size_t hpc(const uint8_t* p, uint32_t tag, int len, char* out) {
-    size_t k = 0;
-    int prev = -1;
-    if (tag & 0x80000000) {
-        for (int i = 0; i < len; i++) {
-            int v = CODE.t[(uint8_t)(p[i] & 0xdf)];
-            if (v == prev) continue;
-            prev = v;
-            if ((k & 3) == 0) out[k >> 2] = 0;
-            out[k >> 2] |= v << (6 - 2 * (k & 3));
-            k++;
-        }
-    } else {
-        for (int i = 0; i < len; i++) {
-            int v = (p[i >> 2] >> (6 - 2 * (i & 3))) & 3;
-            if (v == prev) continue;
-            prev = v;
-            if ((k & 3) == 0) out[k >> 2] = 0;
-            out[k >> 2] |= v << (6 - 2 * (k & 3));
-            k++;
-        }
-    }
-    return k;
-}
-
 static void hpc_work(block* b) {
-    for (size_t off = 0; off < b->inlen;) {
-        const uint8_t* rec = (const uint8_t*)b->in + off;
-        uint32_t tag;
-        std::memcpy(&tag, rec, 4);
-        uint32_t len = tag & 0x7fffffff;
-        bgrow(b, (len + 3) / 4);
-        size_t k = hpc(rec + 4, tag, len, b->buf);
-        uint32_t klen = (uint32_t)k;
-        bput(b, &klen, 4);
-        bput(b, b->buf, (k + 3) / 4);
-        off += svb_size(b->in + off, b->inlen - off);
+    rdcore* r = &((rdcore*)b->ctx)[b->id];
+    for (size_t off = 0; off < b->inlen; off += svb_size(b->in + off, b->inlen - off)) {
+        collapse(r, (const uint8_t*)b->in + off);
+        uint32_t nw = (r->k + 31) / 32;
+        for (uint32_t j = 0; j < nw; j++) r->hs[j] = __builtin_bswap64(r->hs[j]);
+        bput(b, &r->k, 4);
+        bput(b, r->hs, (r->k + 3) / 4);
     }
 }
 
@@ -52,7 +25,10 @@ int cmd_hpc(const char* in, const char* out, int t) {
     bin_header h;
     std::fread(&h, 1, 32, fi);
     FILE* fo = open_tmp(out);
-    stream_run(fi, nullptr, fo, 32, t, svb_size, nullptr, hpc_work, nullptr);
+    rdcore* r = (rdcore*)std::calloc(t, sizeof(rdcore));
+    stream_run(fi, nullptr, fo, 32, t, svb_size, nullptr, hpc_work, r);
+    for (int i = 0; i < t; i++) free_core(&r[i]);
+    std::free(r);
     std::fclose(fi);
     bin_header o = {{'S', 'V', 'B', 'H'}, 2, h.nreads, h.total, {0}};
     std::fseek(fo, 0, SEEK_SET);

@@ -48,6 +48,23 @@ void bgrow(block* b, size_t n) {
     if (n > b->bufcap) { b->bufcap = 2 * n + 64; b->buf = (char*)std::realloc(b->buf, b->bufcap); }
 }
 
+void wbits(block* b, bits* s, uint64_t v, int w) {
+    s->acc = (s->acc << w) | v;
+    s->pos += w;
+    while (s->pos >= 8) {
+        s->pos -= 8;
+        char c = (char)(s->acc >> s->pos);
+        bput(b, &c, 1);
+    }
+}
+
+void wflush(block* b, bits* s) {
+    if (!s->pos) return;
+    char c = (char)(s->acc << (8 - s->pos));
+    bput(b, &c, 1);
+    s->pos = 0;
+}
+
 size_t nlines(const char* p, size_t n, int k) {
     size_t i = 0;
     while (k--) {
@@ -74,12 +91,34 @@ static void* run_block(void* a) {
     return nullptr;
 }
 
+struct part { int fd; char* p; size_t n, got; long o; };
+
+static void* read_part(void* a) {
+    part* r = (part*)a;
+    for (ssize_t g = 1; g > 0 && r->got < r->n; r->got += g) g = pread(r->fd, r->p + r->got, r->n - r->got, r->o + r->got);
+    return nullptr;
+}
+
+static size_t pread8(char* p, size_t n, FILE* f) {
+    long o = std::ftell(f);
+    part r[8];
+    pthread_t th[8];
+    size_t got = 0;
+    for (int i = 0; i < 8; i++) {
+        r[i] = {fileno(f), p + n * i / 8, n * (i + 1) / 8 - n * i / 8, 0, o + (long)(n * i / 8)};
+        pthread_create(&th[i], nullptr, read_part, &r[i]);
+    }
+    for (int i = 0; i < 8; i++) { pthread_join(th[i], nullptr); got += r[i].got; }
+    std::fseek(f, o + (long)got, SEEK_SET);
+    return got;
+}
+
 struct filler { FILE* f1; FILE* f2; char* b1; char* b2; size_t k1, k2, cap, l1, l2; };
 
 static void* fill(void* a) {
     filler* f = (filler*)a;
-    f->l1 = f->k1 + std::fread(f->b1 + f->k1, 1, f->cap - f->k1, f->f1);
-    if (f->f2) f->l2 = f->k2 + std::fread(f->b2 + f->k2, 1, f->cap - f->k2, f->f2);
+    f->l1 = f->k1 + pread8(f->b1 + f->k1, f->cap - f->k1, f->f1);
+    if (f->f2) f->l2 = f->k2 + pread8(f->b2 + f->k2, f->cap - f->k2, f->f2);
     return nullptr;
 }
 
@@ -97,8 +136,8 @@ uint64_t stream_run(FILE* fi, FILE* f2, FILE* fo, size_t hdrsz, int t, size_fn s
     for (int i = 0; i < t; i++) { b[i].id = i; b[i].ctx = ctx; }
     int cur = 0;
     uint64_t nrec = 0;
-    size_t ilen = std::fread(ib[0], 1, icap, fi), jlen = 0;
-    if (f2) jlen = std::fread(jb[0], 1, icap, f2);
+    size_t ilen = pread8(ib[0], icap, fi), jlen = 0;
+    if (f2) jlen = pread8(jb[0], icap, f2);
     while (ilen) {
         size_t target = ilen / t + 1, off = 0, start = 0, off2 = 0, start2 = 0;
         int nb = 0;
@@ -134,11 +173,11 @@ uint64_t stream_run(FILE* fi, FILE* f2, FILE* fo, size_t hdrsz, int t, size_fn s
             icap *= 2;
             ib[0] = (char*)std::realloc(ib[0], icap);
             ib[1] = (char*)std::realloc(ib[1], icap);
-            ilen += std::fread(ib[cur] + ilen, 1, icap - ilen, fi);
+            ilen += pread8(ib[cur] + ilen, icap - ilen, fi);
             if (f2) {
                 jb[0] = (char*)std::realloc(jb[0], icap);
                 jb[1] = (char*)std::realloc(jb[1], icap);
-                jlen += std::fread(jb[cur] + jlen, 1, icap - jlen, f2);
+                jlen += pread8(jb[cur] + jlen, icap - jlen, f2);
             }
             continue;
         }
