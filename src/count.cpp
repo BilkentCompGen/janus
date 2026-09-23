@@ -4,13 +4,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 #include "core.h"
 #include "count.h"
 #include "io.h"
 
 static const uint32_t MM = 3, MARGIN = 10, NS = 65536, M31 = (1u << 31) - 1;
 
-struct cctx { rdcore* r; uint64_t *tab, *pr, *hs; uint16_t* cn; uint32_t *sc, *off, *dst; uint64_t z, np, K; int w, t; };
+struct cctx { rdcore* r; uint64_t *tab, *pr, *hs; uint16_t* cn; uint32_t *sc, *deg; std::vector<uint64_t> ev[64]; uint64_t z, np, K; int w, t; };
 struct job { cctx* x; int i; };
 
 static uint64_t home(const cctx* x, uint64_t h) { return (h >> 48) * x->z + (((h >> 32) & 0xffff) * x->z >> 16); }
@@ -96,29 +97,18 @@ static void* shard_emit(void* a) {
     return nullptr;
 }
 
-static void* edge_deg(void* a) {
+static void* edge_pick(void* a) {
     job* j = (job*)a;
     cctx* x = j->x;
-    for (uint64_t i = x->np * j->i / x->t; i < x->np * (j->i + 1) / x->t; i++) {
-        uint64_t k = x->pr[i], r1 = k ? x->tab[k >> 31 & M31] : 0, r2 = k ? x->tab[k & M31] : 0;
-        x->pr[i] = r1 && r2 ? (r1 - 1) << 32 | (r2 - 1) : 0;
-        if (x->pr[i]) __atomic_fetch_add(&x->off[r1], 1, __ATOMIC_RELAXED);
+    uint64_t lo = NS * j->i / x->t * x->z, hi = NS * (j->i + 1) / x->t * x->z;
+    std::vector<uint64_t>& ev = x->ev[j->i];
+    for (uint64_t i = 0; i < x->np; i++) {
+        uint64_t k = x->pr[i], s1 = k >> 31 & M31;
+        if (!k || s1 < lo || s1 >= hi) continue;
+        uint64_t r1 = x->tab[s1], r2 = x->tab[k & M31];
+        if (r1 && r2) { ev.push_back((r1 - 1) << 32 | (r2 - 1)); x->deg[r1 - 1]++; }
     }
-    return nullptr;
-}
-
-static void* edge_put(void* a) {
-    job* j = (job*)a;
-    cctx* x = j->x;
-    for (uint64_t i = x->np * j->i / x->t; i < x->np * (j->i + 1) / x->t; i++)
-        if (x->pr[i]) x->dst[__atomic_fetch_add(&x->off[x->pr[i] >> 32], 1, __ATOMIC_RELAXED)] = (uint32_t)x->pr[i];
-    return nullptr;
-}
-
-static void* node_sort(void* a) {
-    job* j = (job*)a;
-    cctx* x = j->x;
-    for (uint64_t u = x->K * j->i / x->t; u < x->K * (j->i + 1) / x->t; u++) std::sort(x->dst + x->off[u], x->dst + x->off[u + 1]);
+    std::sort(ev.begin(), ev.end());
     return nullptr;
 }
 
@@ -159,26 +149,19 @@ int cmd_count(const char* in, const char* out, int t) {
     x.hs = (uint64_t*)std::malloc(x.K * 8);
     x.cn = (uint16_t*)std::malloc(x.K * 2);
     par(&x, shard_emit);
-    x.off = (uint32_t*)std::calloc(x.K + 1, 4);
-    par(&x, edge_deg);
-    for (uint64_t u = 0; u < x.K; u++) x.off[u + 1] += x.off[u];
-    uint64_t E = x.off[x.K];
-    x.dst = (uint32_t*)std::malloc(E * 4 + 4);
-    par(&x, edge_put);
-    for (uint64_t u = x.K; u > 0; u--) x.off[u] = x.off[u - 1];
-    x.off[0] = 0;
-    par(&x, node_sort);
+    x.deg = (uint32_t*)std::calloc(x.K, 4);
+    par(&x, edge_pick);
     std::free(x.tab);
     std::free(x.pr);
-    uint32_t md = 0;
-    for (uint64_t u = 0; u < x.K; u++) md = std::max(md, x.off[u + 1] - x.off[u]);
+    uint64_t E = 0, md = 0;
+    for (uint64_t u = 0; u < x.K; u++) { E += x.deg[u]; md = std::max<uint64_t>(md, x.deg[u]); }
     int rb = nbits(x.K - 1), db = nbits(md);
     std::fwrite(x.hs, 8, x.K, fo);
     std::fwrite(x.cn, 2, x.K, fo);
     block ob = {};
     bits bw = {};
-    for (uint64_t u = 0; u < x.K; u++) wbits(&ob, &bw, x.off[u + 1] - x.off[u], db);
-    for (uint64_t i = 0; i < E; i++) wbits(&ob, &bw, x.dst[i], rb);
+    for (uint64_t u = 0; u < x.K; u++) wbits(&ob, &bw, x.deg[u], db);
+    for (int i = 0; i < t; i++) for (uint64_t e : x.ev[i]) wbits(&ob, &bw, (uint32_t)e, rb);
     wflush(&ob, &bw);
     std::fwrite(ob.out, 1, ob.outlen, fo);
     bin_header o = {{'S', 'V', 'B', 'C'}, 1, x.K, E, {(uint8_t)rb, (uint8_t)db, MM, MARGIN}};
@@ -189,8 +172,7 @@ int cmd_count(const char* in, const char* out, int t) {
     std::free(x.hs);
     std::free(x.cn);
     std::free(x.sc);
-    std::free(x.off);
-    std::free(x.dst);
+    std::free(x.deg);
     std::free(x.r);
     return 0;
 }
