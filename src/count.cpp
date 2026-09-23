@@ -1,8 +1,6 @@
-#include <pthread.h>
+#include <unistd.h>
 #include <algorithm>
-#include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <string>
 #include <vector>
 #include "core.h"
@@ -11,12 +9,15 @@
 
 static const uint32_t MM = 3, MARGIN = 10, NS = 65536, M31 = (1u << 31) - 1;
 
-struct cctx { rdcore* r; uint64_t *tab, *pr, *hs; uint16_t* cn; uint32_t *sc, *deg; std::vector<uint64_t> ev[64]; uint64_t z, np, K; int w, t; };
-struct job { cctx* x; int i; };
+struct cth { rdcore r; std::vector<uint64_t> h, ev; };
+
+struct cctx { cth* c; uint64_t *tab, *pr; uint32_t* sc; std::vector<uint32_t> deg; uint64_t z, np, K; int w, t, fd; };
 
 static uint64_t home(const cctx* x, uint64_t h) { return (h >> 48) * x->z + (((h >> 32) & 0xffff) * x->z >> 16); }
 
 static uint64_t phome(const cctx* x, uint64_t k) { return (core_hash(&k, 32) >> 32) * x->np >> 32; }
+
+static uint64_t shard(const cctx* x, int i) { return NS * i / x->t; }
 
 static uint64_t add(cctx* x, uint64_t h) {
     uint64_t s = (h >> 48) * x->z, tag = h << 16 >> 16;
@@ -53,126 +54,88 @@ static void chain(cctx* x, rdcore* r, uint32_t lo, uint32_t hi, uint64_t* h, uin
 
 static void cnt_work(block* b) {
     cctx* x = (cctx*)b->ctx;
-    rdcore* r = &x->r[b->id];
-    size_t o2 = 0;
-    for (size_t o = 0; o < b->inlen; o += svb_size(b->in + o, b->inlen - o)) {
-        const uint8_t* u = (const uint8_t*)b->in2 + o2;
-        collapse(r, (const uint8_t*)b->in + o);
-        load_cores(r, u, x->w);
-        bgrow(b, 8 * (2 * r->n + r->k / 32 + 2));
-        uint64_t* h = (uint64_t*)b->buf;
-        chain(x, r, 0, r->nf, h, h + r->n, h + 2 * r->n);
-        chain(x, r, r->nf, r->n, h, h + r->n, h + 2 * r->n);
-        o2 += exc_size((const char*)u, b->inlen2 - o2);
+    cth* c = &x->c[b->id];
+    for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2)) {
+        collapse(&c->r, (const uint8_t*)b->in[0] + o);
+        load_cores(&c->r, (const uint8_t*)b->in[1] + o2, x->w);
+        uint32_t n = c->r.n;
+        if (c->h.size() < 2 * n + c->r.k / 32 + 2) c->h.resize(4 * n + c->r.k / 16 + 4);
+        chain(x, &c->r, 0, c->r.nf, c->h.data(), c->h.data() + n, c->h.data() + 2 * n);
+        chain(x, &c->r, c->r.nf, n, c->h.data(), c->h.data() + n, c->h.data() + 2 * n);
     }
 }
 
-static void* shard_count(void* a) {
-    job* j = (job*)a;
-    cctx* x = j->x;
-    for (uint64_t s = NS * j->i / x->t; s < NS * (j->i + 1) / x->t; s++)
+static void shard_count(void* a, int i) {
+    cctx* x = (cctx*)a;
+    for (uint64_t s = shard(x, i); s < shard(x, i + 1); s++)
         for (uint64_t k = s * x->z; k < (s + 1) * x->z; k++) x->sc[s + 1] += (x->tab[k] & 0xffff) >= MM;
-    return nullptr;
 }
 
-static void* shard_emit(void* a) {
-    job* j = (job*)a;
-    cctx* x = j->x;
-    uint64_t* v = (uint64_t*)std::malloc(x->z * 8);
-    for (uint64_t s = NS * j->i / x->t; s < NS * (j->i + 1) / x->t; s++) {
+static void shard_emit(void* a, int i) {
+    cctx* x = (cctx*)a;
+    std::vector<uint64_t> v(x->z);
+    std::vector<uint16_t> n(x->z);
+    for (uint64_t s = shard(x, i); s < shard(x, i + 1); s++) {
         uint64_t m = 0, *t = x->tab + s * x->z;
         for (uint64_t k = 0; k < x->z; k++) {
             if ((t[k] & 0xffff) >= MM) v[m++] = t[k] >> 16 << 16 | k;
             else t[k] = 0;
         }
-        std::sort(v, v + m);
-        for (uint64_t i = 0; i < m; i++) {
-            uint64_t k = v[i] & 0xffff, rk = x->sc[s] + i;
-            x->hs[rk] = s << 48 | v[i] >> 16;
-            x->cn[rk] = (uint16_t)t[k];
-            t[k] = rk + 1;
+        std::sort(v.begin(), v.begin() + m);
+        for (uint64_t j = 0; j < m; j++) {
+            uint64_t k = v[j] & 0xffff;
+            n[j] = (uint16_t)t[k];
+            v[j] = s << 48 | v[j] >> 16;
+            t[k] = x->sc[s] + j + 1;
         }
+        pwrite(x->fd, v.data(), m * 8, sizeof(bin_header) + x->sc[s] * 8);
+        pwrite(x->fd, n.data(), m * 2, sizeof(bin_header) + x->K * 8 + x->sc[s] * 2);
     }
-    std::free(v);
-    return nullptr;
 }
 
-static void* edge_pick(void* a) {
-    job* j = (job*)a;
-    cctx* x = j->x;
-    uint64_t lo = NS * j->i / x->t * x->z, hi = NS * (j->i + 1) / x->t * x->z;
-    std::vector<uint64_t>& ev = x->ev[j->i];
-    for (uint64_t i = 0; i < x->np; i++) {
-        uint64_t k = x->pr[i], s1 = k >> 31 & M31;
-        if (!k || s1 < lo || s1 >= hi) continue;
+static void edge_pick(void* a, int i) {
+    cctx* x = (cctx*)a;
+    std::vector<uint64_t>& ev = x->c[i].ev;
+    for (uint64_t j = 0; j < x->np; j++) {
+        uint64_t k = x->pr[j], s1 = k >> 31 & M31;
+        if (!k || s1 < shard(x, i) * x->z || s1 >= shard(x, i + 1) * x->z) continue;
         uint64_t r1 = x->tab[s1], r2 = x->tab[k & M31];
         if (r1 && r2) { ev.push_back((r1 - 1) << 32 | (r2 - 1)); x->deg[r1 - 1]++; }
     }
     std::sort(ev.begin(), ev.end());
-    return nullptr;
-}
-
-static void par(cctx* x, void* (*f)(void*)) {
-    pthread_t th[64];
-    job j[64];
-    for (int i = 0; i < x->t; i++) { j[i] = {x, i}; pthread_create(&th[i], nullptr, f, &j[i]); }
-    for (int i = 0; i < x->t; i++) pthread_join(th[i], nullptr);
 }
 
 static int nbits(uint64_t v) { return v ? 64 - __builtin_clzll(v) : 1; }
 
 int cmd_count(const char* in, const char* out, int t) {
-    std::string path, epath = std::string(in) + ".exc";
-    if (!out) { path = std::string(in) + ".cnt"; out = path.c_str(); }
-    FILE* fi = std::fopen(in, "rb");
-    FILE* fe = std::fopen(epath.c_str(), "rb");
     bin_header h, e;
-    std::fread(&h, 1, 32, fi);
-    std::fread(&e, 1, 32, fe);
-    cctx x = {};
-    x.r = (rdcore*)std::calloc(t, sizeof(rdcore));
-    x.z = (e.total / 24 + 120000000) / NS + 64;
+    std::vector<cth> c(t);
+    std::vector<uint32_t> sc(NS + 1);
+    std::vector<char> ob;
+    FILE* fi = open_in(in, &h), *fe = open_in((std::string(in) + ".exc").c_str(), &e), *fo = open_tmp(out);
+    cctx x = {c.data(), nullptr, nullptr, sc.data(), {}, (e.total / 24 + 120000000) / NS + 64, 0, 0, e.resv[1], t, fileno(fo)};
     x.np = NS * x.z * 5 / 4;
-    x.w = e.resv[1];
-    x.t = t;
     x.tab = (uint64_t*)std::calloc(NS * x.z, 8);
     x.pr = (uint64_t*)std::calloc(x.np, 8);
-    FILE* fo = open_tmp(out);
-    stream_run(fi, fe, fo, 32, t, svb_size, exc_size, cnt_work, &x);
-    std::fclose(fi);
-    std::fclose(fe);
-    for (int i = 0; i < t; i++) free_core(&x.r[i]);
-    x.sc = (uint32_t*)std::calloc(NS + 1, 4);
-    par(&x, shard_count);
-    for (uint32_t s = 0; s < NS; s++) x.sc[s + 1] += x.sc[s];
-    x.K = x.sc[NS];
-    x.hs = (uint64_t*)std::malloc(x.K * 8);
-    x.cn = (uint16_t*)std::malloc(x.K * 2);
-    par(&x, shard_emit);
-    x.deg = (uint32_t*)std::calloc(x.K, 4);
-    par(&x, edge_pick);
+    stream_run(fi, fe, fo, t, svb_size, exc_size, cnt_work, &x);
+    par(t, shard_count, &x);
+    for (uint32_t s = 0; s < NS; s++) sc[s + 1] += sc[s];
+    x.K = sc[NS];
+    x.deg.resize(x.K);
+    par(t, shard_emit, &x);
+    par(t, edge_pick, &x);
     std::free(x.tab);
     std::free(x.pr);
     uint64_t E = 0, md = 0;
-    for (uint64_t u = 0; u < x.K; u++) { E += x.deg[u]; md = std::max<uint64_t>(md, x.deg[u]); }
+    for (uint32_t d : x.deg) { E += d; md = std::max<uint64_t>(md, d); }
+    bits bw = {&ob, 0, 0};
     int rb = nbits(x.K - 1), db = nbits(md);
-    std::fwrite(x.hs, 8, x.K, fo);
-    std::fwrite(x.cn, 2, x.K, fo);
-    block ob = {};
-    bits bw = {};
-    for (uint64_t u = 0; u < x.K; u++) wbits(&ob, &bw, x.deg[u], db);
-    for (int i = 0; i < t; i++) for (uint64_t e : x.ev[i]) wbits(&ob, &bw, (uint32_t)e, rb);
-    wflush(&ob, &bw);
-    std::fwrite(ob.out, 1, ob.outlen, fo);
+    for (uint32_t d : x.deg) wbits(&bw, d, db);
+    for (cth& q : c) for (uint64_t v : q.ev) wbits(&bw, (uint32_t)v, rb);
+    wflush(&bw);
+    std::fseek(fo, sizeof(bin_header) + x.K * 10, SEEK_SET);
+    std::fwrite(ob.data(), 1, ob.size(), fo);
     bin_header o = {{'S', 'V', 'B', 'C'}, 1, x.K, E, {(uint8_t)rb, (uint8_t)db, MM, MARGIN}};
-    std::fseek(fo, 0, SEEK_SET);
-    std::fwrite(&o, 1, 32, fo);
-    commit_file(fo, out);
-    std::free(ob.out);
-    std::free(x.hs);
-    std::free(x.cn);
-    std::free(x.sc);
-    std::free(x.deg);
-    std::free(x.r);
+    finish(fo, out, &o);
     return 0;
 }

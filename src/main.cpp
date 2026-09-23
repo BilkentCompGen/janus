@@ -1,40 +1,28 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include "count.h"
 #include "extract.h"
 
-struct opts { const char* in; const char* out; int t, l; };
-
-static void usage() { printf("usage: snape <pack|extract|count> [-i in] [-o out] [-t N] [-l L]\n"); }
-
-static bool parse_opts(int argc, char** argv, opts* o) {
-    for (int i = 0; i < argc; i++)
-        if (!strcmp(argv[i], "-t")) o->t = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "-l")) o->l = atoi(argv[++i]);
-        else if ((!strcmp(argv[i], "-i") || !strcmp(argv[i], "--in")) && !o->in) o->in = argv[++i];
-        else if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && !o->out) o->out = argv[++i];
-        else return false;
-    return true;
-}
-
-void pack(const opts* o) {
-    printf("snape pack: %d threads\n", o->t);
+static int usage() {
+    std::printf("usage: snape <extract|count> -i in [-o out] [-t N] [-l L]\n");
+    return 1;
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) { usage(); return 1; }
-    opts o = {nullptr, nullptr, 16, 5};
-    if (!parse_opts(argc - 2, argv + 2, &o)) { usage(); return 1; }
-    if (!strcmp(argv[1], "pack")) pack(&o);
-    else if (!strcmp(argv[1], "extract")) {
-        if (!o.in) { usage(); return 1; }
-        return cmd_extract(o.in, o.out, o.t, o.l);
-    }
-    else if (!strcmp(argv[1], "count")) {
-        if (!o.in) { usage(); return 1; }
-        return cmd_count(o.in, o.out, o.t);
-    }
-    else { usage(); return 1; }
-    return 0;
+    const char *in = nullptr, *out = nullptr;
+    int t = 16, l = 5;
+    for (int i = 2; i + 1 < argc; i += 2)
+        if (!std::strcmp(argv[i], "-i")) in = argv[i + 1];
+        else if (!std::strcmp(argv[i], "-o")) out = argv[i + 1];
+        else if (!std::strcmp(argv[i], "-t")) t = std::atoi(argv[i + 1]);
+        else if (!std::strcmp(argv[i], "-l")) l = std::atoi(argv[i + 1]);
+        else return usage();
+    if (argc < 2 || !in) return usage();
+    bool ex = !std::strcmp(argv[1], "extract");
+    std::string o = out ? out : std::string(in) + (ex ? ".exc" : ".cnt");
+    if (ex) return cmd_extract(in, o.c_str(), t, l);
+    if (!std::strcmp(argv[1], "count")) return cmd_count(in, o.c_str(), t);
+    return usage();
 }

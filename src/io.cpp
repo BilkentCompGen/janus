@@ -1,7 +1,6 @@
-#include <fcntl.h>
 #include <pthread.h>
-#include <sys/mman.h>
 #include <unistd.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -16,53 +15,47 @@ code_table::code_table() {
 
 const code_table CODE;
 
-const uint8_t* map_file(const char* path) {
-    int fd = open(path, O_RDONLY);
-    const uint8_t* p = (const uint8_t*)mmap(nullptr, lseek(fd, 0, SEEK_END), PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    return p;
+FILE* open_in(const char* path, bin_header* h) {
+    FILE* f = std::fopen(path, "rb");
+    std::fread(h, 1, sizeof(bin_header), f);
+    return f;
 }
 
 FILE* open_tmp(const char* path) {
-    std::string tmp = std::string(path) + ".tmp";
-    FILE* fo = std::fopen(tmp.c_str(), "wb+");
+    FILE* fo = std::fopen((std::string(path) + ".tmp").c_str(), "wb+");
     std::setvbuf(fo, nullptr, _IOFBF, 1 << 22);
     return fo;
 }
 
-void commit_file(FILE* fo, const char* path) {
+void finish(FILE* fo, const char* path, const bin_header* h) {
+    std::fseek(fo, 0, SEEK_SET);
+    std::fwrite(h, 1, sizeof(bin_header), fo);
     std::fclose(fo);
     std::rename((std::string(path) + ".tmp").c_str(), path);
 }
 
-void bput(block* b, const void* d, size_t n) {
-    if (b->outlen + n > b->outcap) {
-        b->outcap = (b->outlen + n) * 2;
-        b->out = (char*)std::realloc(b->out, b->outcap);
-    }
-    std::memcpy(b->out + b->outlen, d, n);
-    b->outlen += n;
+struct pjob { par_fn f; void* ctx; int i; };
+
+static void* prun(void* a) {
+    pjob* j = (pjob*)a;
+    j->f(j->ctx, j->i);
+    return nullptr;
 }
 
-void bgrow(block* b, size_t n) {
-    if (n > b->bufcap) { b->bufcap = 2 * n + 64; b->buf = (char*)std::realloc(b->buf, b->bufcap); }
+void par(int n, par_fn f, void* ctx) {
+    pthread_t th[65];
+    pjob j[65];
+    for (int i = 0; i < n; i++) { j[i] = {f, ctx, i}; pthread_create(&th[i], nullptr, prun, &j[i]); }
+    for (int i = 0; i < n; i++) pthread_join(th[i], nullptr);
 }
 
-void wbits(block* b, bits* s, uint64_t v, int w) {
-    s->acc = (s->acc << w) | v;
-    s->pos += w;
-    while (s->pos >= 8) {
-        s->pos -= 8;
-        char c = (char)(s->acc >> s->pos);
-        bput(b, &c, 1);
-    }
+void wbits(bits* s, uint64_t v, int w) {
+    s->acc = s->acc << w | v;
+    for (s->pos += w; s->pos >= 8; s->pos -= 8) s->out->push_back((char)(s->acc >> (s->pos - 8)));
 }
 
-void wflush(block* b, bits* s) {
-    if (!s->pos) return;
-    char c = (char)(s->acc << (8 - s->pos));
-    bput(b, &c, 1);
-    s->pos = 0;
+void wflush(bits* s) {
+    if (s->pos) wbits(s, 0, 8 - s->pos);
 }
 
 size_t nlines(const char* p, size_t n, int k) {
@@ -84,121 +77,89 @@ size_t svb_size(const char* p, size_t n) {
     return sz <= n ? sz : 0;
 }
 
-static work_fn g_work;
+struct part { int fd; char* p; size_t n, got[8]; long o; };
 
-static void* run_block(void* a) {
-    g_work((block*)a);
-    return nullptr;
-}
-
-struct part { int fd; char* p; size_t n, got; long o; };
-
-static void* read_part(void* a) {
+static void read_part(void* a, int i) {
     part* r = (part*)a;
-    for (ssize_t g = 1; g > 0 && r->got < r->n; r->got += g) g = pread(r->fd, r->p + r->got, r->n - r->got, r->o + r->got);
-    return nullptr;
+    size_t at = r->n * i / 8, end = r->n * (i + 1) / 8;
+    for (ssize_t g = 1; g > 0 && at < end; at += g) g = pread(r->fd, r->p + at, end - at, r->o + at);
+    r->got[i] = at - r->n * i / 8;
 }
 
 static size_t pread8(char* p, size_t n, FILE* f) {
-    long o = std::ftell(f);
-    part r[8];
-    pthread_t th[8];
+    part r = {fileno(f), p, n, {}, std::ftell(f)};
+    par(8, read_part, &r);
     size_t got = 0;
-    for (int i = 0; i < 8; i++) {
-        r[i] = {fileno(f), p + n * i / 8, n * (i + 1) / 8 - n * i / 8, 0, o + (long)(n * i / 8)};
-        pthread_create(&th[i], nullptr, read_part, &r[i]);
-    }
-    for (int i = 0; i < 8; i++) { pthread_join(th[i], nullptr); got += r[i].got; }
-    std::fseek(f, o + (long)got, SEEK_SET);
+    for (size_t g : r.got) got += g;
+    std::fseek(f, r.o + (long)got, SEEK_SET);
     return got;
 }
 
-struct filler { FILE* f1; FILE* f2; char* b1; char* b2; size_t k1, k2, cap, l1, l2; };
+struct stream { FILE* f; size_fn sf; char* b[2]; size_t len, off, start, next; };
 
-static void* fill(void* a) {
-    filler* f = (filler*)a;
-    f->l1 = f->k1 + pread8(f->b1 + f->k1, f->cap - f->k1, f->f1);
-    if (f->f2) f->l2 = f->k2 + pread8(f->b2 + f->k2, f->cap - f->k2, f->f2);
-    return nullptr;
+struct batch { stream* s; block* b; work_fn wf; int n, nb, cur; size_t cap; };
+
+static void run(void* a, int i) {
+    batch* r = (batch*)a;
+    if (i < r->nb) { r->wf(&r->b[i]); return; }
+    for (int j = 0; j < r->n; j++) {
+        stream* s = &r->s[j];
+        size_t k = s->len - s->off;
+        std::memcpy(s->b[r->cur ^ 1], s->b[r->cur] + s->off, k);
+        s->next = k + pread8(s->b[r->cur ^ 1] + k, r->cap - k, s->f);
+    }
 }
 
-uint64_t stream_run(FILE* fi, FILE* f2, FILE* fo, size_t hdrsz, int t, size_fn sf, size_fn s2, work_fn wf, void* ctx) {
-    if (t > 64) t = 64;
-    g_work = wf;
-    std::fseek(fo, (long)hdrsz, SEEK_SET);
-    size_t icap = IBUF;
-    char* ib[2] = {(char*)std::malloc(icap), (char*)std::malloc(icap)};
-    char* jb[2] = {nullptr, nullptr};
-    if (f2) { jb[0] = (char*)std::malloc(icap); jb[1] = (char*)std::malloc(icap); }
-    block* b = (block*)std::calloc(t, sizeof(block));
-    pthread_t* th = (pthread_t*)std::malloc(t * sizeof(pthread_t));
-    pthread_t rd;
-    for (int i = 0; i < t; i++) { b[i].id = i; b[i].ctx = ctx; }
-    int cur = 0;
+static void cut(block* b, stream* s, int n, int cur) {
+    for (int i = 0; i < n; i++) {
+        b->in[i] = s[i].b[cur] + s[i].start;
+        b->inlen[i] = s[i].off - s[i].start;
+        s[i].start = s[i].off;
+    }
+}
+
+uint64_t stream_run(FILE* fi, FILE* f2, FILE* fo, int t, size_fn sf, size_fn s2, work_fn wf, void* ctx) {
+    stream s[2] = {{fi, sf, {}, 0, 0, 0, 0}, {f2, s2, {}, 0, 0, 0, 0}};
+    block b[64];
+    batch r = {s, b, wf, f2 ? 2 : 1, 0, 0, IBUF};
     uint64_t nrec = 0;
-    size_t ilen = pread8(ib[0], icap, fi), jlen = 0;
-    if (f2) jlen = pread8(jb[0], icap, f2);
-    while (ilen) {
-        size_t target = ilen / t + 1, off = 0, start = 0, off2 = 0, start2 = 0;
-        int nb = 0;
+    t = std::min(t, 64);
+    std::fseek(fo, sizeof(bin_header), SEEK_SET);
+    for (int i = 0; i < t; i++) { b[i].id = i; b[i].ctx = ctx; b[i].out.reserve(IBUF); }
+    for (int i = 0; i < r.n; i++) {
+        s[i].b[0] = (char*)std::malloc(IBUF + 8);
+        s[i].b[1] = (char*)std::malloc(IBUF + 8);
+        s[i].len = pread8(s[i].b[0], IBUF, s[i].f);
+    }
+    while (s[0].len) {
+        int i;
+        r.nb = 0;
+        for (i = 0; i < r.n; i++) s[i].off = s[i].start = 0;
         for (;;) {
-            size_t r = sf(ib[cur] + off, ilen - off);
-            if (!r) break;
-            if (f2) {
-                size_t r2 = s2(jb[cur] + off2, jlen - off2);
-                if (!r2) break;
-                off2 += r2;
-            }
-            off += r;
+            size_t z[2];
+            for (i = 0; i < r.n && (z[i] = s[i].sf(s[i].b[r.cur] + s[i].off, s[i].len - s[i].off)); i++);
+            if (i < r.n) break;
+            for (i = 0; i < r.n; i++) s[i].off += z[i];
             nrec++;
-            if (off - start >= target && nb < t - 1) {
-                b[nb].in = ib[cur] + start;
-                b[nb].inlen = off - start;
-                b[nb].in2 = f2 ? jb[cur] + start2 : nullptr;
-                b[nb].inlen2 = off2 - start2;
-                nb++;
-                start = off;
-                start2 = off2;
-            }
+            if (s[0].off - s[0].start > s[0].len / t && r.nb < t - 1) cut(&b[r.nb++], s, r.n, r.cur);
         }
-        if (off > start) {
-            b[nb].in = ib[cur] + start;
-            b[nb].inlen = off - start;
-            b[nb].in2 = f2 ? jb[cur] + start2 : nullptr;
-            b[nb].inlen2 = off2 - start2;
-            nb++;
-        }
-        if (!nb) {
-            if (ilen < icap && (!f2 || jlen < icap)) break;
-            icap *= 2;
-            ib[0] = (char*)std::realloc(ib[0], icap);
-            ib[1] = (char*)std::realloc(ib[1], icap);
-            ilen += pread8(ib[cur] + ilen, icap - ilen, fi);
-            if (f2) {
-                jb[0] = (char*)std::realloc(jb[0], icap);
-                jb[1] = (char*)std::realloc(jb[1], icap);
-                jlen += pread8(jb[cur] + jlen, icap - jlen, f2);
+        if (s[0].off > s[0].start) cut(&b[r.nb++], s, r.n, r.cur);
+        if (!r.nb) {
+            for (i = 0; i < r.n && s[i].len < r.cap; i++);
+            if (i == r.n) break;
+            r.cap *= 2;
+            for (i = 0; i < r.n; i++) {
+                s[i].b[0] = (char*)std::realloc(s[i].b[0], r.cap + 8);
+                s[i].b[1] = (char*)std::realloc(s[i].b[1], r.cap + 8);
+                s[i].len += pread8(s[i].b[r.cur] + s[i].len, r.cap - s[i].len, s[i].f);
             }
             continue;
         }
-        filler f = {fi, f2, ib[cur ^ 1], jb[cur ^ 1], ilen - off, jlen - off2, icap, 0, 0};
-        std::memcpy(f.b1, ib[cur] + off, f.k1);
-        if (f2) std::memcpy(f.b2, jb[cur] + off2, f.k2);
-        pthread_create(&rd, nullptr, fill, &f);
-        for (int i = 0; i < nb; i++) pthread_create(&th[i], nullptr, run_block, &b[i]);
-        for (int i = 0; i < nb; i++) pthread_join(th[i], nullptr);
-        for (int i = 0; i < nb; i++) { std::fwrite(b[i].out, 1, b[i].outlen, fo); b[i].outlen = 0; }
-        pthread_join(rd, nullptr);
-        cur ^= 1;
-        ilen = f.l1;
-        jlen = f.l2;
+        par(r.nb + 1, run, &r);
+        for (i = 0; i < r.nb; i++) { std::fwrite(b[i].out.data(), 1, b[i].out.size(), fo); b[i].out.clear(); }
+        r.cur ^= 1;
+        for (i = 0; i < r.n; i++) s[i].len = s[i].next;
     }
-    for (int i = 0; i < t; i++) { std::free(b[i].out); std::free(b[i].buf); }
-    std::free(b);
-    std::free(th);
-    std::free(ib[0]);
-    std::free(ib[1]);
-    std::free(jb[0]);
-    std::free(jb[1]);
+    for (int i = 0; i < r.n; i++) { std::fclose(s[i].f); std::free(s[i].b[0]); std::free(s[i].b[1]); }
     return nrec;
 }
