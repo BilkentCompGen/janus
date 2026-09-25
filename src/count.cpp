@@ -9,9 +9,9 @@
 
 static const uint32_t MM = 3, MARGIN = 10, NS = 65536, M31 = (1u << 31) - 1;
 
-struct cth { rdcore r; std::vector<uint64_t> h, ev; };
+struct cth { rdcore r; std::vector<uint64_t> h; std::vector<std::pair<uint64_t, uint16_t>> ev; };
 
-struct cctx { cth* c; uint64_t *tab, *pr; uint32_t* sc; std::vector<uint32_t> deg; uint64_t z, np, K; int w, t, fd; };
+struct cctx { cth* c; uint64_t *tab, *pr; uint16_t* pc; uint32_t* sc; std::vector<uint32_t> deg; uint64_t z, np, K; int w, t, fd; };
 
 static uint64_t home(const cctx* x, uint64_t h) { return (h >> 48) * x->z + (((h >> 32) & 0xffff) * x->z >> 16); }
 
@@ -33,7 +33,10 @@ static uint64_t add(cctx* x, uint64_t h) {
 static void padd(cctx* x, uint64_t k) {
     for (uint64_t i = phome(x, k);; i = i + 1 == x->np ? 0 : i + 1) {
         uint64_t v = 0;
-        if (__atomic_compare_exchange_n(&x->pr[i], &v, k, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED) || v == k) return;
+        if (__atomic_compare_exchange_n(&x->pr[i], &v, k, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED) || v == k) {
+            if (x->pc[i] < 0xffff) __atomic_fetch_add(&x->pc[i], 1, __ATOMIC_RELAXED);
+            return;
+        }
     }
 }
 
@@ -95,12 +98,12 @@ static void shard_emit(void* a, int i) {
 
 static void edge_pick(void* a, int i) {
     cctx* x = (cctx*)a;
-    std::vector<uint64_t>& ev = x->c[i].ev;
+    std::vector<std::pair<uint64_t, uint16_t>>& ev = x->c[i].ev;
     for (uint64_t j = 0; j < x->np; j++) {
         uint64_t k = x->pr[j], s1 = k >> 31 & M31;
         if (!k || s1 < shard(x, i) * x->z || s1 >= shard(x, i + 1) * x->z) continue;
         uint64_t r1 = x->tab[s1], r2 = x->tab[k & M31];
-        if (r1 && r2) { ev.push_back((r1 - 1) << 32 | (r2 - 1)); x->deg[r1 - 1]++; }
+        if (r1 && r2) { ev.push_back({(r1 - 1) << 32 | (r2 - 1), x->pc[j]}); x->deg[r1 - 1]++; }
     }
     std::sort(ev.begin(), ev.end());
 }
@@ -113,10 +116,11 @@ int cmd_count(const char* in, const char* out, int t) {
     std::vector<uint32_t> sc(NS + 1);
     std::vector<char> ob;
     FILE* fi = open_in(in, &h), *fe = open_in((std::string(in) + ".exc").c_str(), &e), *fo = open_tmp(out);
-    cctx x = {c.data(), nullptr, nullptr, sc.data(), {}, (e.total / 24 + 120000000) / NS + 64, 0, 0, e.resv[1], t, fileno(fo)};
+    cctx x = {c.data(), nullptr, nullptr, nullptr, sc.data(), {}, (e.total / 24 + 120000000) / NS + 64, 0, 0, e.resv[1], t, fileno(fo)};
     x.np = NS * x.z * 5 / 4;
     x.tab = (uint64_t*)std::calloc(NS * x.z, 8);
     x.pr = (uint64_t*)std::calloc(x.np, 8);
+    x.pc = (uint16_t*)std::calloc(x.np, 2);
     stream_run(fi, fe, fo, t, svb_size, exc_size, cnt_work, &x);
     par(t, shard_count, &x);
     for (uint32_t s = 0; s < NS; s++) sc[s + 1] += sc[s];
@@ -126,14 +130,17 @@ int cmd_count(const char* in, const char* out, int t) {
     par(t, edge_pick, &x);
     std::free(x.tab);
     std::free(x.pr);
+    std::free(x.pc);
     uint64_t E = 0, md = 0;
     for (uint32_t d : x.deg) { E += d; md = std::max<uint64_t>(md, d); }
     bits bw = {&ob, 0, 0};
     int rb = nbits(x.K - 1), db = nbits(md);
     for (uint32_t d : x.deg) wbits(&bw, d, db);
-    for (cth& q : c) for (uint64_t v : q.ev) wbits(&bw, (uint32_t)v, rb);
+    std::vector<uint16_t> ec;
+    for (cth& q : c) for (auto& v : q.ev) { wbits(&bw, (uint32_t)v.first, rb); ec.push_back(v.second); }
     wflush(&bw);
     std::fseek(fo, sizeof(bin_header) + x.K * 10, SEEK_SET);
+    std::fwrite(ec.data(), 2, E, fo);
     std::fwrite(ob.data(), 1, ob.size(), fo);
     bin_header o = {{'S', 'V', 'B', 'C'}, 1, x.K, E, {(uint8_t)rb, (uint8_t)db, MM, MARGIN}};
     finish(fo, out, &o);

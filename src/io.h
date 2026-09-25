@@ -22,6 +22,8 @@ FILE* open_in(const char* path, bin_header* h);
 FILE* open_tmp(const char* path);
 void finish(FILE* fo, const char* path, const bin_header* h);
 void par(int n, par_fn f, void* ctx);
+uint64_t be64(const uint8_t* p);
+uint32_t rbits(const uint8_t* p, uint64_t* pos, int w);
 void wbits(bits* s, uint64_t v, int w);
 void wflush(bits* s);
 size_t nlines(const char* p, size_t n, int k);

@@ -49,6 +49,18 @@ void par(int n, par_fn f, void* ctx) {
     for (int i = 0; i < n; i++) pthread_join(th[i], nullptr);
 }
 
+uint64_t be64(const uint8_t* p) {
+    uint64_t x;
+    std::memcpy(&x, p, 8);
+    return __builtin_bswap64(x);
+}
+
+uint32_t rbits(const uint8_t* p, uint64_t* pos, int w) {
+    uint32_t v = (uint32_t)((be64(p + (*pos >> 3)) << (*pos & 7)) >> (64 - w));
+    *pos += w;
+    return v;
+}
+
 void wbits(bits* s, uint64_t v, int w) {
     s->acc = s->acc << w | v;
     for (s->pos += w; s->pos >= 8; s->pos -= 8) s->out->push_back((char)(s->acc >> (s->pos - 8)));

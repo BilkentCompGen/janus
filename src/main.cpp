@@ -4,9 +4,10 @@
 #include <string>
 #include "count.h"
 #include "extract.h"
+#include "graph.h"
 
 static int usage() {
-    std::printf("usage: snape <extract|count> -i in [-o out] [-t N] [-l L]\n");
+    std::printf("usage: snape <extract|count|graph> -i in [-o out] [-t N] [-l L]\n");
     return 1;
 }
 
@@ -24,5 +25,6 @@ int main(int argc, char** argv) {
     std::string o = out ? out : std::string(in) + (ex ? ".exc" : ".cnt");
     if (ex) return cmd_extract(in, o.c_str(), t, l);
     if (!std::strcmp(argv[1], "count")) return cmd_count(in, o.c_str(), t);
+    if (!std::strcmp(argv[1], "graph")) return cmd_graph(in, out);
     return usage();
 }

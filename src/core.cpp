@@ -5,18 +5,6 @@
 
 __extension__ typedef unsigned __int128 u128;
 
-static uint64_t be64(const uint8_t* p) {
-    uint64_t x;
-    std::memcpy(&x, p, 8);
-    return __builtin_bswap64(x);
-}
-
-static uint32_t rbits(const uint8_t* p, uint64_t* pos, int w) {
-    uint32_t v = (uint32_t)((be64(p + (*pos >> 3)) << (*pos & 7)) >> (64 - w));
-    *pos += w;
-    return v;
-}
-
 static uint64_t rev2(uint64_t x) {
     x = __builtin_bswap64(x);
     x = ((x >> 4) & 0x0f0f0f0f0f0f0f0full) | ((x & 0x0f0f0f0f0f0f0f0full) << 4);
