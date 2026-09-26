@@ -46,12 +46,7 @@ static void sample(const char* path, const std::vector<uint64_t>& g, uint16_t* c
 }
 
 int cmd_graph(const char* in, const char* out) {
-    std::vector<std::string> ps;
-    std::string p = in;
-    for (size_t a = 0, b; a < p.size(); a = b + 1) {
-        b = std::min(p.find(',', a), p.size());
-        ps.push_back(p.substr(a, b - a));
-    }
+    std::vector<std::string> ps = split(in);
     std::vector<uint64_t> g, e, s, t;
     std::vector<uint16_t> sc;
     for (auto& x : ps) {

@@ -70,6 +70,16 @@ void wflush(bits* s) {
     if (s->pos) wbits(s, 0, 8 - s->pos);
 }
 
+std::vector<std::string> split(const char* s) {
+    std::vector<std::string> v;
+    std::string p = s;
+    for (size_t a = 0, b; a < p.size(); a = b + 1) {
+        b = std::min(p.find(',', a), p.size());
+        v.push_back(p.substr(a, b - a));
+    }
+    return v;
+}
+
 size_t nlines(const char* p, size_t n, int k) {
     size_t i = 0;
     while (k--) {

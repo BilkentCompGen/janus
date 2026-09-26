@@ -5,18 +5,20 @@
 #include "count.h"
 #include "extract.h"
 #include "graph.h"
+#include "prune.h"
 
 static int usage() {
-    std::printf("usage: snape <extract|count|graph> -i in [-o out] [-t N] [-l L]\n");
+    std::printf("usage: snape <extract|count|graph|prune> -i in [-r reads] [-o out] [-t N] [-l L]\n");
     return 1;
 }
 
 int main(int argc, char** argv) {
-    const char *in = nullptr, *out = nullptr;
+    const char *in = nullptr, *out = nullptr, *rd = nullptr;
     int t = 16, l = 5;
     for (int i = 2; i + 1 < argc; i += 2)
         if (!std::strcmp(argv[i], "-i")) in = argv[i + 1];
         else if (!std::strcmp(argv[i], "-o")) out = argv[i + 1];
+        else if (!std::strcmp(argv[i], "-r")) rd = argv[i + 1];
         else if (!std::strcmp(argv[i], "-t")) t = std::atoi(argv[i + 1]);
         else if (!std::strcmp(argv[i], "-l")) l = std::atoi(argv[i + 1]);
         else return usage();
@@ -26,5 +28,6 @@ int main(int argc, char** argv) {
     if (ex) return cmd_extract(in, o.c_str(), t, l);
     if (!std::strcmp(argv[1], "count")) return cmd_count(in, o.c_str(), t);
     if (!std::strcmp(argv[1], "graph")) return cmd_graph(in, out);
+    if (!std::strcmp(argv[1], "prune")) return cmd_prune(in, rd, out, t);
     return usage();
 }

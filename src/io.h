@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 struct bin_header { char magic[4]; uint32_t ver; uint64_t nreads, total; uint8_t resv[8]; };
@@ -28,4 +29,5 @@ void wbits(bits* s, uint64_t v, int w);
 void wflush(bits* s);
 size_t nlines(const char* p, size_t n, int k);
 size_t svb_size(const char* p, size_t n);
+std::vector<std::string> split(const char* s);
 uint64_t stream_run(FILE* fi, FILE* f2, FILE* fo, int t, size_fn sf, size_fn s2, work_fn wf, void* ctx);
