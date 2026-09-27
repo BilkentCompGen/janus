@@ -11,7 +11,7 @@ struct code_table { uint8_t t[256]; code_table(); };
 
 extern const code_table CODE;
 
-struct block { int id; const char* in[2]; size_t inlen[2]; std::vector<char> out; void* ctx; };
+struct block { int id; const char* in[2]; size_t inlen[2]; std::vector<char> out; void* ctx; uint64_t rec; };
 
 struct bits { std::vector<char>* out; uint64_t acc; int pos; };
 

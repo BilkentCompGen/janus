@@ -7,7 +7,7 @@ static const uint32_t X = 20;
 
 struct fctx { std::vector<want>* w; std::vector<uint32_t> fo, fi; };
 
-static std::string bases(const rdcore* r, const uint8_t* rec, uint32_t lo, uint32_t hi, uint32_t rc) {
+std::string bases(const rdcore* r, const uint8_t* rec, uint32_t lo, uint32_t hi, uint32_t rc) {
     const uint8_t* q = rec[3] >> 7 ? r->raw.data() : rec + 4;
     std::string s(hi - lo, 0);
     for (uint32_t i = lo; i < hi; i++) {
@@ -21,7 +21,8 @@ static void rp_work(block* b) {
     rpass* x = (rpass*)b->ctx;
     rth* c = &x->t[b->id];
     rdcore* r = &c->r;
-    for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2)) {
+    uint64_t rid = b->rec;
+    for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2), rid++) {
         const uint8_t* rec = (const uint8_t*)b->in[0] + o;
         collapse(r, rec);
         load_cores(r, (const uint8_t*)b->in[1] + o2, x->wb);
@@ -34,7 +35,7 @@ static void rp_work(block* b) {
                 uint32_t v = look(*x->g, x->off, c->h[i]);
                 if (v < x->g->size() && (*x->g)[v] == c->h[i]) { c->id[m] = v; c->ix[m++] = i; }
             }
-            x->fn(x, c, rec, m, s ? 3 : 0);
+            x->fn(x, c, rec, m, s ? 3 : 0, rid);
         }
     }
 }
@@ -53,7 +54,7 @@ void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, int 
     std::fclose(fo);
 }
 
-static void match(rpass* x, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc) {
+static void match(rpass* x, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t) {
     fctx* f = (fctx*)x->ctx;
     const rdcore* r = &c->r;
     for (uint32_t i = 0; i < m; i++)
@@ -82,14 +83,18 @@ void fetch(std::vector<want>& w, const std::vector<uint64_t>& g, const char* rea
 }
 
 static uint32_t edit(const char* x, uint32_t n, const char* y, uint32_t m) {
-    std::vector<uint32_t> p(m + 1), c(m + 1);
-    for (uint32_t j = 0; j <= m; j++) p[j] = j;
+    if (n > m + X || m > n + X) return X;
+    std::vector<uint32_t> p(m + 2, X), c(m + 2, X);
+    for (uint32_t j = 0; j <= m && j < X; j++) p[j] = j;
     for (uint32_t i = 1; i <= n; i++) {
-        c[0] = i;
-        for (uint32_t j = 1; j <= m; j++) c[j] = std::min(std::min(p[j] + 1, c[j - 1] + 1), p[j - 1] + (x[i - 1] != y[j - 1]));
+        uint32_t lo = i > X ? i - X : 1, hi = std::min(m, i + X), best = X;
+        c[lo - 1] = lo == 1 ? std::min(i, X) : X;
+        for (uint32_t j = lo; j <= hi; j++) best = std::min(best, c[j] = std::min(std::min(p[j] + 1, c[j - 1] + 1), std::min(p[j - 1] + (x[i - 1] != y[j - 1]), X)));
+        if (hi < m) c[hi + 1] = X;
+        if (best >= X) return X;
         p.swap(c);
     }
-    return p[m];
+    return std::min(p[m], X);
 }
 
 bool same(const std::string& t, const std::string& n) {

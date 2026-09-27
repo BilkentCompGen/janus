@@ -132,7 +132,9 @@ static void run(void* a, int i) {
     }
 }
 
-static void cut(block* b, stream* s, int n, int cur) {
+static void cut(block* b, stream* s, int n, int cur, uint64_t* rec, uint64_t nrec) {
+    b->rec = *rec;
+    *rec = nrec;
     for (int i = 0; i < n; i++) {
         b->in[i] = s[i].b[cur] + s[i].start;
         b->inlen[i] = s[i].off - s[i].start;
@@ -144,7 +146,7 @@ uint64_t stream_run(FILE* fi, FILE* f2, FILE* fo, int t, size_fn sf, size_fn s2,
     stream s[2] = {{fi, sf, {}, 0, 0, 0, 0}, {f2, s2, {}, 0, 0, 0, 0}};
     block b[64];
     batch r = {s, b, wf, f2 ? 2 : 1, 0, 0, IBUF};
-    uint64_t nrec = 0;
+    uint64_t nrec = 0, rec = 0;
     t = std::min(t, 64);
     std::fseek(fo, sizeof(bin_header), SEEK_SET);
     for (int i = 0; i < t; i++) { b[i].id = i; b[i].ctx = ctx; b[i].out.reserve(IBUF); }
@@ -163,9 +165,9 @@ uint64_t stream_run(FILE* fi, FILE* f2, FILE* fo, int t, size_fn sf, size_fn s2,
             if (i < r.n) break;
             for (i = 0; i < r.n; i++) s[i].off += z[i];
             nrec++;
-            if (s[0].off - s[0].start > s[0].len / t && r.nb < t - 1) cut(&b[r.nb++], s, r.n, r.cur);
+            if (s[0].off - s[0].start > s[0].len / t && r.nb < t - 1) cut(&b[r.nb++], s, r.n, r.cur, &rec, nrec);
         }
-        if (s[0].off > s[0].start) cut(&b[r.nb++], s, r.n, r.cur);
+        if (s[0].off > s[0].start) cut(&b[r.nb++], s, r.n, r.cur, &rec, nrec);
         if (!r.nb) {
             for (i = 0; i < r.n && s[i].len < r.cap; i++);
             if (i == r.n) break;
