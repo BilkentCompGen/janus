@@ -81,7 +81,7 @@ static void tally(rpass* p, rth* c, const uint8_t*, uint32_t m, uint32_t, uint64
     std::vector<hit>& h = q->h[c - p->t.data()];
     chain_keys(q->x, c, m, h);
     for (const hit& o : h) {
-        uint32_t st = c->r.a[c->ix[o.a]], en = c->r.b[c->ix[o.b]], w = q->x->mode ? std::min(st, c->r.len - en) : c->r.len;
+        uint32_t st = c->r.a[c->ix[o.a]], en = c->r.b[c->ix[o.b]], f = std::min(st, c->r.len - en), w = q->x->mode == 2 ? std::min(f, 4095u) << 19 | std::min(c->r.len >> 2, (1u << 19) - 1) : q->x->mode ? f : c->r.len;
         add(q->x, o.key, p->f, (uint64_t)w << 32 | (0xffffffffu - (uint32_t)rid));
     }
 }

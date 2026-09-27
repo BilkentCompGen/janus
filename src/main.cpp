@@ -34,6 +34,6 @@ int main(int argc, char** argv) {
     if (!std::strcmp(argv[1], "graph")) return cmd_graph(in, out);
     if (!std::strcmp(argv[1], "prune")) return cmd_prune(in, rd, out, t);
     if (!std::strcmp(argv[1], "select")) return cmd_select(in, dr, rd, out, t, md);
-    if (!std::strcmp(argv[1], "call")) return cmd_call(in, rd, out);
+    if (!std::strcmp(argv[1], "call")) return cmd_call(in, rd, dr, out);
     return usage();
 }

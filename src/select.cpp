@@ -1,19 +1,20 @@
 #include <algorithm>
 #include <string>
+#include <unordered_map>
 #include "io.h"
 #include "keys.h"
 #include "mates.h"
 #include "select.h"
 
-static const uint32_t MM = 3, PAD = 1000, SEG = 5000, NONE = ~0u;
+static const uint32_t MM = 5, PAD = 1000, SEG = 5000, NONE = ~0u;
 
-struct unit { uint64_t read, key; uint32_t L, R, fa, fb, site; std::string seg; std::vector<uint32_t> mt; };
+struct unit { uint64_t read, key; uint32_t L, R, L2, R2, fa, fb, site; std::string seg; std::vector<uint32_t> mt; };
 
 struct job { uint64_t read; uint32_t w, k, rc, fa, fb; };
 
 struct rout { std::vector<std::pair<uint32_t, uint32_t>> iv; std::vector<std::string> s; std::vector<uint32_t> lo; };
 
-struct sctx { keys* x; std::vector<mate>* w; std::vector<uint8_t> full; std::vector<unit> u; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; };
+struct sctx { keys* x; std::vector<mate>* w; std::unordered_map<uint64_t, uint32_t> dix; std::vector<uint32_t> dep; std::vector<uint8_t> full; std::vector<unit> u; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; };
 
 static bool by_read(const unit& p, const unit& q) { return p.read < q.read; }
 
@@ -21,19 +22,38 @@ static bool by_job(const job& p, const job& q) { return p.read < q.read; }
 
 static bool odd(const keys* x, uint64_t i) {
     bool on = false, off = false;
-    for (uint64_t s = 0; s < x->S; s++) { on |= x->n[i * x->S + s] >= MM; off |= x->n[i * x->S + s] < MM; }
+    for (uint64_t s = 0; s < x->S; s++) { on |= x->n[i * x->S + s] >= MM; off |= x->n[i * x->S + s] == 0; }
     return on && off;
 }
 
 static void gather(sctx* c, const std::vector<uint8_t>& drop) {
     keys* x = c->x;
     const gph* g = x->g;
+    std::vector<std::pair<uint64_t, uint64_t>> at;
+    for (uint64_t i = 0; i < x->Z; i++) {
+        if (!x->k[i]) continue;
+        uint64_t ei = (x->k[i] >> 32) - 1, eo = x->k[i] & 0xffffffff, b = g->e[ei] & 0xffffffff;
+        at.push_back({(g->e[eo] >> 32) == b ? b : g->K + x->unit[b], i});
+    }
+    std::sort(at.begin(), at.end());
+    for (size_t i = 0, j; i < at.size(); i = j) {
+        std::vector<uint32_t> d(x->S, 0);
+        bool any = false;
+        for (j = i; j < at.size() && at[j].first == at[i].first; j++) {
+            for (uint64_t s = 0; s < x->S; s++) d[s] += x->n[at[j].second * x->S + s];
+            any |= odd(x, at[j].second);
+        }
+        if (!any) continue;
+        for (size_t q = i; q < j; q++) c->dix[at[q].second] = c->dep.size();
+        c->dep.insert(c->dep.end(), d.begin(), d.end());
+    }
+    at = {};
     for (uint64_t i = 0; i < x->Z; i++) {
         if (!x->k[i] || !odd(x, i)) continue;
         uint64_t ei = (x->k[i] >> 32) - 1, eo = x->k[i] & 0xffffffff;
         if (drop[g->e[ei] >> 32] || drop[g->e[ei] & 0xffffffff] || drop[g->e[eo] >> 32] || drop[g->e[eo] & 0xffffffff]) continue;
         for (uint64_t s = 0; s < x->S; s++)
-            if (x->n[i * x->S + s]) c->u.push_back({s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]), i, NONE, NONE, 0, 0, 0, "", {}});
+            if (x->n[i * x->S + s]) c->u.push_back({s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]), i, NONE, NONE, NONE, NONE, 0, 0, 0, "", {}});
     }
     std::sort(c->u.begin(), c->u.end(), by_read);
     for (size_t i = 0; i < c->u.size(); i++)
@@ -56,8 +76,13 @@ static void anchor(rpass* p, rth* t, const uint8_t* rec, uint32_t m, uint32_t rc
             while (a > 0 && !c->full[t->id[a]]) a--;
             while (b + 1 < m && !c->full[t->id[b]]) b++;
             uint32_t st = d->a[t->ix[a]], en = d->b[t->ix[b]];
+            uint32_t a2 = a, b2 = b;
+            while (a2 > 0 && (a2 == a || !c->full[t->id[a2]])) a2--;
+            while (b2 + 1 < m && (b2 == b || !c->full[t->id[b2]])) b2++;
             e->L = c->full[t->id[a]] ? t->id[a] : NONE;
             e->R = c->full[t->id[b]] ? t->id[b] : NONE;
+            e->L2 = a2 < a && c->full[t->id[a2]] ? t->id[a2] : NONE;
+            e->R2 = b2 > b && c->full[t->id[b2]] ? t->id[b2] : NONE;
             e->site = en - st;
             e->fa = rc ? d->len - en : st;
             e->fb = rc ? d->len - st : en;
@@ -108,7 +133,7 @@ static void pair_up(sctx* c) {
     std::sort(q.begin(), q.end());
     for (size_t i = 0; i < q.size(); i++) {
         const unit& e = c->u[q[i].second];
-        if (!i || q[i].first != q[i - 1].first) c->w->push_back({e.L, e.R, (uint32_t)q[i].first.second, e.site, {0, 0, 0}, ""});
+        if (!i || q[i].first != q[i - 1].first) c->w->push_back({e.L, e.R, e.L2, e.R2, (uint32_t)q[i].first.second, e.site, {0, 0, 0}, ""});
         c->u[q[i].second].mt.push_back(c->w->size() - 1);
     }
 }
@@ -194,7 +219,9 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
         const unit& e = c.u[j];
         uint32_t off;
         std::string nm = piece_of(&c, e.read, e.fa, off);
-        std::fprintf(v, "%s\t%u\t%u\talt\t%zu\t%s\t%s\n", nm.c_str(), e.fa - off, e.fb - off, j, counts(&x, e.key).c_str(), allele(e, w, x.S).c_str());
+        std::string dp;
+        for (uint64_t s = 0; s < x.S; s++) dp += (s ? "," : "") + std::to_string(c.dep[c.dix[e.key] + s]);
+        std::fprintf(v, "%s\t%u\t%u\talt\t%zu\t%s\t%s\t%s\t%lu\n", nm.c_str(), e.fa - off, e.fb - off, j, counts(&x, e.key).c_str(), allele(e, w, x.S).c_str(), dp.c_str(), (unsigned long)e.key);
         for (uint32_t i : e.mt)
             for (uint32_t q : mj[i]) {
                 const job& b = c.jb[q];

@@ -11,6 +11,15 @@ static void offer(uint64_t* b, uint64_t v) {
     while (v > o && !__atomic_compare_exchange_n(b, &o, v, true, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
 }
 
+static uint64_t reach(uint32_t in, uint32_t out, uint32_t site) {
+    return (uint64_t)std::min(in, site + 1000) << 10 | std::min(out, 1023u);
+}
+
+static bool seen(const std::vector<std::pair<uint32_t, uint32_t>>& ps, uint32_t v, uint32_t lo, uint32_t hi) {
+    auto it = std::lower_bound(ps.begin(), ps.end(), std::make_pair(v, lo));
+    return v == NONE || (it != ps.end() && it->first == v && it->second < hi);
+}
+
 static void score(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, uint64_t rid) {
     mctx* c = (mctx*)p->ctx;
     std::vector<std::pair<uint32_t, uint32_t>>& ps = c->pos[t - p->t.data()];
@@ -24,13 +33,13 @@ static void score(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, uin
         for (uint32_t q = c->lo[v]; q < c->lo[v + 1]; q++) {
             mate* w = &(*c->w)[c->li[q]];
             if (w->f != (uint32_t)p->f) continue;
-            offer(&w->best[1], (uint64_t)std::min(st, r->len - en) << 33 | tag);
+            if (seen(ps, w->L2, 0, i)) offer(&w->best[1], reach(r->len - en, st, w->site) << 33 | tag);
             auto it = std::lower_bound(ps.begin(), ps.end(), std::make_pair(w->R, i + 1));
             if (w->R != NONE && it != ps.end() && it->first == w->R) offer(&w->best[0], (uint64_t)std::min(st, r->len - r->b[t->ix[it->second]]) << 33 | tag);
         }
         for (uint32_t q = c->ro[v]; q < c->ro[v + 1]; q++) {
             mate* w = &(*c->w)[c->ri[q]];
-            if (w->f == (uint32_t)p->f) offer(&w->best[2], (uint64_t)std::min(st, r->len - en) << 33 | tag);
+            if (w->f == (uint32_t)p->f && seen(ps, w->R2, i + 1, m)) offer(&w->best[2], reach(st, r->len - en, w->site) << 33 | tag);
         }
     }
 }
