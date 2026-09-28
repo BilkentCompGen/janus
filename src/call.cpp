@@ -9,12 +9,12 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 31, DUPT = 500;
-static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0};
+static const uint32_t MM = 3, MQ = 10, MS = 50, MSI = 45, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 32, DUPT = 500, KM = 15;
+static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
-struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; };
+struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; char st; uint32_t syn; };
 
 struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span, tsame, orphan; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d, lc, rc; };
 
@@ -38,11 +38,23 @@ static uint32_t top(const std::vector<uint32_t>& n) {
     return *std::max_element(n.begin() + 1, n.end());
 }
 
-static void add(std::vector<ev>& o, uint32_t q, const char* ty, std::string c1, uint32_t p1, std::string c2, uint32_t p2, const seg& x, const seg& y) {
-    if (c1 == c2 && (p1 > p2 ? p1 - p2 : p2 - p1) < MS && std::strcmp(ty, "INS")) return;
+static void add(std::vector<ev>& o, uint32_t q, const char* ty, std::string c1, uint32_t p1, std::string c2, uint32_t p2, const seg& x, const seg& y, uint32_t ms) {
+    if (c1 == c2 && (p1 > p2 ? p1 - p2 : p2 - p1) < ms && std::strcmp(ty, "INS")) return;
     uint32_t l1 = x.qe - x.qs, l2 = y.qe - y.qs;
     if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); std::swap(l1, l2); }
-    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de)});
+    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de), x.st, 0});
+}
+
+static uint32_t refpos(const seg& s, uint32_t q) {
+    uint32_t t = s.ts, x = s.st == '+' ? s.qs : s.qe;
+    for (const char* p = s.cg.c_str(); *p;) {
+        uint32_t l = std::strtoul(p, (char**)&p, 10);
+        char op = *p++;
+        if (op != 'D' && (s.st == '+' ? x + l > q : x - l <= q)) return op == 'I' ? t : t + (s.st == '+' ? q - x : x - q);
+        if (op != 'I') t += l;
+        if (op != 'D') x = s.st == '+' ? x + l : x - l;
+    }
+    return t;
 }
 
 static std::vector<ev> events(std::vector<seg>& sg) {
@@ -55,10 +67,10 @@ static std::vector<ev> events(std::vector<seg>& sg) {
         for (const char* p = s.cg.c_str(); *p;) {
             uint32_t l = std::strtoul(p, (char**)&p, 10);
             char op = *p++;
-            if ((op == 'I' || op == 'D') && l >= MS) {
+            if ((op == 'I' || op == 'D') && l >= MSI) {
                 if (op == gop && gap < ISL) gl += l + (op == 'D' ? gap : 0);
                 else {
-                    if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s);
+                    if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s, MSI);
                     gop = op; gt = t; gq = op == 'I' && s.st != '+' ? q - l : q; gl = l;
                 }
                 gap = 0;
@@ -66,18 +78,18 @@ static std::vector<ev> events(std::vector<seg>& sg) {
             if (op != 'I') t += l;
             if (op != 'D') q = s.st == '+' ? q + l : q - l;
         }
-        if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s);
+        if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s, MSI);
     }
     for (size_t i = 0; i + 1 < sg.size(); i++) {
         const seg &x = sg[i], &y = sg[i + 1];
         if (x.mq < MQ || y.mq < MQ) continue;
         uint32_t p1 = x.st == '+' ? x.te : x.ts, p2 = y.st == '+' ? y.ts : y.te, q = x.qe;
         int64_t g = (int64_t)y.qs - x.qe, d = x.st == '+' ? (int64_t)y.ts - x.te : (int64_t)x.ts - y.te;
-        if (x.t != y.t) add(o, q, "BND", x.t, p1, y.t, p2, x, y);
-        else if (x.st != y.st) add(o, q, "INV", x.t, p1, y.t, p2, x, y);
-        else if (d - g >= MS) add(o, q, "DEL", x.t, p1, y.t, p2, x, y);
-        else if (g - d >= MS && d > -(int64_t)MS) add(o, q, "INS", x.t, p1, x.t, p1 + g - d, x, y);
-        else if (d <= -(int64_t)MS) add(o, q, "DUP", x.t, p1, y.t, p2, x, y);
+        if (x.t != y.t) add(o, q, "BND", x.t, p1, y.t, p2, x, y, MS);
+        else if (x.st != y.st) add(o, q, "INV", x.t, p1, y.t, p2, x, y, MS);
+        else if (d - g >= MS) add(o, q, "DEL", x.t, p1, y.t, p2, x, y, MS);
+        else if (g - d >= MS && d > -(int64_t)MS) add(o, q, "INS", x.t, p1, x.t, p1 + g - d, x, y, MS);
+        else if (d <= -(int64_t)MS) add(o, q, "DUP", x.t, p1, y.t, p2, x, y, MS);
     }
     return o;
 }
@@ -97,6 +109,35 @@ static std::string ref(FILE* f, const std::vector<uint64_t>& v, uint32_t a, uint
     r.resize(std::fread(&r[0], 1, e - s, f));
     for (char ch : r) if (ch != '\n') o += ch & 0xdf;
     return o;
+}
+
+struct pfa { FILE* f; std::unordered_map<std::string, long> at; };
+
+static void index_fa(const char* path, pfa* x) {
+    x->f = std::fopen(path, "r");
+    char* line = nullptr;
+    size_t cap = 0;
+    std::string nm;
+    for (ssize_t n; (n = getline(&line, &cap, x->f)) > 0;)
+        if (line[0] == '>') { nm.assign(line + 1, n - 2); x->at[nm] = std::ftell(x->f); }
+    std::free(line);
+}
+
+static std::string piece(pfa* x, const std::string& nm, uint32_t lo, uint32_t n, bool rc) {
+    std::string s(n, 0), o;
+    std::fseek(x->f, x->at[nm] + lo, SEEK_SET);
+    s.resize(std::fread(&s[0], 1, n, x->f));
+    if (!rc) return s;
+    for (size_t i = s.size(); i--;) o += s[i] == 'A' ? 'T' : s[i] == 'C' ? 'G' : s[i] == 'G' ? 'C' : s[i] == 'T' ? 'A' : 'N';
+    return o;
+}
+
+static float shared(const std::string& a, const std::string& b) {
+    std::unordered_map<uint64_t, uint8_t> k;
+    uint32_t n = 0, m = 0;
+    for (size_t i = 0; i + KM <= b.size(); i++) k[std::hash<std::string>()(b.substr(i, KM))] = 1;
+    for (size_t i = 0; i + KM <= a.size(); i++) { n++; m += k.count(std::hash<std::string>()(a.substr(i, KM))); }
+    return n ? (float)m / n : 0;
 }
 
 static float rep(const std::string& s) {
@@ -169,6 +210,7 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[28] = f[5] - f[25];
     f[29] = (float)t / (t + r.tsame);
     f[30] = r.orphan;
+    f[31] = s.e.syn;
     float z = 0;
     for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
     return 1 / (1 + std::exp(-z));
@@ -207,20 +249,50 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         al[nm].push_back({qs, qe, ts, te, mq, st, tn, cg ? std::string(cg + 5, std::strcspn(cg + 5, "\t\n")) : "", de ? std::strtof(de + 5, nullptr) : 0});
     }
     std::fclose(fi);
+    std::unordered_map<std::string, std::vector<uint64_t>> fai;
+    FILE* fx = std::fopen((std::string(fasta) + ".fai").c_str(), "r");
+    unsigned long fl_[4];
+    while (std::fscanf(fx, "%255s %lu %lu %lu %lu", nm, &fl_[0], &fl_[1], &fl_[2], &fl_[3]) == 5) fai[nm] = {fl_[0], fl_[1], fl_[2], fl_[3]};
+    std::fclose(fx);
+    FILE* fa = std::fopen(fasta, "r");
+    pfa pf;
+    index_fa((std::string(evi).substr(0, std::string(evi).size() - 4) + ".fa").c_str(), &pf);
     std::vector<sv> som;
     for (auto& pc : alt) {
         if (!al.count(pc.first)) continue;
-        for (const ev& e : events(al[pc.first])) {
+        std::vector<ev> es = events(al[pc.first]);
+        std::vector<uint8_t> used(pc.second.size(), 0);
+        for (ev& e : es) {
             const arow* r = nullptr;
-            for (const arow& x : pc.second) if (e.q + ROW >= x.a && e.q <= x.b + ROW && (!r || top(x.n) > top(r->n))) r = &x;
+            bool ind = e.ty == "INS" || e.ty == "DEL" || e.ty == "DUP";
+            uint32_t L = e.p2 - e.p1, wn = ind ? std::max(ROW, 2 * L) : ROW;
+            for (const arow& x : pc.second) if (e.q + wn >= x.a && e.q <= x.b + wn && (!r || top(x.n) > top(r->n))) r = &x;
             arow o;
             if (!r) {
                 const arow* q = nullptr;
                 for (const arow& x : pc.second) if (!q || std::min(x.a > e.q ? x.a - e.q : 0u, e.q > x.b ? e.q - x.b : 0u) < std::min(q->a > e.q ? q->a - e.q : 0u, e.q > q->b ? e.q - q->b : 0u)) q = &x;
                 o = *q; o.orphan = 1; o.nspan = o.nsame = o.ncl = o.cl = 0; o.lest = o.dmin = o.dmax = 0; r = &o;
+            } else used[r - pc.second.data()] = 1;
+            uint32_t al_ = std::abs(r->lest);
+            if (((e.ty == "DEL" && r->lest > 0) || (e.ty == "INS" && r->lest < 0)) && !r->nsame && al_ >= MS && (al_ > L ? al_ - L : L - al_) <= 20) { e.p2 = e.p1 + al_; L = al_; }
+            if (ind && L < MS) continue;
+            if (e.ty == "INS" && L >= 1000 && e.p1 > L) {
+                std::string in = piece(&pf, pc.first, e.q, L, e.st != '+');
+                if (shared(in, ref(fa, fai[e.c1], e.p1 - L, e.p1)) >= 0.5f) { e.ty = "DUP"; e.p2 = e.p1; e.p1 -= L; }
+                else if (shared(in, ref(fa, fai[e.c1], e.p1, std::min<uint64_t>(e.p1 + L, fai[e.c1][0]))) >= 0.5f) e.ty = "DUP";
             }
             if (!primary(e.c1) || !primary(e.c2) || top(r->n) < MM) continue;
             som.push_back({e, pc.first, 1, *r});
+        }
+        for (size_t i = 0; i < pc.second.size(); i++) {
+            const arow& x = pc.second[i];
+            uint32_t al_ = std::abs(x.lest);
+            if (used[i] || x.nsame || al_ < MS || x.cl < 3 || x.nspan < 3 || top(x.n) < MM) continue;
+            const seg* g = nullptr;
+            for (const seg& q : al[pc.first]) if (q.mq >= MQ && q.qs <= x.a && x.b <= q.qe) g = &q;
+            if (!g || !primary(g->t)) continue;
+            uint32_t p1 = refpos(*g, x.lest > 0 ? x.a : x.b);
+            som.push_back({{x.lest > 0 ? "DEL" : "INS", g->t, g->t, p1, p1 + al_, x.a, g->mq, g->qe - g->qs, g->qe - g->qs, g->qe - g->qs, g->de, g->st, 1}, pc.first, 1, x});
         }
     }
     std::sort(som.begin(), som.end(), cmp_sv);
@@ -237,12 +309,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         q.r = m;
         q.pc++;
     }
-    std::unordered_map<std::string, std::vector<uint64_t>> fai;
-    FILE* fx = std::fopen((std::string(fasta) + ".fai").c_str(), "r");
-    unsigned long fl_[4];
-    while (std::fscanf(fx, "%255s %lu %lu %lu %lu", nm, &fl_[0], &fl_[1], &fl_[2], &fl_[3]) == 5) fai[nm] = {fl_[0], fl_[1], fl_[2], fl_[3]};
-    std::fclose(fx);
-    FILE *fa = std::fopen(fasta, "r"), *o = std::fopen(out, "w");
+    FILE* o = std::fopen(out, "w");
     std::fprintf(o, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
     for (size_t i = 0; i < (res.empty() ? 0 : res[0].r.n.size()); i++) std::fprintf(o, "\tS%zu", i);
     std::fprintf(o, "\n");
