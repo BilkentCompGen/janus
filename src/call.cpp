@@ -179,6 +179,11 @@ static bool inbed(const bed* b, const std::string& c, uint32_t p) {
     return k != it->second.begin() && (k - 1)->second + 50 >= p;
 }
 
+static uint32_t rank(const arow& x, const ev& e, bool ind) {
+    uint32_t L = e.p2 - e.p1, al = std::abs(x.lest);
+    return !x.nspan ? 1 : ind && 2 * al >= L && al <= 2 * L ? 2 : 0;
+}
+
 static float prob(const sv& s, float rp, bool vn, float med, const float* w, float* f) {
     const arow& r = s.r;
     uint32_t t = top(r.n), dt = std::min(r.lc[r.s], r.rc[r.s]), L = s.e.p2 - s.e.p1;
@@ -271,7 +276,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
             const arow* r = nullptr;
             bool ind = e.ty == "INS" || e.ty == "DEL" || e.ty == "DUP";
             uint32_t L = e.p2 - e.p1, wn = ind ? std::max(ROW, 2 * L) : ROW;
-            for (const arow& x : pc.second) if (e.q + wn >= x.a && e.q <= x.b + wn && (!r || top(x.n) > top(r->n))) r = &x;
+            for (const arow& x : pc.second) if (e.q + wn >= x.a && e.q <= x.b + wn && (!r || rank(x, e, ind) > rank(*r, e, ind) || (rank(x, e, ind) == rank(*r, e, ind) && top(x.n) > top(r->n)))) r = &x;
             arow o;
             if (!r) {
                 const arow* q = nullptr;
