@@ -7,13 +7,13 @@
 #include "measure.h"
 #include "select.h"
 
-static const uint32_t MM = 3, PAD = 1000, SIDE = 48, SAME = 20, NONE = ~0u;
+static const uint32_t MM = 3, PAD = 1000, SIDE = 48, SAME = 20, MULT = 4, NONE = ~0u;
 
 struct job { uint64_t read; uint32_t w, k, rc, lo, hi, a, b, pc; };
 
 struct rout { std::vector<std::pair<uint32_t, uint32_t>> iv; std::vector<std::string> s; };
 
-struct sctx { keys* x; std::vector<site>* w; std::unordered_map<uint64_t, uint32_t> dix; std::vector<uint32_t> dep; std::vector<uint64_t> mask; const uint8_t* sh; const uint16_t* cn; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; };
+struct sctx { keys* x; std::vector<site>* w; std::unordered_map<uint64_t, uint32_t> dix; std::vector<uint32_t> dep; std::vector<uint64_t> mask; const uint8_t* sh; const uint16_t* cn; uint32_t med; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; };
 
 static bool by_read(const site& p, const site& q) { return p.read < q.read; }
 
@@ -52,7 +52,7 @@ static void gather(sctx* c, const std::vector<uint8_t>& drop) {
         uint64_t ei = (x->k[i] >> 32) - 1, eo = x->k[i] & 0xffffffff;
         if (drop[g->e[ei] >> 32] || drop[g->e[ei] & 0xffffffff] || drop[g->e[eo] >> 32] || drop[g->e[eo] & 0xffffffff]) continue;
         for (uint64_t s = 1; s < x->S; s++)
-            if (x->n[i * x->S + s] >= MM) { site w = {}; w.read = s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]); w.key = i; w.s = s; c->w->push_back(w); }
+            if (x->n[i * x->S + s] >= MM) { site w = {}; w.read = s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]); w.key = i; w.s = s; w.cov.assign(2 * x->S, 0); c->w->push_back(w); }
     }
     std::sort(c->w->begin(), c->w->end(), by_read);
     for (size_t i = 0; i < c->w->size(); i++)
@@ -62,7 +62,7 @@ static void gather(sctx* c, const std::vector<uint8_t>& drop) {
 
 static bool anc(const sctx* c, const std::vector<uint32_t>& ids, uint32_t v, uint64_t s) {
     auto r = std::equal_range(ids.begin(), ids.end(), v);
-    return (c->mask[v] & (1ull | 1ull << s)) == (1ull | 1ull << s) && r.second - r.first == 1;
+    return (c->mask[v] & (1ull | 1ull << s)) == (1ull | 1ull << s) && r.second - r.first == 1 && c->cn[v] <= MULT * c->med;
 }
 
 static void anchor(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, uint64_t rid) {
@@ -110,7 +110,12 @@ static void stats(site* w) {
     w->lest = w->dn[n / 2];
     w->dmin = w->dn[0];
     w->dmax = w->dn[n - 1];
-    for (uint32_t i = 0; i < n; i++) w->nsame += std::abs(w->dn[i]) <= std::max<int32_t>(SAME, std::abs(w->lest) / 2);
+}
+
+static uint32_t same(const site* w, int32_t o) {
+    uint32_t n = std::min(w->nspan, DN), k = 0;
+    for (uint32_t i = 0; i < n; i++) k += std::abs(w->dn[i] - o) <= std::max<int32_t>(SAME, std::abs(w->lest - o) / 2);
+    return k;
 }
 
 static void jobs(sctx* c) {
@@ -168,6 +173,10 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     masks(&g, c.mask);
     c.sh = g.sh.data();
     c.cn = g.c.data();
+    std::vector<uint32_t> smp;
+    for (uint64_t v = 0; v < g.K; v += 997) if (c.mask[v] & 1) smp.push_back(g.c[v]);
+    std::sort(smp.begin(), smp.end());
+    c.med = smp[smp.size() / 2];
     g.ec = {};
     make_keys(&x, &g, &a, mode);
     count_keys(&x, rd, t);
@@ -197,9 +206,12 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     for (const job& j : c.jb) {
         const site& e = w[j.w];
         uint32_t ncl = 0;
+        int32_t o = j.k == NONE ? 0 : e.cl[j.k].bd;
         for (uint32_t k = 0; k < CL; k++) ncl += e.cl[k].n > 0;
-        std::fprintf(v, "s%lu_%lu_%u\t%u\t%u\t%u\t%s\t%s\t%lu\t%u\t%u\t%u\t%u\t%u\t%u\t%d\t%d\t%d\t%u\t%u\t%u\t%u\n", (uint64_t)(j.read >> 40), (uint64_t)(j.read & 0xffffffffff), j.pc, j.a, j.b, j.w,
-                     list(&x.n[e.key * x.S], x.S).c_str(), depth(&c, e, g.K).c_str(), (unsigned long)e.key, e.s, ncl, j.k == NONE ? 0 : e.cl[j.k].n, e.tspan, e.nspan, e.nsame, e.lest, e.dmin, e.dmax, e.shadow, e.tonly, e.nbr, e.span);
+        std::vector<uint32_t> lc, rc;
+        for (uint64_t s = 0; s < x.S; s++) { lc.push_back(e.cov[2 * s]); rc.push_back(e.cov[2 * s + 1]); }
+        std::fprintf(v, "s%lu_%lu_%u\t%u\t%u\t%u\t%s\t%s\t%lu\t%u\t%u\t%u\t%u\t%u\t%u\t%d\t%d\t%d\t%u\t%u\t%u\t%u\t%s\t%s\t%u\n", (uint64_t)(j.read >> 40), (uint64_t)(j.read & 0xffffffffff), j.pc, j.a, j.b, j.w,
+                     list(&x.n[e.key * x.S], x.S).c_str(), depth(&c, e, g.K).c_str(), (unsigned long)e.key, e.s, ncl, j.k == NONE ? 0 : e.cl[j.k].n, e.tspan, e.nspan, e.nspan ? same(&e, o) : 0, e.lest - o, e.dmin - o, e.dmax - o, e.shadow, e.tonly, e.nbr, e.span, list(lc.data(), x.S).c_str(), list(rc.data(), x.S).c_str(), e.tsame);
     }
     std::fclose(f);
     std::fclose(v);

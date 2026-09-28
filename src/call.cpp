@@ -9,14 +9,14 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 29, DUPT = 500;
-static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0};
+static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 31, DUPT = 500;
+static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
 struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; };
 
-struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d; };
+struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span, tsame, orphan; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d, lc, rc; };
 
 struct sv { ev e; std::string nm; uint32_t pc; arow r; };
 
@@ -135,7 +135,7 @@ static bool inbed(const bed* b, const std::string& c, uint32_t p) {
 
 static float prob(const sv& s, float rp, bool vn, float med, const float* w, float* f) {
     const arow& r = s.r;
-    uint32_t t = top(r.n), dt = r.d[r.s], L = s.e.p2 - s.e.p1;
+    uint32_t t = top(r.n), dt = std::min(r.lc[r.s], r.rc[r.s]), L = s.e.p2 - s.e.p1;
     int32_t al = std::abs(r.lest);
     bool sp = r.nspan > 0, ind = s.e.ty != "BND" && s.e.ty != "INV";
     f[0] = 1;
@@ -162,11 +162,13 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[21] = s.e.ty == "BND";
     f[22] = s.e.ty == "BND" ? 0 : std::log2(L + 1.f);
     f[23] = std::log2((dt + 1.f) / (med + 1));
-    f[24] = r.d[0] == 0;
-    f[25] = (float)r.nsame / std::max(r.nspan, 1u);
+    f[24] = std::min(r.lc[0], r.rc[0]) == 0;
+    f[25] = (float)r.nsame / std::max(std::min(r.nspan, 32u), 1u);
     f[26] = std::log2(r.nsame + 1.f);
     f[27] = std::log2(r.nspan + 1.f);
     f[28] = f[5] - f[25];
+    f[29] = (float)t / (t + r.tsame);
+    f[30] = r.orphan;
     float z = 0;
     for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
     return 1 / (1 + std::exp(-z));
@@ -175,7 +177,7 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
 int cmd_call(const char* paf, const char* evi, const char* fasta, const char* out, const char* wf, const char* vb) {
     std::unordered_map<std::string, std::vector<arow>> alt;
     std::unordered_map<std::string, std::vector<seg>> al;
-    char line[1 << 16], nm[256], cn[4096], dd[4096], st, tn[256];
+    char line[1 << 16], nm[256], cn[4096], dd[4096], lc[4096], rc[4096], st, tn[256];
     uint32_t qs, qe, ts, te, mq, z;
     float w[NF];
     bed vn;
@@ -186,10 +188,13 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     FILE* fi = std::fopen(evi, "r");
     while (std::fgets(line, sizeof line, fi)) {
         arow r;
-        std::sscanf(line, "%255s %u %u %u %4095s %4095s %*s %u %u %u %u %u %u %d %d %d %u %u %u %u", nm, &r.a, &r.b, &r.u, cn, dd, &r.s, &r.ncl, &r.cl, &r.tspan, &r.nspan, &r.nsame, &r.lest, &r.dmin, &r.dmax, &r.shadow, &r.tonly, &r.nbr, &r.span);
+        std::sscanf(line, "%255s %u %u %u %4095s %4095s %*s %u %u %u %u %u %u %d %d %d %u %u %u %u %4095s %4095s %u", nm, &r.a, &r.b, &r.u, cn, dd, &r.s, &r.ncl, &r.cl, &r.tspan, &r.nspan, &r.nsame, &r.lest, &r.dmin, &r.dmax, &r.shadow, &r.tonly, &r.nbr, &r.span, lc, rc, &r.tsame);
+        r.orphan = 0;
         r.n = nums(cn);
         r.d = nums(dd);
-        dep.push_back(r.d[r.s]);
+        r.lc = nums(lc);
+        r.rc = nums(rc);
+        dep.push_back(std::min(r.lc[r.s], r.rc[r.s]));
         alt[nm].push_back(r);
     }
     std::fclose(fi);
@@ -208,7 +213,13 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         for (const ev& e : events(al[pc.first])) {
             const arow* r = nullptr;
             for (const arow& x : pc.second) if (e.q + ROW >= x.a && e.q <= x.b + ROW && (!r || top(x.n) > top(r->n))) r = &x;
-            if (!r || !primary(e.c1) || !primary(e.c2) || top(r->n) < MM) continue;
+            arow o;
+            if (!r) {
+                const arow* q = nullptr;
+                for (const arow& x : pc.second) if (!q || std::min(x.a > e.q ? x.a - e.q : 0u, e.q > x.b ? e.q - x.b : 0u) < std::min(q->a > e.q ? q->a - e.q : 0u, e.q > q->b ? e.q - q->b : 0u)) q = &x;
+                o = *q; o.orphan = 1; o.nspan = o.nsame = o.ncl = o.cl = 0; o.lest = o.dmin = o.dmax = 0; r = &o;
+            }
+            if (!primary(e.c1) || !primary(e.c2) || top(r->n) < MM) continue;
             som.push_back({e, pc.first, 1, *r});
         }
     }
