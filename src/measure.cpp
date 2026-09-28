@@ -24,9 +24,10 @@ static void take(site* w, uint32_t s, uint32_t side, bool span, bool route, int3
     w->cov[2 * s] += side & 1;
     w->cov[2 * s + 1] += side >> 1;
     if (!span) {}
-    else if (!s) { keep(w, d, (0xffffffffu - (uint32_t)sc) * 2654435761u); w->nspan++; }
+    else if (!s) { keep(w, d, (0xffffffffu - (uint32_t)sc) * 2654435761u); w->nspan++; w->n20 += std::abs(d) <= (int32_t)CLT; }
     else if (s == w->s) {
         w->tspan++;
+        w->t20 += std::abs(d) <= (int32_t)CLT;
         if (route) {
             uint32_t k = 0, j;
             while (k < CL && (!k || w->cl[k].n) && std::abs(w->cl[k].d - d) > (int32_t)CLT) k++;
