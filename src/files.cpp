@@ -26,11 +26,12 @@ void read_gph(const char* path, gph* x) {
     bin_header h;
     FILE* f = open_in(path, &h);
     *x = {h.nreads, h.total, h.resv[0], std::vector<uint64_t>(h.nreads), std::vector<uint64_t>(h.total),
-          std::vector<uint16_t>(h.resv[0] * h.nreads), std::vector<uint16_t>(h.resv[0] * h.total)};
+          std::vector<uint16_t>(h.resv[0] * h.nreads), std::vector<uint16_t>(h.resv[0] * h.total), std::vector<uint8_t>(h.resv[0] * h.nreads)};
     std::fread(x->g.data(), 8, x->K, f);
     std::fread(x->c.data(), 2, x->S * x->K, f);
     std::fread(x->e.data(), 8, x->E, f);
     std::fread(x->ec.data(), 2, x->S * x->E, f);
+    std::fread(x->sh.data(), 1, x->S * x->K, f);
     std::fclose(f);
 }
 
@@ -41,6 +42,7 @@ void write_gph(const char* path, const gph* x) {
     std::fwrite(x->c.data(), 2, x->S * x->K, fo);
     std::fwrite(x->e.data(), 8, x->E, fo);
     std::fwrite(x->ec.data(), 2, x->S * x->E, fo);
+    std::fwrite(x->sh.data(), 1, x->S * x->K, fo);
     bin_header o = {{'S', 'V', 'B', 'G'}, 1, x->K, x->E, {(uint8_t)x->S}};
     finish(fo, path, &o);
 }

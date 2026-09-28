@@ -4,7 +4,7 @@
 
 struct cnt { std::vector<uint64_t> hs, e; std::vector<uint16_t> n, ec; };
 
-struct gph { uint64_t K, E, S; std::vector<uint64_t> g, e; std::vector<uint16_t> c, ec; };
+struct gph { uint64_t K, E, S; std::vector<uint64_t> g, e; std::vector<uint16_t> c, ec; std::vector<uint8_t> sh; };
 
 struct adj { std::vector<uint32_t> oo, on, io, in; };
 

@@ -1,29 +1,28 @@
 #include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <unordered_map>
 #include "io.h"
 #include "keys.h"
-#include "mates.h"
+#include "measure.h"
 #include "select.h"
 
-static const uint32_t MM = 5, PAD = 1000, SEG = 5000, NONE = ~0u;
+static const uint32_t MM = 3, PAD = 1000, SIDE = 48, SAME = 20, NONE = ~0u;
 
-struct unit { uint64_t read, key; uint32_t L, R, L2, R2, fa, fb, site; std::string seg; std::vector<uint32_t> mt; };
+struct job { uint64_t read; uint32_t w, k, rc, lo, hi, a, b, pc; };
 
-struct job { uint64_t read; uint32_t w, k, rc, fa, fb; };
+struct rout { std::vector<std::pair<uint32_t, uint32_t>> iv; std::vector<std::string> s; };
 
-struct rout { std::vector<std::pair<uint32_t, uint32_t>> iv; std::vector<std::string> s; std::vector<uint32_t> lo; };
+struct sctx { keys* x; std::vector<site>* w; std::unordered_map<uint64_t, uint32_t> dix; std::vector<uint32_t> dep; std::vector<uint64_t> mask; const uint8_t* sh; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; };
 
-struct sctx { keys* x; std::vector<mate>* w; std::unordered_map<uint64_t, uint32_t> dix; std::vector<uint32_t> dep; std::vector<uint8_t> full; std::vector<unit> u; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; };
-
-static bool by_read(const unit& p, const unit& q) { return p.read < q.read; }
+static bool by_read(const site& p, const site& q) { return p.read < q.read; }
 
 static bool by_job(const job& p, const job& q) { return p.read < q.read; }
 
 static bool odd(const keys* x, uint64_t i) {
-    bool on = false, off = false;
-    for (uint64_t s = 0; s < x->S; s++) { on |= x->n[i * x->S + s] >= MM; off |= x->n[i * x->S + s] == 0; }
-    return on && off;
+    bool on = false;
+    for (uint64_t s = 1; s < x->S; s++) on |= x->n[i * x->S + s] >= MM;
+    return on && !x->n[i * x->S];
 }
 
 static void gather(sctx* c, const std::vector<uint8_t>& drop) {
@@ -52,126 +51,104 @@ static void gather(sctx* c, const std::vector<uint8_t>& drop) {
         if (!x->k[i] || !odd(x, i)) continue;
         uint64_t ei = (x->k[i] >> 32) - 1, eo = x->k[i] & 0xffffffff;
         if (drop[g->e[ei] >> 32] || drop[g->e[ei] & 0xffffffff] || drop[g->e[eo] >> 32] || drop[g->e[eo] & 0xffffffff]) continue;
-        for (uint64_t s = 0; s < x->S; s++)
-            if (x->n[i * x->S + s]) c->u.push_back({s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]), i, NONE, NONE, NONE, NONE, 0, 0, 0, "", {}});
+        for (uint64_t s = 1; s < x->S; s++)
+            if (x->n[i * x->S + s] >= MM) { site w = {}; w.read = s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]); w.key = i; w.s = s; c->w->push_back(w); }
     }
-    std::sort(c->u.begin(), c->u.end(), by_read);
-    for (size_t i = 0; i < c->u.size(); i++)
-        if (!i || c->u[i].read != c->u[i - 1].read) { c->rd.push_back(c->u[i].read); c->ro.push_back(i); }
-    c->ro.push_back(c->u.size());
+    std::sort(c->w->begin(), c->w->end(), by_read);
+    for (size_t i = 0; i < c->w->size(); i++)
+        if (!i || (*c->w)[i].read != (*c->w)[i - 1].read) { c->rd.push_back((*c->w)[i].read); c->ro.push_back(i); }
+    c->ro.push_back(c->w->size());
 }
 
-static void anchor(rpass* p, rth* t, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t rid) {
+static bool anc(const sctx* c, const std::vector<uint32_t>& ids, uint32_t v, uint64_t s) {
+    auto r = std::equal_range(ids.begin(), ids.end(), v);
+    return (c->mask[v] & (1ull | 1ull << s)) == (1ull | 1ull << s) && r.second - r.first == 1;
+}
+
+static void anchor(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, uint64_t rid) {
     sctx* c = (sctx*)p->ctx;
     uint64_t r = (uint64_t)p->f << 40 | rid, w = std::lower_bound(c->rd.begin(), c->rd.end(), r) - c->rd.begin();
     if (w == c->rd.size() || c->rd[w] != r) return;
     std::vector<hit>& h = c->h[t - p->t.data()];
     chain_keys(c->x, t, m, h);
+    std::vector<uint32_t>& ids = c->ids[t - p->t.data()];
+    ids.assign(t->id.begin(), t->id.begin() + m);
+    std::sort(ids.begin(), ids.end());
     const rdcore* d = &t->r;
     for (uint32_t i = c->ro[w]; i < c->ro[w + 1]; i++)
         for (const hit& q : h) {
-            if (q.key != c->x->k[c->u[i].key]) continue;
-            unit* e = &c->u[i];
+            site* e = &(*c->w)[i];
+            if (q.key != c->x->k[e->key]) continue;
             uint32_t a = q.a, b = q.b;
-            while (a > 0 && !c->full[t->id[a]]) a--;
-            while (b + 1 < m && !c->full[t->id[b]]) b++;
-            uint32_t st = d->a[t->ix[a]], en = d->b[t->ix[b]];
-            uint32_t a2 = a, b2 = b;
-            while (a2 > 0 && (a2 == a || !c->full[t->id[a2]])) a2--;
-            while (b2 + 1 < m && (b2 == b || !c->full[t->id[b2]])) b2++;
-            e->L = c->full[t->id[a]] ? t->id[a] : NONE;
-            e->R = c->full[t->id[b]] ? t->id[b] : NONE;
-            e->L2 = a2 < a && c->full[t->id[a2]] ? t->id[a2] : NONE;
-            e->R2 = b2 > b && c->full[t->id[b2]] ? t->id[b2] : NONE;
-            e->site = en - st;
-            e->fa = rc ? d->len - en : st;
-            e->fb = rc ? d->len - st : en;
-            if (e->L != NONE && e->R != NONE && en - st <= SEG) e->seg = bases(d, rec, st, en, rc);
+            e->la.clear();
+            e->ra.clear();
+            e->lp.clear();
+            e->rp.clear();
+            for (int64_t j = q.a; j >= 0 && e->la.size() < SIDE; j--)
+                if (anc(c, ids, t->id[j], p->f)) { if (e->la.empty()) a = j; e->la.push_back(t->id[j]); e->lp.push_back(d->a[t->ix[j]]); }
+            for (uint32_t j = q.b; j < m && e->ra.size() < SIDE; j++)
+                if (anc(c, ids, t->id[j], p->f)) { if (e->ra.empty()) b = j; e->ra.push_back(t->id[j]); e->rp.push_back(d->a[t->ix[j]]); }
+            e->rc = rc != 0;
+            e->fa = d->a[t->ix[q.a]];
+            e->fb = d->b[t->ix[q.b]];
+            e->a0 = d->a[t->ix[a]];
+            e->b0 = d->b[t->ix[b]];
+            e->span = e->b0 - e->a0;
+            e->tonly = e->shadow = e->nbr = 0;
+            for (uint32_t j = a; j <= b; j++) {
+                uint32_t v = t->id[j];
+                e->nbr += c->x->br[v];
+                if (!(c->mask[v] & 1)) { e->tonly++; e->shadow = std::max<uint32_t>(e->shadow, c->sh[v]); }
+            }
         }
 }
 
-static void cut(rpass* p, rth* t, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t rid) {
-    sctx* c = (sctx*)p->ctx;
-    uint64_t r = (uint64_t)p->f << 40 | rid, w = std::lower_bound(c->all.begin(), c->all.end(), r) - c->all.begin();
-    if (w == c->all.size() || c->all[w] != r) return;
-    const rdcore* d = &t->r;
-    rout* o = &c->out[w];
-    for (auto it = std::lower_bound(c->jb.begin(), c->jb.end(), job{r, 0, 0, 0, 0, 0}, by_job); it != c->jb.end() && it->read == r; it++) {
-        if (it->rc != (rc != 0)) continue;
-        mate* q = &(*c->w)[it->w];
-        uint32_t k = it->k, i = 0, j;
-        while (i < m && t->id[i] != (k == 2 ? q->R : q->L)) i++;
-        for (j = k ? i : i + 1; k == 0 && j < m && t->id[j] != q->R; j++);
-        uint32_t st = d->a[t->ix[i]], en = d->b[t->ix[j]], s = std::max(PAD, 3 * (k ? q->site : en - st));
-        uint32_t lo = st > (k == 1 ? PAD : s) ? st - (k == 1 ? PAD : s) : 0, hi = std::min(d->len, en + (k == 2 ? PAD : s));
-        o->iv.push_back(rc ? std::make_pair(d->len - hi, d->len - lo) : std::make_pair(lo, hi));
-        it->fa = rc ? d->len - en : st;
-        it->fb = rc ? d->len - st : en;
-        if (k == 0 && en - st <= SEG) q->seg = bases(d, rec, st, en, rc);
-    }
-    if (!rc) return;
-    uint64_t a = std::lower_bound(c->rd.begin(), c->rd.end(), r) - c->rd.begin();
-    for (uint32_t i = a < c->rd.size() && c->rd[a] == r ? c->ro[a] : 0; a < c->rd.size() && c->rd[a] == r && i < c->ro[a + 1]; i++) {
-        const unit& e = c->u[i];
-        uint32_t pad = std::max(PAD, 3 * (e.fb - e.fa));
-        o->iv.push_back({e.fa > pad ? e.fa - pad : 0, std::min(d->len, e.fb + pad)});
-    }
-    std::sort(o->iv.begin(), o->iv.end());
-    std::vector<uint32_t> hi;
-    for (auto& v : o->iv)
-        if (!hi.empty() && v.first <= hi.back()) hi.back() = std::max(hi.back(), v.second);
-        else { o->lo.push_back(v.first); hi.push_back(v.second); }
-    for (uint32_t i = 0; i < o->lo.size(); i++) o->s.push_back(bases(d, rec, o->lo[i], hi[i], 0));
-    o->iv = {};
-}
-
-static void pair_up(sctx* c) {
-    std::vector<std::pair<std::pair<uint64_t, uint64_t>, uint64_t>> q;
-    for (uint64_t i = 0; i < c->u.size(); i++)
-        for (uint64_t s = 0; s < c->x->S; s++)
-            if (s != c->u[i].read >> 40 && (c->u[i].L != NONE || c->u[i].R != NONE)) q.push_back({{(uint64_t)c->u[i].L << 32 | c->u[i].R, s}, i});
-    std::sort(q.begin(), q.end());
-    for (size_t i = 0; i < q.size(); i++) {
-        const unit& e = c->u[q[i].second];
-        if (!i || q[i].first != q[i - 1].first) c->w->push_back({e.L, e.R, e.L2, e.R2, (uint32_t)q[i].first.second, e.site, {0, 0, 0}, ""});
-        c->u[q[i].second].mt.push_back(c->w->size() - 1);
-    }
+static void stats(site* w) {
+    uint32_t n = std::min(w->nspan, DN);
+    if (!n) return;
+    std::sort(w->dn, w->dn + n);
+    w->lest = w->dn[n / 2];
+    w->dmin = w->dn[0];
+    w->dmax = w->dn[n - 1];
+    for (uint32_t i = 0; i < n; i++) w->nsame += std::abs(w->dn[i]) <= std::max<int32_t>(SAME, std::abs(w->lest) / 2);
 }
 
 static void jobs(sctx* c) {
-    const std::vector<mate>& w = *c->w;
-    for (uint32_t i = 0; i < w.size(); i++)
-        for (uint32_t k = 0; k < 3; k++)
-            if (w[i].best[k] && (k == 0 || !w[i].best[0])) c->jb.push_back({(uint64_t)w[i].f << 40 | (0xffffffffu - (uint32_t)w[i].best[k]), i, k, (uint32_t)(w[i].best[k] >> 32 & 1), 0, 0});
+    std::vector<site>& w = *c->w;
+    for (uint32_t i = 0; i < w.size(); i++) {
+        uint32_t n = 0;
+        for (uint32_t k = 0; k < CL; k++)
+            if (w[i].cl[k].n) { const clus& q = w[i].cl[k]; c->jb.push_back({(uint64_t)w[i].s << 40 | (0xffffffffu - (uint32_t)q.best), i, k, (uint32_t)(q.best >> 32 & 1), q.lo, q.hi, q.a, q.b, 0}); n++; }
+        if (!n) c->jb.push_back({w[i].read, i, NONE, w[i].rc, w[i].fa, w[i].fb, w[i].fa, w[i].fb, 0});
+    }
     std::sort(c->jb.begin(), c->jb.end(), by_job);
-    c->all = c->rd;
     for (const job& j : c->jb) c->all.push_back(j.read);
     std::sort(c->all.begin(), c->all.end());
     c->all.erase(std::unique(c->all.begin(), c->all.end()), c->all.end());
 }
 
-static std::string counts(const keys* x, uint64_t k) {
-    std::string s;
-    for (uint64_t i = 0; i < x->S; i++) s += (i ? "," : "") + std::to_string(x->n[k * x->S + i]);
-    return s;
-}
-
-static std::string allele(const unit& e, const std::vector<mate>& w, uint64_t S) {
-    std::string al;
-    for (uint64_t s = 0, z = 0; s < S; s++) {
-        if (s == e.read >> 40) { al += 'a'; continue; }
-        const mate* q = z < e.mt.size() ? &w[e.mt[z++]] : nullptr;
-        al += !q || q->seg.empty() || e.seg.empty() ? '-' : same(e.seg, q->seg) ? '1' : '0';
+static void cut(rpass* p, rth* t, const uint8_t* rec, uint32_t, uint32_t rc, uint64_t rid) {
+    sctx* c = (sctx*)p->ctx;
+    uint64_t r = (uint64_t)p->f << 40 | rid, w = std::lower_bound(c->all.begin(), c->all.end(), r) - c->all.begin();
+    if (w == c->all.size() || c->all[w] != r) return;
+    const rdcore* d = &t->r;
+    rout* o = &c->out[w];
+    for (auto it = std::lower_bound(c->jb.begin(), c->jb.end(), job{r, 0, 0, 0, 0, 0, 0, 0, 0}, by_job); it != c->jb.end() && it->read == r; it++) {
+        if (it->rc != (rc != 0)) continue;
+        uint32_t pd = it->k == NONE ? std::max(PAD, 3 * (it->hi - it->lo)) : PAD, lo = it->lo > pd ? it->lo - pd : 0, hi = std::min(d->len, it->hi + pd), a = it->a, b = it->b;
+        if (rc) { uint32_t z = d->len - hi; hi = d->len - lo; lo = z; z = d->len - b; b = d->len - a; a = z; }
+        it->pc = o->iv.size();
+        it->a = a - lo;
+        it->b = b - lo;
+        o->iv.push_back({lo, hi});
+        o->s.push_back(bases(d, rec, lo, hi, 0));
     }
-    return al;
 }
 
-static std::string piece_of(const sctx* c, uint64_t read, uint32_t pos, uint32_t& off) {
-    uint64_t i = std::lower_bound(c->all.begin(), c->all.end(), read) - c->all.begin();
-    const std::vector<uint32_t>& lo = c->out[i].lo;
-    uint32_t k = std::upper_bound(lo.begin(), lo.end(), pos) - lo.begin() - 1;
-    off = lo[k];
-    return "s" + std::to_string(read >> 40) + "_" + std::to_string(read & 0xffffffffffull) + "_" + std::to_string(k);
+static std::string list(const uint32_t* v, uint64_t n) {
+    std::string s;
+    for (uint64_t i = 0; i < n; i++) s += (i ? "," : "") + std::to_string(v[i]);
+    return s;
 }
 
 int cmd_select(const char* in, const char* dr, const char* rd, const char* out, int t, int mode) {
@@ -179,14 +156,11 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     adj a;
     keys x;
     sctx c;
-    std::vector<mate> w;
-    std::vector<uint64_t> m;
+    std::vector<site> w;
     read_gph(in, &g);
     make_adj(&g, &a);
-    masks(&g, m);
-    c.full.resize(g.K);
-    for (uint64_t v = 0; v < g.K; v++) c.full[v] = m[v] == (1ull << g.S) - 1;
-    m = {};
+    masks(&g, c.mask);
+    c.sh = g.sh.data();
     g.c = {};
     g.ec = {};
     make_keys(&x, &g, &a, mode);
@@ -197,10 +171,11 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     c.w = &w;
     gather(&c, drop);
     c.h.resize(t);
+    c.ids.resize(t);
     rpass p;
     each_read(&p, g.g, rd, t, anchor, &c);
-    pair_up(&c);
-    find_mates(w, g.g, rd, t);
+    measure(w, &x, rd, t);
+    for (site& s : w) stats(&s);
     jobs(&c);
     c.out.resize(c.all.size());
     each_read(&p, g.g, rd, t, cut, &c);
@@ -213,24 +188,15 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
             nb += c.out[i].s[k].size();
             np++;
         }
-    std::vector<std::vector<uint32_t>> mj(w.size());
-    for (uint32_t i = 0; i < c.jb.size(); i++) mj[c.jb[i].w].push_back(i);
-    for (size_t j = 0; j < c.u.size(); j++) {
-        const unit& e = c.u[j];
-        uint32_t off;
-        std::string nm = piece_of(&c, e.read, e.fa, off);
-        std::string dp;
-        for (uint64_t s = 0; s < x.S; s++) dp += (s ? "," : "") + std::to_string(c.dep[c.dix[e.key] + s]);
-        std::fprintf(v, "%s\t%u\t%u\talt\t%zu\t%s\t%s\t%s\t%lu\n", nm.c_str(), e.fa - off, e.fb - off, j, counts(&x, e.key).c_str(), allele(e, w, x.S).c_str(), dp.c_str(), (unsigned long)e.key);
-        for (uint32_t i : e.mt)
-            for (uint32_t q : mj[i]) {
-                const job& b = c.jb[q];
-                nm = piece_of(&c, b.read, b.fa, off);
-                std::fprintf(v, "%s\t%u\t%u\tcp\t%zu\t%u\t%u\n", nm.c_str(), b.fa - off, b.fb - off, j, w[i].f, b.k);
-            }
+    for (const job& j : c.jb) {
+        const site& e = w[j.w];
+        uint32_t ncl = 0;
+        for (uint32_t k = 0; k < CL; k++) ncl += e.cl[k].n > 0;
+        std::fprintf(v, "s%lu_%lu_%u\t%u\t%u\t%u\t%s\t%s\t%lu\t%u\t%u\t%u\t%u\t%u\t%u\t%d\t%d\t%d\t%u\t%u\t%u\t%u\n", (uint64_t)(j.read >> 40), (uint64_t)(j.read & 0xffffffffff), j.pc, j.a, j.b, j.w,
+                     list(&x.n[e.key * x.S], x.S).c_str(), list(&c.dep[c.dix[e.key]], x.S).c_str(), (unsigned long)e.key, e.s, ncl, j.k == NONE ? 0 : e.cl[j.k].n, e.tspan, e.nspan, e.nsame, e.lest, e.dmin, e.dmax, e.shadow, e.tonly, e.nbr, e.span);
     }
     std::fclose(f);
     std::fclose(v);
-    std::fprintf(stderr, "[select] %zu evidence units on %zu reads; %zu other-sample requests, %zu reads chosen for them; %zu reads, %lu pieces, %lu bp\n", c.u.size(), c.rd.size(), w.size(), c.jb.size(), c.all.size(), np, nb);
+    std::fprintf(stderr, "[select] %zu sites on %zu reads; %zu pieces on %zu reads, %lu bp\n", w.size(), c.rd.size(), np, c.all.size(), nb);
     return 0;
 }

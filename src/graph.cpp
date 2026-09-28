@@ -23,7 +23,7 @@ static void place(const std::vector<uint64_t>& g, cnt* s, uint16_t* c) {
 
 int cmd_graph(const char* in, const char* out) {
     std::vector<std::string> ps = split(in);
-    gph o = {0, 0, ps.size(), {}, {}, {}, {}};
+    gph o = {0, 0, ps.size(), {}, {}, {}, {}, {}};
     cnt s;
     std::vector<uint64_t> t;
     for (auto& p : ps) {
@@ -38,6 +38,14 @@ int cmd_graph(const char* in, const char* out) {
         unite(o.e, s.e, t);
     }
     t = {};
+    o.sh.assign(o.S * o.K, 0);
+    for (uint64_t i = 0; i < o.S; i++) {
+        std::vector<uint64_t> lo = read_set((ps[i] + ".low").c_str());
+        for (uint64_t v = 0, k = 0; v < o.K; v++) {
+            while (k < lo.size() && lo[k] < o.g[v]) k++;
+            o.sh[i * o.K + v] = k < lo.size() && lo[k] == o.g[v];
+        }
+    }
     o.E = o.e.size();
     o.ec.resize(o.S * o.E);
     for (uint64_t i = 0; i < o.S; i++) {

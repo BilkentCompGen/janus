@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -8,18 +9,18 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, COV = 200, SHORT = 1000, ISL = 100, SUP = 5, SUPI = 8, GMQ = 30, WIN = 150, END = 500000, TINY = 80, SUPT = 15, ROW = 200;
-static const float MDE = 0.015f, MREP = 0.5f;
+static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 25;
+static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
 struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; };
 
-struct arow { uint32_t a, b, u; std::vector<uint32_t> n, d; std::string al; uint64_t k; };
+struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d; };
 
-struct crow { std::string pc; uint32_t s; };
+struct sv { ev e; std::string nm; uint32_t pc; arow r; };
 
-struct sv { ev e; std::string nm; uint32_t f, pc, el; std::vector<uint32_t> n, d; std::vector<uint8_t> cov, has; };
+struct bed { std::unordered_map<std::string, std::vector<std::pair<uint32_t, uint32_t>>> m; };
 
 static std::vector<uint32_t> nums(const char* s) {
     std::vector<uint32_t> v;
@@ -33,10 +34,14 @@ static bool cmp_sv(const sv& x, const sv& y) {
     return x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.p1 < y.e.p1;
 }
 
-static void add(std::vector<ev>& o, uint32_t q, const char* ty, const std::string& c1, uint32_t p1, const std::string& c2, uint32_t p2, const seg& x, const seg& y) {
+static uint32_t top(const std::vector<uint32_t>& n) {
+    return *std::max_element(n.begin() + 1, n.end());
+}
+
+static void add(std::vector<ev>& o, uint32_t q, const char* ty, std::string c1, uint32_t p1, std::string c2, uint32_t p2, const seg& x, const seg& y) {
     if (c1 == c2 && (p1 > p2 ? p1 - p2 : p2 - p1) < MS && std::strcmp(ty, "INS")) return;
     uint32_t l1 = x.qe - x.qs, l2 = y.qe - y.qs;
-    if (c1 == c2 && p1 > p2) { std::swap(p1, p2); std::swap(l1, l2); }
+    if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); std::swap(l1, l2); }
     o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de)});
 }
 
@@ -77,18 +82,6 @@ static std::vector<ev> events(std::vector<seg>& sg) {
     return o;
 }
 
-static bool like(const ev& x, const ev& y) {
-    uint32_t nr = x.ty == "DEL" || x.ty == "INS" ? std::min(NEAR, std::max(100u, 3 * (x.p2 - x.p1))) : NEAR;
-    if (x.ty != y.ty || x.c1 != y.c1 || x.c2 != y.c2 || x.p1 + nr < y.p1 || y.p1 + nr < x.p1) return false;
-    if (x.ty == "DEL" || x.ty == "INS") return 2 * (y.p2 - y.p1) >= x.p2 - x.p1 && y.p2 - y.p1 <= 2 * (x.p2 - x.p1);
-    return x.p1 + JN >= y.p1 && y.p1 + JN >= x.p1 && x.p2 + JN >= y.p2 && y.p2 + JN >= x.p2;
-}
-
-static bool covers(const std::vector<seg>& sg, const std::string& c, uint32_t p) {
-    for (const seg& s : sg) if (s.mq >= MQ && s.t == c && s.ts + COV <= p && s.te >= p + COV) return true;
-    return false;
-}
-
 static bool near(const sv& x, const sv& y) {
     return x.e.ty == y.e.ty && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
 }
@@ -96,8 +89,6 @@ static bool near(const sv& x, const sv& y) {
 static bool primary(const std::string& c) {
     return c.size() <= 5 && c.find('_') == std::string::npos && c != "chrM" && c != "M";
 }
-
-static uint32_t top(const std::vector<uint32_t>& n);
 
 static std::string ref(FILE* f, const std::vector<uint64_t>& v, uint32_t a, uint32_t b) {
     uint64_t s = v[1] + a / v[2] * v[3] + a % v[2], e = v[1] + b / v[2] * v[3] + b % v[2];
@@ -118,88 +109,118 @@ static float rep(const std::string& s) {
     return b;
 }
 
-static const char* verdict(const sv& s, FILE* fa, std::unordered_map<std::string, std::vector<uint64_t>>& fai) {
-    uint32_t t = top(s.n), L = s.e.p2 - s.e.p1;
-    if (!s.cov[0]) return "NOREF";
-    if (s.has[0]) return "NORMAL";
-    if (t < SUP || (s.e.ty == "INS" && t < SUPI) || ((s.e.ty == "DEL" || s.e.ty == "INS") && L < TINY && t < SUPT) || (s.n[0] && (s.n[0] > 2 || t < 10 * s.n[0]))) return "LOWSUP";
-    if (s.e.mq < GMQ) return "MAPQ";
-    if (s.e.de > MDE) return "DIVERGE";
-    if (t < 20 && s.e.ty != "BND" && s.e.ty != "INV" && L < SHORT && rep(ref(fa, fai[s.e.c1], s.e.p1 > WIN ? s.e.p1 - WIN : 0, std::min<uint64_t>(s.e.p1 + WIN, fai[s.e.c1][0]))) > MREP) return "REPEAT";
-    const std::vector<uint64_t>& c = fai[s.e.c1];
-    if ((s.e.ty == "DEL" || s.e.ty == "INS") && L < SHORT && (s.e.p1 < END || s.e.p1 + END > c[0])) return "CHREND";
-    return "PASS";
-}
-
-static uint32_t top(const std::vector<uint32_t>& n) {
-    return *std::max_element(n.begin() + 1, n.end());
-}
-
-int cmd_call(const char* paf, const char* evi, const char* fasta, const char* out) {
-    std::unordered_map<std::string, std::vector<arow>> alt;
-    std::unordered_map<uint32_t, std::vector<crow>> cp;
-    std::unordered_map<uint64_t, std::vector<crow>> byk;
-    std::unordered_map<std::string, std::vector<seg>> al;
-    std::unordered_map<std::string, std::vector<ev>> me;
-    char line[1 << 16], nm[256], role[8], cn[4096], x[4096], dd[4096], st, tn[256];
-    uint32_t a, b, u, qs, qe, ts, te, mq, z;
-    FILE* f = std::fopen(evi, "r");
-    while (std::fgets(line, sizeof line, f)) {
-        unsigned long ky = ~0ul;
-        dd[0] = 0;
-        std::sscanf(line, "%255s %u %u %7s %u %4095s %4095s %4095s %lu", nm, &a, &b, role, &u, cn, x, dd, &ky);
-        if (role[0] != 'a') cp[u].push_back({nm, (uint32_t)std::atoi(cn)});
-        else { alt[nm].push_back({a, b, u, nums(cn), nums(dd), x, ky}); byk[ky].push_back({nm, (uint32_t)std::atoi(nm + 1)}); }
-    }
+static void load_bed(const char* path, bed* b) {
+    char c[256];
+    uint32_t s, e;
+    FILE* f = std::fopen(path, "r");
+    while (std::fscanf(f, "%255s %u %u%*[^\n]", c, &s, &e) == 3) b->m[c].push_back({s, e});
     std::fclose(f);
-    f = std::fopen(paf, "r");
-    while (std::fgets(line, sizeof line, f)) {
+    for (auto& kv : b->m) {
+        std::vector<std::pair<uint32_t, uint32_t>>& v = kv.second;
+        std::sort(v.begin(), v.end());
+        size_t j = 0;
+        for (size_t i = 1; i < v.size(); i++)
+            if (v[i].first <= v[j].second) v[j].second = std::max(v[j].second, v[i].second);
+            else v[++j] = v[i];
+        v.resize(j + 1);
+    }
+}
+
+static bool inbed(const bed* b, const std::string& c, uint32_t p) {
+    auto it = b->m.find(c);
+    if (it == b->m.end()) return false;
+    auto k = std::upper_bound(it->second.begin(), it->second.end(), std::make_pair(p + 50, ~0u));
+    return k != it->second.begin() && (k - 1)->second + 50 >= p;
+}
+
+static float prob(const sv& s, float rp, bool vn, float med, const float* w, float* f) {
+    const arow& r = s.r;
+    uint32_t t = top(r.n), dt = r.d[r.s], L = s.e.p2 - s.e.p1;
+    int32_t al = std::abs(r.lest);
+    bool sp = r.nspan > 0, ind = s.e.ty != "BND" && s.e.ty != "INV";
+    f[0] = 1;
+    f[1] = std::log2(t + 1.f);
+    f[2] = std::min(1.f, (float)t / std::max(dt, 1u));
+    f[3] = std::log2((float)s.pc);
+    f[4] = r.ncl;
+    f[5] = std::min(1.f, (float)t / std::max(r.tspan, 1u));
+    f[6] = sp;
+    f[7] = r.nsame > 0;
+    f[8] = sp && al < (int32_t)MS;
+    f[9] = sp && al >= (int32_t)MS && ind && (2 * al < (int32_t)L || al > 2 * (int32_t)L);
+    f[10] = r.nspan >= 3 && r.dmin < -20 && r.dmax > 20;
+    f[11] = r.shadow > 0;
+    f[12] = 1000.f * r.tonly / std::max(r.span, 1u);
+    f[13] = 1000.f * r.nbr / std::max(r.span, 1u);
+    f[14] = s.e.mq / 60.f;
+    f[15] = std::min(s.e.de, 0.05f) * 100;
+    f[16] = rp;
+    f[17] = vn;
+    f[18] = s.e.ty == "INS";
+    f[19] = s.e.ty == "DUP";
+    f[20] = s.e.ty == "INV";
+    f[21] = s.e.ty == "BND";
+    f[22] = s.e.ty == "BND" ? 0 : std::log2(L + 1.f);
+    f[23] = std::log2((dt + 1.f) / (med + 1));
+    f[24] = r.d[0] == 0;
+    float z = 0;
+    for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
+    return 1 / (1 + std::exp(-z));
+}
+
+int cmd_call(const char* paf, const char* evi, const char* fasta, const char* out, const char* wf, const char* vb) {
+    std::unordered_map<std::string, std::vector<arow>> alt;
+    std::unordered_map<std::string, std::vector<seg>> al;
+    char line[1 << 16], nm[256], cn[4096], dd[4096], st, tn[256];
+    uint32_t qs, qe, ts, te, mq, z;
+    float w[NF], f[NF];
+    bed vn;
+    std::vector<uint32_t> dep;
+    std::copy(W0, W0 + NF, w);
+    if (wf) { FILE* fw = std::fopen(wf, "r"); for (uint32_t i = 0; i < NF; i++) std::fscanf(fw, "%f", &w[i]); std::fclose(fw); }
+    if (vb) load_bed(vb, &vn);
+    FILE* fi = std::fopen(evi, "r");
+    while (std::fgets(line, sizeof line, fi)) {
+        arow r;
+        std::sscanf(line, "%255s %u %u %u %4095s %4095s %*s %u %u %u %u %u %u %d %d %d %u %u %u %u", nm, &r.a, &r.b, &r.u, cn, dd, &r.s, &r.ncl, &r.cl, &r.tspan, &r.nspan, &r.nsame, &r.lest, &r.dmin, &r.dmax, &r.shadow, &r.tonly, &r.nbr, &r.span);
+        r.n = nums(cn);
+        r.d = nums(dd);
+        dep.push_back(r.d[r.s]);
+        alt[nm].push_back(r);
+    }
+    std::fclose(fi);
+    std::sort(dep.begin(), dep.end());
+    float med = dep.empty() ? 0 : dep[dep.size() / 2];
+    fi = std::fopen(paf, "r");
+    while (std::fgets(line, sizeof line, fi)) {
         std::sscanf(line, "%255s %u %u %u %c %255s %u %u %u %u %u %u", nm, &z, &qs, &qe, &st, tn, &z, &ts, &te, &z, &z, &mq);
         const char *cg = std::strstr(line, "cg:Z:"), *de = std::strstr(line, "de:f:");
         al[nm].push_back({qs, qe, ts, te, mq, st, tn, cg ? std::string(cg + 5, std::strcspn(cg + 5, "\t\n")) : "", de ? std::strtof(de + 5, nullptr) : 0});
     }
-    std::fclose(f);
+    std::fclose(fi);
     std::vector<sv> som;
     for (auto& pc : alt) {
-        uint32_t fs = std::atoi(pc.first.c_str() + 1);
-        if (!fs || !al.count(pc.first)) continue;
+        if (!al.count(pc.first)) continue;
         for (const ev& e : events(al[pc.first])) {
             const arow* r = nullptr;
-            std::vector<const arow*> rs;
-            for (const arow& w : pc.second)
-                if (e.q + ROW >= w.a && e.q <= w.b + ROW) { rs.push_back(&w); if (!r || top(w.n) > top(r->n)) r = &w; }
+            for (const arow& x : pc.second) if (e.q + ROW >= x.a && e.q <= x.b + ROW && (!r || top(x.n) > top(r->n))) r = &x;
             if (!r || !primary(e.c1) || !primary(e.c2) || top(r->n) < MM) continue;
-            sv s = {e, pc.first, fs, 1, r->b - r->a, r->n, r->d, std::vector<uint8_t>(r->n.size(), 0), std::vector<uint8_t>(r->n.size(), 0)};
-            std::vector<uint8_t> c2(r->n.size(), e.ty == "INS" || e.l2 < SHORT);
-            for (uint32_t k = 0; k < r->n.size(); k++) s.cov[k] = e.l1 < SHORT;
-            s.cov[fs] = c2[fs] = 1;
-            for (const arow* w : rs) for (uint32_t k = 0; k < w->n.size(); k++) s.has[k] |= w->al[k] == 'a' || (w->al[k] == '1' && (e.ty == "DEL" || e.ty == "INS") && e.p2 - e.p1 < SHORT);
-            std::vector<crow> ms;
-            for (const arow& w : pc.second) ms.insert(ms.end(), cp[w.u].begin(), cp[w.u].end());
-            for (const arow* w : rs) for (const crow& c : byk[w->k]) if (c.s != fs && w->k != ~0ul) ms.push_back(c);
-            for (const crow& c : ms) {
-                if (!al.count(c.pc)) continue;
-                std::vector<seg>& sg = al[c.pc];
-                s.cov[c.s] |= covers(sg, e.c1, e.p1);
-                c2[c.s] |= covers(sg, e.c2, e.p2);
-                if (!me.count(c.pc)) me[c.pc] = events(sg);
-                for (const ev& y : me[c.pc]) s.has[c.s] |= like(e, y);
-            }
-            for (uint32_t k = 0; k < r->n.size(); k++) s.cov[k] &= c2[k];
-            som.push_back(s);
+            som.push_back({e, pc.first, 1, *r});
         }
     }
     std::sort(som.begin(), som.end(), cmp_sv);
     std::vector<sv> res;
     for (const sv& s : som) {
-        if (!res.empty() && near(res.back(), s)) {
-            sv& r = res.back();
-            for (size_t i = 0; i < s.n.size(); i++) { r.n[i] = std::max(r.n[i], s.n[i]); r.cov[i] |= s.cov[i]; r.has[i] |= s.has[i]; }
-            if (r.d.size() == s.d.size()) for (size_t i = 0; i < s.d.size(); i++) r.d[i] = std::max(r.d[i], s.d[i]);
-            r.pc++;
-            continue;
-        }
-        res.push_back(s);
+        if (res.empty() || !near(res.back(), s)) { res.push_back(s); continue; }
+        sv& q = res.back();
+        arow m = top(s.r.n) > top(q.r.n) ? s.r : q.r;
+        if (top(s.r.n) > top(q.r.n)) { q.e = s.e; q.nm = s.nm; }
+        m.nsame = std::max(s.r.nsame, q.r.nsame);
+        m.nspan = std::max(s.r.nspan, q.r.nspan);
+        m.ncl = std::max(s.r.ncl, q.r.ncl);
+        m.shadow = std::max(s.r.shadow, q.r.shadow);
+        q.r = m;
+        q.pc++;
     }
     std::unordered_map<std::string, std::vector<uint64_t>> fai;
     FILE* fx = std::fopen((std::string(fasta) + ".fai").c_str(), "r");
@@ -208,25 +229,23 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     std::fclose(fx);
     FILE *fa = std::fopen(fasta, "r"), *o = std::fopen(out, "w");
     std::fprintf(o, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
-    for (size_t i = 0; i < (res.empty() ? 0 : res[0].n.size()); i++) std::fprintf(o, "\tS%zu", i);
+    for (size_t i = 0; i < (res.empty() ? 0 : res[0].r.n.size()); i++) std::fprintf(o, "\tS%zu", i);
     std::fprintf(o, "\n");
-    uint64_t np = 0, nr = 0;
+    uint64_t np = 0;
     for (size_t i = 0; i < res.size(); i++) {
         const sv& s = res[i];
-        const char* fl = verdict(s, fa, fai);
-        np += !std::strcmp(fl, "PASS");
-        nr += !std::strcmp(fl, "NOREF");
-        std::string alt_ = s.e.ty == "BND" ? "N[" + s.e.c2 + ":" + std::to_string(s.e.p2) + "[" : "<" + s.e.ty + ">", cv, hs;
-        std::string dp;
-        for (size_t k = 0; k < s.n.size(); k++) { cv += (k ? "," : "") + std::to_string(s.cov[k]); hs += (k ? "," : "") + std::to_string(s.has[k]); }
-        for (size_t k = 0; k < s.d.size(); k++) dp += (k ? "," : "") + std::to_string(s.d[k]);
-        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;PIECES=%u;PIECE=%s;EVLEN=%u;COV=%s;HAS=%s;MQ=%u;ALN=%u;DE=%.4f;DP=%s\tGT:DV", s.e.c1.c_str(), s.e.p1, i, alt_.c_str(), fl, s.e.ty.c_str(),
-                     s.e.ty == "BND" || s.e.ty == "INS" ? s.e.p1 : s.e.p2, s.e.c1 == s.e.c2 ? s.e.p2 - s.e.p1 : 0, s.pc, s.nm.c_str(), s.el, cv.c_str(), hs.c_str(), s.e.mq, s.e.ln, s.e.de, dp.c_str());
-        for (uint32_t n : s.n) std::fprintf(o, "\t%s:%u", n >= MM ? "0/1" : "0/0", n);
+        float rp = rep(ref(fa, fai[s.e.c1], s.e.p1 > WIN ? s.e.p1 - WIN : 0, std::min<uint64_t>(s.e.p1 + WIN, fai[s.e.c1][0])));
+        float p = prob(s, rp, inbed(&vn, s.e.c1, s.e.p1) || inbed(&vn, s.e.c2, s.e.p2), med, w, f);
+        np += p >= PCUT;
+        std::string alt_ = s.e.ty == "BND" ? "N[" + s.e.c2 + ":" + std::to_string(s.e.p2) + "[" : "<" + s.e.ty + ">", fs;
+        for (uint32_t k = 0; k < NF; k++) { std::snprintf(nm, sizeof nm, "%s%.4g", k ? "," : "", f[k]); fs += nm; }
+        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s\tGT:DV", s.e.c1.c_str(), s.e.p1, i, alt_.c_str(), p >= PCUT ? "PASS" : "LOW", s.e.ty.c_str(),
+                     s.e.ty == "BND" || s.e.ty == "INS" ? s.e.p1 : s.e.p2, s.e.c1 == s.e.c2 ? s.e.p2 - s.e.p1 : 0, s.pc, s.nm.c_str(), 1 - p, fs.c_str());
+        for (uint32_t n : s.r.n) std::fprintf(o, "\t%s:%u", n >= MM ? "0/1" : "0/0", n);
         std::fprintf(o, "\n");
     }
     std::fclose(o);
     std::fclose(fa);
-    std::fprintf(stderr, "[call] %zu tumor events between anchors, %zu records: %lu PASS, %lu without a normal read across the breakpoints\n", som.size(), res.size(), np, nr);
+    std::fprintf(stderr, "[call] %zu tumor events at sites, %zu records, %lu PASS\n", som.size(), res.size(), np);
     return 0;
 }
