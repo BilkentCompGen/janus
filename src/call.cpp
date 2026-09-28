@@ -9,7 +9,7 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, MSI = 45, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 32, DUPT = 500, KM = 15;
+static const uint32_t MM = 3, MQ = 10, MS = 50, MSI = 45, TOL = 50, NEAR = 500, JN = 100, ISL = 250, ROW = 200, WIN = 150, NF = 32, DUPT = 500, KM = 15;
 static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
@@ -79,6 +79,11 @@ static std::vector<ev> events(std::vector<seg>& sg) {
             if (op != 'D') q = s.st == '+' ? q + l : q - l;
         }
         if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s, MSI);
+    }
+    for (size_t i = 0; i + 2 < sg.size(); i++) {
+        const seg &x = sg[i], &y = sg[i + 2];
+        int64_t d = x.st == '+' ? (int64_t)y.ts - x.te : (int64_t)x.ts - y.te;
+        if (x.mq >= MQ && y.mq >= MQ && x.t == y.t && x.st == y.st && d > -(int64_t)MS && d < (int64_t)MS && y.qs > x.qe + MS) add(o, x.qe, "INS", x.t, x.st == '+' ? x.te : x.ts, x.t, (x.st == '+' ? x.te : x.ts) + y.qs - x.qe, x, y, MS);
     }
     for (size_t i = 0; i + 1 < sg.size(); i++) {
         const seg &x = sg[i], &y = sg[i + 1];
@@ -300,13 +305,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     for (const sv& s : som) {
         if (res.empty() || !near(res.back(), s)) { res.push_back(s); continue; }
         sv& q = res.back();
-        arow m = top(s.r.n) > top(q.r.n) ? s.r : q.r;
-        if (top(s.r.n) > top(q.r.n)) { q.e = s.e; q.nm = s.nm; }
-        m.nsame = std::max(s.r.nsame, q.r.nsame);
-        m.nspan = std::max(s.r.nspan, q.r.nspan);
-        m.ncl = std::max(s.r.ncl, q.r.ncl);
-        m.shadow = std::max(s.r.shadow, q.r.shadow);
-        q.r = m;
+        if (top(s.r.n) > top(q.r.n)) { q.e = s.e; q.nm = s.nm; q.r = s.r; }
         q.pc++;
     }
     FILE* o = std::fopen(out, "w");
@@ -326,7 +325,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     std::sort(ix.begin(), ix.end(), [&](size_t a, size_t b) { const ev &x = res[a].e, &y = res[b].e; return x.c1 != y.c1 ? x.c1 < y.c1 : x.c2 != y.c2 ? x.c2 < y.c2 : x.p1 < y.p1; });
     for (size_t a = 0; a < ix.size(); a++)
         for (size_t b = a + 1; b < ix.size() && res[ix[b]].e.c1 == res[ix[a]].e.c1 && res[ix[b]].e.c2 == res[ix[a]].e.c2 && res[ix[b]].e.p1 <= res[ix[a]].e.p1 + DUPT; b++)
-            if (res[ix[b]].e.p2 + DUPT >= res[ix[a]].e.p2 && res[ix[a]].e.p2 + DUPT >= res[ix[b]].e.p2) dup[pv[ix[a]] < pv[ix[b]] ? ix[a] : ix[b]] = 1;
+            if (res[ix[b]].e.ty == res[ix[a]].e.ty && res[ix[b]].e.p2 + DUPT >= res[ix[a]].e.p2 && res[ix[a]].e.p2 + DUPT >= res[ix[b]].e.p2) dup[pv[ix[a]] < pv[ix[b]] ? ix[a] : ix[b]] = 1;
     uint64_t np = 0;
     for (size_t i = 0; i < res.size(); i++) {
         const sv& s = res[i];
