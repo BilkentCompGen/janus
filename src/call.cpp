@@ -9,14 +9,14 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, MSI = 45, TOL = 50, NEAR = 500, JN = 100, ISL = 250, ROW = 200, WIN = 150, NF = 32, DUPT = 500, KM = 15;
-static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0};
+static const uint32_t MM = 3, MQ = 10, MS = 50, MSI = 45, TOL = 50, NEAR = 500, JN = 100, ISL = 250, ROW = 200, WIN = 150, NF = 37, DUPT = 500, KM = 15;
+static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
 struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; char st; uint32_t syn; };
 
-struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span, tsame, orphan; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d, lc, rc; };
+struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span, tsame, orphan, n20, t20; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d, lc, rc; };
 
 struct sv { ev e; std::string nm; uint32_t pc; arow r; };
 
@@ -221,6 +221,11 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[29] = (float)t / (t + r.tsame);
     f[30] = r.orphan;
     f[31] = s.e.syn;
+    f[32] = r.n20 > 0;
+    f[33] = r.n20 >= 2;
+    f[34] = (float)r.n20 / std::max(r.nspan, 1u);
+    f[35] = std::log2(r.n20 + 1.f);
+    f[36] = std::min(1.f, f[34] / std::max((float)r.t20 / std::max(r.tspan, 1u), 0.05f));
     float z = 0;
     for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
     return 1 / (1 + std::exp(-z));
@@ -240,7 +245,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     FILE* fi = std::fopen(evi, "r");
     while (std::fgets(line, sizeof line, fi)) {
         arow r;
-        std::sscanf(line, "%255s %u %u %u %4095s %4095s %*s %u %u %u %u %u %u %d %d %d %u %u %u %u %4095s %4095s %u", nm, &r.a, &r.b, &r.u, cn, dd, &r.s, &r.ncl, &r.cl, &r.tspan, &r.nspan, &r.nsame, &r.lest, &r.dmin, &r.dmax, &r.shadow, &r.tonly, &r.nbr, &r.span, lc, rc, &r.tsame);
+        std::sscanf(line, "%255s %u %u %u %4095s %4095s %*s %u %u %u %u %u %u %d %d %d %u %u %u %u %4095s %4095s %u %u %u", nm, &r.a, &r.b, &r.u, cn, dd, &r.s, &r.ncl, &r.cl, &r.tspan, &r.nspan, &r.nsame, &r.lest, &r.dmin, &r.dmax, &r.shadow, &r.tonly, &r.nbr, &r.span, lc, rc, &r.tsame, &r.n20, &r.t20);
         r.orphan = 0;
         r.n = nums(cn);
         r.d = nums(dd);
@@ -281,9 +286,9 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
             if (!r) {
                 const arow* q = nullptr;
                 for (const arow& x : pc.second) if (!q || std::min(x.a > e.q ? x.a - e.q : 0u, e.q > x.b ? e.q - x.b : 0u) < std::min(q->a > e.q ? q->a - e.q : 0u, e.q > q->b ? e.q - q->b : 0u)) q = &x;
-                o = *q; o.orphan = 1; o.nspan = o.nsame = o.ncl = o.cl = 0; o.lest = o.dmin = o.dmax = 0; r = &o;
+                o = *q; o.orphan = 1; o.nspan = o.nsame = o.ncl = o.cl = o.n20 = 0; o.lest = o.dmin = o.dmax = 0; r = &o;
             } else used[r - pc.second.data()] = 1;
-            if (r != &o && !rank(*r, e, ind) && (e.q < r->a || e.q > r->b)) { o = *r; o.orphan = 1; o.nspan = o.nsame = o.ncl = o.cl = 0; o.lest = o.dmin = o.dmax = 0; r = &o; }
+            if (r != &o && !rank(*r, e, ind) && (e.q < r->a || e.q > r->b)) { o = *r; o.orphan = 1; o.nspan = o.nsame = o.ncl = o.cl = o.n20 = 0; o.lest = o.dmin = o.dmax = 0; r = &o; }
             uint32_t al_ = std::abs(r->lest);
             if (((e.ty == "DEL" && r->lest > 0) || (e.ty == "INS" && r->lest < 0)) && !r->nsame && al_ >= MS && (al_ > L ? al_ - L : L - al_) <= 20) { e.p2 = e.p1 + al_; L = al_; }
             if (ind && L < MS) continue;
