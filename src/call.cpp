@@ -9,8 +9,8 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 25;
-static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1};
+static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 26;
+static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
@@ -163,6 +163,7 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[22] = s.e.ty == "BND" ? 0 : std::log2(L + 1.f);
     f[23] = std::log2((dt + 1.f) / (med + 1));
     f[24] = r.d[0] == 0;
+    f[25] = (float)r.nsame / std::max(r.nspan, 1u);
     float z = 0;
     for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
     return 1 / (1 + std::exp(-z));

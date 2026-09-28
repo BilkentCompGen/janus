@@ -13,7 +13,7 @@ struct job { uint64_t read; uint32_t w, k, rc, lo, hi, a, b, pc; };
 
 struct rout { std::vector<std::pair<uint32_t, uint32_t>> iv; std::vector<std::string> s; };
 
-struct sctx { keys* x; std::vector<site>* w; std::unordered_map<uint64_t, uint32_t> dix; std::vector<uint32_t> dep; std::vector<uint64_t> mask; const uint8_t* sh; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; };
+struct sctx { keys* x; std::vector<site>* w; std::unordered_map<uint64_t, uint32_t> dix; std::vector<uint32_t> dep; std::vector<uint64_t> mask; const uint8_t* sh; const uint16_t* cn; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; };
 
 static bool by_read(const site& p, const site& q) { return p.read < q.read; }
 
@@ -151,6 +151,12 @@ static std::string list(const uint32_t* v, uint64_t n) {
     return s;
 }
 
+static std::string depth(const sctx* c, const site& e, uint64_t K) {
+    std::vector<uint32_t> d(c->dep.begin() + c->dix.at(e.key), c->dep.begin() + c->dix.at(e.key) + c->x->S);
+    if (e.la.size() && e.ra.size()) for (uint64_t s = 0; s < c->x->S; s++) d[s] = std::min(c->cn[s * K + e.la[0]], c->cn[s * K + e.ra[0]]);
+    return list(d.data(), c->x->S);
+}
+
 int cmd_select(const char* in, const char* dr, const char* rd, const char* out, int t, int mode) {
     gph g;
     adj a;
@@ -161,7 +167,7 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     make_adj(&g, &a);
     masks(&g, c.mask);
     c.sh = g.sh.data();
-    g.c = {};
+    c.cn = g.c.data();
     g.ec = {};
     make_keys(&x, &g, &a, mode);
     count_keys(&x, rd, t);
@@ -193,7 +199,7 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
         uint32_t ncl = 0;
         for (uint32_t k = 0; k < CL; k++) ncl += e.cl[k].n > 0;
         std::fprintf(v, "s%lu_%lu_%u\t%u\t%u\t%u\t%s\t%s\t%lu\t%u\t%u\t%u\t%u\t%u\t%u\t%d\t%d\t%d\t%u\t%u\t%u\t%u\n", (uint64_t)(j.read >> 40), (uint64_t)(j.read & 0xffffffffff), j.pc, j.a, j.b, j.w,
-                     list(&x.n[e.key * x.S], x.S).c_str(), list(&c.dep[c.dix[e.key]], x.S).c_str(), (unsigned long)e.key, e.s, ncl, j.k == NONE ? 0 : e.cl[j.k].n, e.tspan, e.nspan, e.nsame, e.lest, e.dmin, e.dmax, e.shadow, e.tonly, e.nbr, e.span);
+                     list(&x.n[e.key * x.S], x.S).c_str(), depth(&c, e, g.K).c_str(), (unsigned long)e.key, e.s, ncl, j.k == NONE ? 0 : e.cl[j.k].n, e.tspan, e.nspan, e.nsame, e.lest, e.dmin, e.dmax, e.shadow, e.tonly, e.nbr, e.span);
     }
     std::fclose(f);
     std::fclose(v);
