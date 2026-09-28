@@ -9,8 +9,8 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 26, DUPT = 500;
-static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0};
+static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 29, DUPT = 500;
+static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
@@ -146,7 +146,7 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[5] = std::min(1.f, (float)t / std::max(r.tspan, 1u));
     f[6] = sp;
     f[7] = r.nsame > 0;
-    f[8] = sp && al < (int32_t)MS;
+    f[8] = sp && ind && al < (int32_t)MS;
     f[9] = sp && al >= (int32_t)MS && ind && (2 * al < (int32_t)L || al > 2 * (int32_t)L);
     f[10] = r.nspan >= 3 && r.dmin < -20 && r.dmax > 20;
     f[11] = r.shadow > 0;
@@ -164,6 +164,9 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[23] = std::log2((dt + 1.f) / (med + 1));
     f[24] = r.d[0] == 0;
     f[25] = (float)r.nsame / std::max(r.nspan, 1u);
+    f[26] = std::log2(r.nsame + 1.f);
+    f[27] = std::log2(r.nspan + 1.f);
+    f[28] = f[5] - f[25];
     float z = 0;
     for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
     return 1 / (1 + std::exp(-z));
