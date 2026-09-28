@@ -283,6 +283,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
                 for (const arow& x : pc.second) if (!q || std::min(x.a > e.q ? x.a - e.q : 0u, e.q > x.b ? e.q - x.b : 0u) < std::min(q->a > e.q ? q->a - e.q : 0u, e.q > q->b ? e.q - q->b : 0u)) q = &x;
                 o = *q; o.orphan = 1; o.nspan = o.nsame = o.ncl = o.cl = 0; o.lest = o.dmin = o.dmax = 0; r = &o;
             } else used[r - pc.second.data()] = 1;
+            if (r != &o && !rank(*r, e, ind) && (e.q < r->a || e.q > r->b)) { o = *r; o.orphan = 1; o.nspan = o.nsame = o.ncl = o.cl = 0; o.lest = o.dmin = o.dmax = 0; r = &o; }
             uint32_t al_ = std::abs(r->lest);
             if (((e.ty == "DEL" && r->lest > 0) || (e.ty == "INS" && r->lest < 0)) && !r->nsame && al_ >= MS && (al_ > L ? al_ - L : L - al_) <= 20) { e.p2 = e.p1 + al_; L = al_; }
             if (ind && L < MS) continue;
