@@ -10,4 +10,4 @@ struct keys { uint64_t S, Z; const gph* g; const adj* a; std::vector<uint32_t> u
 
 void make_keys(keys* x, const gph* g, const adj* a, const std::vector<uint8_t>& drop);
 void chain_keys(const keys* x, rth* c, uint32_t m, std::vector<hit>& out);
-void count_keys(keys* x, const char* reads, const char* ids, int t);
+void count_keys(keys* x, const char* reads, int t);

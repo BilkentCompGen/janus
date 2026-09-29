@@ -19,12 +19,11 @@ int main(int argc, char** argv) {
     if (!std::strcmp(c, "count")) return cmd_count(in, out, t);
     if (!std::strcmp(c, "graph")) return cmd_graph(in, out);
     if (!std::strcmp(c, "prune")) return cmd_prune(in, rd, out, t);
-    if (!std::strcmp(c, "ids")) return cmd_ids(in, rd, t);
     if (!std::strcmp(c, "select")) return cmd_select(in, dr, rd, out, t);
     if (!std::strcmp(c, "refidx")) return cmd_refidx(in, out, t);
     if (!std::strcmp(c, "place")) return cmd_place(in, rd, dr, out, t);
     if (!std::strcmp(c, "lift")) return cmd_lift(in, rd, dr, out);
     if (!std::strcmp(c, "call")) return cmd_call(in, rd, dr, out, wf, vb);
-    std::printf("usage: snape <pack|extract|count|graph|prune|ids|select|refidx|place|lift|call> -i in -o out [-r reads|index|pieces] [-d drop|ref.fa] [-t threads] [-w weights] [-v vntr.bed]\n");
+    std::printf("usage: snape <pack|extract|count|graph|prune|select|refidx|place|lift|call> -i in -o out [-r reads|index|pieces] [-d drop|ref.fa] [-t threads] [-w weights] [-v vntr.bed]\n");
     return 1;
 }

@@ -174,13 +174,13 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     for (uint64_t h : read_set(dr)) drop[std::lower_bound(g.g.begin(), g.g.end(), h) - g.g.begin()] = 1;
     make_keys(&x, &g, &a, drop);
     g.ec = {};
-    count_keys(&x, rd, in, t);
+    count_keys(&x, rd, t);
     c.x = &x;
     gather(&c, drop);
     c.h.resize(t);
     c.ids.resize(t);
     rpass p;
-    each_read(&p, g.g, rd, in, t, anchor, &c);
+    each_read(&p, g.g, rd, t, anchor, &c);
     pieces(&c);
     for (std::string& s : split(rd)) { c.fs.push_back(fileno(std::fopen(s.c_str(), "rb"))); c.fx.push_back(fileno(std::fopen((s + ".idx").c_str(), "rb"))); }
     par(t, cut, &c);

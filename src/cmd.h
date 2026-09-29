@@ -5,7 +5,6 @@ int cmd_extract(const char* in, const char* out, int t);
 int cmd_count(const char* in, const char* out, int t);
 int cmd_graph(const char* in, const char* out);
 int cmd_prune(const char* in, const char* rd, const char* out, int t);
-int cmd_ids(const char* in, const char* rd, int t);
 int cmd_select(const char* in, const char* dr, const char* rd, const char* out, int t);
 int cmd_refidx(const char* in, const char* out, int t);
 int cmd_place(const char* in, const char* idx, const char* ref, const char* out, int t);

@@ -1,7 +1,4 @@
 #include <algorithm>
-#include <cstring>
-#include "cmd.h"
-#include "files.h"
 #include "io.h"
 #include "reads.h"
 
@@ -21,35 +18,33 @@ std::string bases(const rdcore* r, const uint8_t* rec, uint32_t lo, uint32_t hi,
 
 static const uint32_t NONE = ~0u;
 
-static void make_look(const std::vector<uint64_t>& g, std::vector<uint32_t>& off) {
-    off.assign((1 << 24) + 1, 0);
-    for (uint64_t h : g) off[(h >> 40) + 1]++;
-    for (uint32_t i = 0; i < 1 << 24; i++) off[i + 1] += off[i];
-}
-
-static uint32_t look(const std::vector<uint64_t>& g, const std::vector<uint32_t>& off, uint64_t h) {
-    uint32_t i = off[h >> 40], e = off[(h >> 40) + 1];
-    while (i < e && g[i] < h) i++;
-    return i;
-}
-
-static size_t nid_size(const char* p, size_t n) {
-    if (n < 8) return 0;
-    uint32_t k;
-    std::memcpy(&k, p, 4);
-    return 8 + 4 * (size_t)k <= n ? 8 + 4 * (size_t)k : 0;
+static void make_map(rpass* x) {
+    uint64_t z = 1, n = x->g->size();
+    while (z < n + n / 2) z <<= 1;
+    x->tab.assign(z, {0, NONE});
+    x->mask = z - 1;
+    for (uint32_t v = 0; v < n; v++) {
+        uint64_t h = (*x->g)[v], i = h & x->mask;
+        while (x->tab[i].h) i = (i + 1) & x->mask;
+        x->tab[i] = {h, v};
+    }
 }
 
 static void hashed(rpass* x, rth* c, const uint8_t* rec, const uint8_t* exc) {
     rdcore* r = &c->r;
     collapse(r, rec);
     load_cores(r, exc, x->wb);
-    if (c->h.size() < r->k / 32 + 2) c->h.resize(r->k / 16 + 4);
+    if (c->h.size() < r->n + r->k / 32 + 2) c->h.resize(2 * r->n + r->k / 16 + 4);
     if (c->nd.size() < r->n) c->nd.resize(2 * r->n);
+    uint64_t* w = c->h.data() + r->n;
     for (uint32_t i = 0; i < r->n; i++) {
-        uint64_t h = core_hash(c->h.data(), core_cut(r, i, c->h.data()));
-        uint32_t v = look(*x->g, x->off, h);
-        c->nd[i] = v < x->g->size() && (*x->g)[v] == h ? v : NONE;
+        c->h[i] = core_hash(w, core_cut(r, i, w));
+        __builtin_prefetch(&x->tab[c->h[i] & x->mask]);
+    }
+    for (uint32_t i = 0; i < r->n; i++) {
+        uint64_t j = c->h[i] & x->mask;
+        while (x->tab[j].h && x->tab[j].h != c->h[i]) j = (j + 1) & x->mask;
+        c->nd[i] = x->tab[j].v;
     }
 }
 
@@ -58,16 +53,9 @@ static void rp_work(block* b) {
     rth* c = &x->t[b->id];
     rdcore* r = &c->r;
     uint64_t rid = b->rec;
-    for (size_t o = 0, o2 = 0; o < b->inlen[0]; rid++) {
-        const uint8_t *p = (const uint8_t*)b->in[0] + o, *q = (const uint8_t*)b->in[1] + o2, *rec = x->ids ? nullptr : p;
-        if (x->ids) {
-            load_cores(r, p, x->wb);
-            std::memcpy(&r->len, q + 4, 4);
-            if (c->nd.size() < r->n) c->nd.resize(2 * r->n);
-            std::memcpy(c->nd.data(), q + 8, 4 * r->n);
-        } else hashed(x, c, p, q);
-        o += x->ids ? exc_size(b->in[0] + o, b->inlen[0] - o) : svb_size(b->in[0] + o, b->inlen[0] - o);
-        o2 += x->ids ? nid_size(b->in[1] + o2, b->inlen[1] - o2) : exc_size(b->in[1] + o2, b->inlen[1] - o2);
+    for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2), rid++) {
+        const uint8_t* rec = (const uint8_t*)b->in[0] + o;
+        hashed(x, c, rec, (const uint8_t*)b->in[1] + o2);
         if (c->id.size() < r->n) { c->id.resize(2 * r->n); c->ix.resize(2 * r->n); }
         for (uint32_t s = 0; s < 2; s++) {
             uint32_t m = 0;
@@ -78,43 +66,18 @@ static void rp_work(block* b) {
     }
 }
 
-static void id_work(block* b) {
-    rpass* x = (rpass*)b->ctx;
-    rth* c = &x->t[b->id];
-    for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2)) {
-        hashed(x, c, (const uint8_t*)b->in[0] + o, (const uint8_t*)b->in[1] + o2);
-        uint32_t hd[2] = {c->r.n, c->r.len};
-        b->out.insert(b->out.end(), (const char*)hd, (const char*)(hd + 2));
-        b->out.insert(b->out.end(), (const char*)c->nd.data(), (const char*)(c->nd.data() + c->r.n));
-    }
-}
-
-static void samples(rpass* x, const char* reads, const char* ids, int t) {
-    make_look(*x->g, x->off);
+void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, int t, read_fn fn, void* ctx) {
+    *x = {std::vector<rth>(t), &g, {}, 0, fn, ctx, 0, 0};
+    make_map(x);
+    FILE* fo = std::fopen("/dev/null", "w");
     for (std::string& s : split(reads)) {
         bin_header h, e;
-        std::string nid = std::string(ids) + "." + std::to_string(x->f) + ".nid";
-        FILE *fa = open_in((x->ids ? s + ".exc" : s).c_str(), &h), *fb = open_in((x->ids ? nid : s + ".exc").c_str(), &e);
-        FILE* fo = x->fn ? std::fopen("/dev/null", "w") : open_tmp(nid.c_str());
-        x->wb = x->ids ? h.resv[1] : e.resv[1];
-        bin_header o = {{'S', 'V', 'B', 'N'}, 1, stream_run(fa, fb, fo, t, x->ids ? exc_size : svb_size, x->ids ? nid_size : exc_size, x->fn ? rp_work : id_work, x), x->g->size(), {}};
-        if (x->fn) std::fclose(fo);
-        else finish(fo, nid.c_str(), &o);
+        FILE *fi = open_in(s.c_str(), &h), *fe = open_in((s + ".exc").c_str(), &e);
+        x->wb = e.resv[1];
+        stream_run(fi, fe, fo, t, svb_size, exc_size, rp_work, x);
         x->f++;
     }
-}
-
-void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, const char* ids, int t, read_fn fn, void* ctx) {
-    *x = {std::vector<rth>(t), &g, {}, fn, ctx, 0, 0, ids != nullptr};
-    samples(x, reads, ids ? ids : "", t);
-}
-
-int cmd_ids(const char* in, const char* rd, int t) {
-    gph g;
-    read_gph(in, &g);
-    rpass x = {std::vector<rth>(t), &g.g, {}, nullptr, nullptr, 0, 0, 0};
-    samples(&x, rd, in, t);
-    return 0;
+    std::fclose(fo);
 }
 
 static void match(rpass* x, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t) {
@@ -142,7 +105,7 @@ void fetch(std::vector<want>& w, const std::vector<uint64_t>& g, const char* rea
     std::vector<uint32_t> p(f.fo.begin(), f.fo.end() - 1);
     for (uint32_t i = 0; i < w.size(); i++) f.fi[p[w[i].p[0]]++] = i;
     rpass x;
-    each_read(&x, g, reads, nullptr, t, match, &f);
+    each_read(&x, g, reads, t, match, &f);
 }
 
 static uint32_t edit(const char* x, uint32_t n, const char* y, uint32_t m) {

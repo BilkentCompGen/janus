@@ -59,6 +59,8 @@ void chain_keys(const keys* x, rth* c, uint32_t m, std::vector<hit>& out) {
     out.clear();
     std::vector<uint32_t>& e = c->ed;
     e.resize(m);
+    for (uint32_t i = 0; i + 1 < m; i++) __builtin_prefetch(&x->a->oo[c->id[i]]);
+    for (uint32_t i = 0; i + 1 < m; i++) __builtin_prefetch(&x->a->on[x->a->oo[c->id[i]]]);
     for (uint32_t i = 0; i + 1 < m; i++) e[i] = edge(x->a, c->id[i], c->id[i + 1]);
     for (uint32_t i = 1; i + 1 < m; i++)
         if (x->br[c->id[i]] && e[i - 1] != NONE && e[i] != NONE) out.push_back({(uint64_t)(e[i - 1] + 1) << 32 | e[i], i - 1, i + 1});
@@ -98,8 +100,8 @@ static void tally(rpass* p, rth* c, const uint8_t*, uint32_t m, uint32_t, uint64
     }
 }
 
-void count_keys(keys* x, const char* reads, const char* ids, int t) {
+void count_keys(keys* x, const char* reads, int t) {
     kctx q = {x, std::vector<std::vector<hit>>(t)};
     rpass p;
-    each_read(&p, x->g->g, reads, ids, t, tally, &q);
+    each_read(&p, x->g->g, reads, t, tally, &q);
 }
