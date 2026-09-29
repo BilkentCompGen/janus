@@ -29,7 +29,8 @@ static std::vector<uint32_t> nums(const char* s) {
 }
 
 static uint32_t fit(const arow& r, const ev& e) {
-    return e.ty == "BND" || e.ty == "INV" ? e.q < r.a || e.q > r.b : r.nspan ? std::abs(std::abs(r.lest) - (int32_t)(e.p2 - e.p1)) : e.p2 - e.p1;
+    uint32_t o = e.q < r.a || e.q > r.b, L = e.p2 - e.p1;
+    return e.ty == "BND" || e.ty == "INV" ? o : o ? 2 * L : r.nspan ? std::abs(std::abs(r.lest) - (int32_t)L) : L;
 }
 
 static bool cmp_seg(const seg& x, const seg& y) { return x.qs < y.qs; }
