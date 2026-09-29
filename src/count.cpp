@@ -11,7 +11,7 @@ static const uint32_t MM = 3, MARGIN = 10, NS = 65536, M31 = (1u << 31) - 1;
 
 struct cth { rdcore r; std::vector<uint64_t> h; std::vector<std::pair<uint64_t, uint16_t>> ev; };
 
-struct cctx { cth* c; uint64_t *tab, *pr; uint16_t* pc; uint32_t *sc, *lc; std::vector<uint32_t> deg; uint64_t z, np, K; int w, t, fd, fl; };
+struct cctx { cth* c; uint64_t *tab, *pr; uint16_t* pc; uint32_t* sc; std::vector<uint32_t> deg; uint64_t z, np, K; int w, t, fd; };
 
 static uint64_t home(const cctx* x, uint64_t h) { return (h >> 48) * x->z + (((h >> 32) & 0xffff) * x->z >> 16); }
 
@@ -71,21 +71,19 @@ static void cnt_work(block* b) {
 static void shard_count(void* a, int i) {
     cctx* x = (cctx*)a;
     for (uint64_t s = shard(x, i); s < shard(x, i + 1); s++)
-        for (uint64_t k = s * x->z; k < (s + 1) * x->z; k++) { uint32_t n = x->tab[k] & 0xffff; x->sc[s + 1] += n >= MM; x->lc[s + 1] += n && n < MM; }
+        for (uint64_t k = s * x->z; k < (s + 1) * x->z; k++) x->sc[s + 1] += (x->tab[k] & 0xffff) >= MM;
 }
 
 static void shard_emit(void* a, int i) {
     cctx* x = (cctx*)a;
-    std::vector<uint64_t> v(x->z), l(x->z);
+    std::vector<uint64_t> v(x->z);
     std::vector<uint16_t> n(x->z);
     for (uint64_t s = shard(x, i); s < shard(x, i + 1); s++) {
-        uint64_t m = 0, q = 0, *t = x->tab + s * x->z;
+        uint64_t m = 0, *t = x->tab + s * x->z;
         for (uint64_t k = 0; k < x->z; k++) {
             if ((t[k] & 0xffff) >= MM) v[m++] = t[k] >> 16 << 16 | k;
-            else { if (t[k] & 0xffff) l[q++] = s << 48 | t[k] >> 16; t[k] = 0; }
+            else t[k] = 0;
         }
-        std::sort(l.begin(), l.begin() + q);
-        pwrite(x->fl, l.data(), q * 8, sizeof(bin_header) + x->lc[s] * 8);
         std::sort(v.begin(), v.begin() + m);
         for (uint64_t j = 0; j < m; j++) {
             uint64_t k = v[j] & 0xffff;
@@ -115,23 +113,20 @@ static int nbits(uint64_t v) { return v ? 64 - __builtin_clzll(v) : 1; }
 int cmd_count(const char* in, const char* out, int t) {
     bin_header h, e;
     std::vector<cth> c(t);
-    std::vector<uint32_t> sc(NS + 1), lc(NS + 1);
+    std::vector<uint32_t> sc(NS + 1);
     std::vector<char> ob;
-    std::string low = std::string(out) + ".low";
-    FILE* fi = open_in(in, &h), *fe = open_in((std::string(in) + ".exc").c_str(), &e), *fo = open_tmp(out), *fl = open_tmp(low.c_str());
-    cctx x = {c.data(), nullptr, nullptr, nullptr, sc.data(), lc.data(), {}, (e.total / 24 + 120000000) / NS + 64, 0, 0, e.resv[1], t, fileno(fo), fileno(fl)};
+    FILE* fi = open_in(in, &h), *fe = open_in((std::string(in) + ".exc").c_str(), &e), *fo = open_tmp(out);
+    cctx x = {c.data(), nullptr, nullptr, nullptr, sc.data(), {}, (e.total / 24 + 120000000) / NS + 64, 0, 0, e.resv[1], t, fileno(fo)};
     x.np = NS * x.z * 5 / 4;
     x.tab = (uint64_t*)std::calloc(NS * x.z, 8);
     x.pr = (uint64_t*)std::calloc(x.np, 8);
     x.pc = (uint16_t*)std::calloc(x.np, 2);
     stream_run(fi, fe, fo, t, svb_size, exc_size, cnt_work, &x);
     par(t, shard_count, &x);
-    for (uint32_t s = 0; s < NS; s++) { sc[s + 1] += sc[s]; lc[s + 1] += lc[s]; }
+    for (uint32_t s = 0; s < NS; s++) sc[s + 1] += sc[s];
     x.K = sc[NS];
     x.deg.resize(x.K);
     par(t, shard_emit, &x);
-    bin_header lh = {{'S', 'V', 'B', 'L'}, 1, lc[NS], 0, {}};
-    finish(fl, low.c_str(), &lh);
     par(t, edge_pick, &x);
     std::free(x.tab);
     std::free(x.pr);

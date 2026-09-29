@@ -7,23 +7,8 @@ void make_keys(keys* x, const gph* g, const adj* a) {
     x->S = g->S;
     x->g = g;
     x->a = a;
-    x->unit.assign(g->K, NONE);
-    x->off.assign(g->K, 0);
-    for (int pass = 0; pass < 2; pass++)
-        for (uint64_t v = 0; v < g->K; v++) {
-            bool head = a->io[v + 1] - a->io[v] != 1 || a->oo[a->in[a->io[v]] + 1] - a->oo[a->in[a->io[v]]] != 1;
-            if (x->unit[v] != NONE || (!pass && !head)) continue;
-            uint32_t u = x->len.size(), w = v, i = 0;
-            for (;;) {
-                x->unit[w] = u;
-                x->off[w] = i++;
-                if (a->oo[w + 1] - a->oo[w] != 1) break;
-                uint32_t nx = a->on[a->oo[w]];
-                if (a->io[nx + 1] - a->io[nx] != 1 || x->unit[nx] != NONE) break;
-                w = nx;
-            }
-            x->len.push_back(i);
-        }
+    x->unit.resize(g->K);
+    for (uint32_t u = 0; u + 1 < g->st.size(); u++) for (uint32_t v = g->st[u]; v < g->st[u + 1]; v++) x->unit[v] = u;
 }
 
 uint64_t keep_keys(keys* x, const std::vector<uint8_t>& sd) {
@@ -31,8 +16,9 @@ uint64_t keep_keys(keys* x, const std::vector<uint8_t>& sd) {
     uint64_t np = 0, K = x->g->K;
     x->br.assign(K, 0);
     for (uint64_t v = 0; v < K; v++) np += x->br[v] = sd[v] && (a->io[v + 1] - a->io[v] > 1 || a->oo[v + 1] - a->oo[v] > 1);
-    x->ku.assign(x->len.size(), 0);
-    for (uint64_t v = 0; v < K; v++) x->ku[x->unit[v]] |= sd[v] && x->len[x->unit[v]] > 1;
+    const std::vector<uint32_t>& st = x->g->st;
+    x->ku.assign(st.size() - 1, 0);
+    for (uint64_t v = 0; v < K; v++) x->ku[x->unit[v]] |= sd[v] && st[x->unit[v] + 1] - st[x->unit[v]] > 1;
     for (uint8_t k : x->ku) np += k;
     x->kb.assign(K, 0);
     for (uint64_t v = 0; v < K; v++) x->kb[v] = x->br[v] || x->ku[x->unit[v]];
@@ -61,7 +47,7 @@ void chain_keys(const keys* x, rth* c, uint32_t m, std::vector<hit>& out) {
     for (uint32_t i = 1, j; i + 1 < m; i = j + 1) {
         uint32_t u = x->unit[c->id[i]];
         for (j = i; j + 1 < m && e[j] != NONE && x->unit[c->id[j + 1]] == u; j++);
-        if (x->ku[u] && x->off[c->id[i]] == 0 && j - i + 1 == x->len[u] && j + 1 < m && e[i - 1] != NONE && e[j] != NONE)
+        if (x->ku[u] && x->g->st[u] == c->id[i] && j - i + 1 == x->g->st[u + 1] - x->g->st[u] && j + 1 < m && e[i - 1] != NONE && e[j] != NONE)
             out.push_back({(uint64_t)(e[i - 1] + 1) << 32 | e[j], i - 1, j + 1});
     }
 }

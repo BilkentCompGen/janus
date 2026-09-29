@@ -22,28 +22,50 @@ void read_cnt(const char* path, cnt* x) {
         for (uint32_t d = rbits(bb.data(), &pos, h.resv[1]); d; d--) x->e.push_back(i << 32 | rbits(bb.data(), &q, h.resv[0]));
 }
 
+// Nodes are numbered in segment order: segment u holds nodes st[u] .. st[u+1]-1, joined by the internal edges v -> v+1.
+// On disk only the other (external) edges are listed; one novel flag per external edge and one per node for its internal edge.
 void read_gph(const char* path, gph* x) {
     bin_header h;
     FILE* f = open_in(path, &h);
-    *x = {h.nreads, h.total, h.resv[0], std::vector<uint64_t>(h.nreads), std::vector<uint64_t>(h.total),
-          std::vector<uint16_t>(h.resv[0] * h.nreads), std::vector<uint16_t>(h.resv[0] * h.total), std::vector<uint8_t>(h.resv[0] * h.nreads)};
+    uint64_t U, X = h.total, j = 0;
+    std::fread(&U, 8, 1, f);
+    *x = {h.nreads, 0, h.resv[0], std::vector<uint64_t>(h.nreads), {}, std::vector<uint16_t>(h.resv[0] * h.nreads), {}, std::vector<uint32_t>(U + 1)};
+    std::vector<uint64_t> ex(X);
+    std::vector<uint8_t> nx(X), ni(x->K);
     std::fread(x->g.data(), 8, x->K, f);
     std::fread(x->c.data(), 2, x->S * x->K, f);
-    std::fread(x->e.data(), 8, x->E, f);
-    std::fread(x->ec.data(), 2, x->S * x->E, f);
-    std::fread(x->sh.data(), 1, x->S * x->K, f);
+    std::fread(x->st.data(), 4, U + 1, f);
+    std::fread(ex.data(), 8, X, f);
+    std::fread(nx.data(), 1, X, f);
+    std::fread(ni.data(), 1, x->K, f);
     std::fclose(f);
+    x->e.reserve(X + x->K - U);
+    x->nv.reserve(X + x->K - U);
+    for (uint64_t u = 0; u < U; u++)
+        for (uint64_t v = x->st[u]; v < x->st[u + 1]; v++)
+            if (v + 1 < x->st[u + 1]) { x->e.push_back(v << 32 | (v + 1)); x->nv.push_back(ni[v]); }
+            else for (; j < X && ex[j] >> 32 == v; j++) { x->e.push_back(ex[j]); x->nv.push_back(nx[j]); }
+    x->E = x->e.size();
 }
 
 void write_gph(const char* path, const gph* x) {
+    uint64_t U = x->st.size() - 1;
+    std::vector<uint64_t> ex;
+    std::vector<uint8_t> nx, ni(x->K, 0), in(x->K, 0);
+    for (uint64_t u = 0; u < U; u++) for (uint64_t v = x->st[u]; v + 1 < x->st[u + 1]; v++) in[v] = 1;
+    for (uint64_t i = 0; i < x->E; i++)
+        if (in[x->e[i] >> 32]) ni[x->e[i] >> 32] = x->nv[i];
+        else { ex.push_back(x->e[i]); nx.push_back(x->nv[i]); }
     FILE* fo = open_tmp(path);
     std::fseek(fo, sizeof(bin_header), SEEK_SET);
+    std::fwrite(&U, 8, 1, fo);
     std::fwrite(x->g.data(), 8, x->K, fo);
     std::fwrite(x->c.data(), 2, x->S * x->K, fo);
-    std::fwrite(x->e.data(), 8, x->E, fo);
-    std::fwrite(x->ec.data(), 2, x->S * x->E, fo);
-    std::fwrite(x->sh.data(), 1, x->S * x->K, fo);
-    bin_header o = {{'S', 'V', 'B', 'G'}, 1, x->K, x->E, {(uint8_t)x->S}};
+    std::fwrite(x->st.data(), 4, U + 1, fo);
+    std::fwrite(ex.data(), 8, ex.size(), fo);
+    std::fwrite(nx.data(), 1, nx.size(), fo);
+    std::fwrite(ni.data(), 1, x->K, fo);
+    bin_header o = {{'S', 'V', 'B', 'G'}, 2, x->K, ex.size(), {(uint8_t)x->S}};
     finish(fo, path, &o);
 }
 

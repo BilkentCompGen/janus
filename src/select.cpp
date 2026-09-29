@@ -176,10 +176,12 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     c.cn = g.c.data();
     c.K = g.K;
     c.t = t;
+    std::vector<uint32_t> fv, smp;
+    for (uint64_t v = 0; v < g.K; v++) if (full(&g, v)) fv.push_back(v);
     for (uint64_t s = 0; s < g.S; s++) {
-        std::vector<uint32_t> smp;
-        for (uint64_t v = 0; v < g.K; v += 997) if (full(&g, v)) smp.push_back(g.c[s * g.K + v]);
-        std::sort(smp.begin(), smp.end());
+        smp.clear();
+        for (uint32_t v : fv) smp.push_back(g.c[s * g.K + v]);
+        std::nth_element(smp.begin(), smp.begin() + smp.size() / 2, smp.end());
         c.med.push_back(smp[smp.size() / 2]);
     }
     make_keys(&x, &g, &a);

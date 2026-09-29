@@ -15,7 +15,7 @@ struct found { uint64_t read, key; std::vector<uint64_t> n; };
 
 static bool by_read(const found& p, const found& q) { return p.read != q.read ? p.read < q.read : p.key < q.key; }
 
-static void tips(const graph* x, const std::vector<uint32_t>& fo, const std::vector<uint32_t>& fn, const std::vector<uint32_t>& bo, std::vector<uint64_t>& d) {
+static void tips(const graph* x, const std::vector<uint32_t>& fo, const std::vector<uint32_t>& fn, const std::vector<uint32_t>& bo, std::vector<uint8_t>& d) {
     std::vector<uint32_t> ch;
     for (uint64_t v = 0; v < x->o.K; v++)
         for (uint32_t i = fo[v]; fo[v + 1] - fo[v] > 1 && i < fo[v + 1]; i++) {
@@ -24,7 +24,7 @@ static void tips(const graph* x, const std::vector<uint32_t>& fo, const std::vec
                 ch.push_back(u);
                 if (fo[u + 1] - fo[u] != 1) break;
             }
-            if (!ch.empty() && fo[ch.back() + 1] == fo[ch.back()]) for (uint32_t w : ch) d.push_back(x->o.g[w]);
+            if (!ch.empty() && fo[ch.back() + 1] == fo[ch.back()]) for (uint32_t w : ch) d[w] = 1;
         }
 }
 
@@ -56,9 +56,7 @@ static std::vector<uint8_t> seeds(const gph* g, const std::vector<uint8_t>& drop
     std::vector<uint8_t> sd(g->K, 0);
     for (uint64_t i = 0; i < g->E; i++) {
         uint64_t u = g->e[i] >> 32, v = g->e[i] & 0xffffffff;
-        bool t = false;
-        for (uint64_t s = 1; s < g->S; s++) t |= g->ec[s * g->E + i] >= MM;
-        if (t && !g->ec[i] && !drop[u] && !drop[v]) sd[u] = sd[v] = 1;
+        if (g->nv[i] && !drop[u] && !drop[v]) sd[u] = sd[v] = 1;
     }
     return sd;
 }
@@ -97,8 +95,9 @@ int cmd_prune(const char* in, const char* rd, const char* out, int t) {
     make_adj(&x.o, &x.a);
     masks(&x.o, x.m);
     x.full = (1ull << x.o.S) - 1;
-    tips(&x, x.a.oo, x.a.on, x.a.io, d);
-    tips(&x, x.a.io, x.a.in, x.a.oo, d);
+    drop.assign(x.o.K, 0);
+    tips(&x, x.a.oo, x.a.on, x.a.io, drop);
+    tips(&x, x.a.io, x.a.in, x.a.oo, drop);
     for (uint32_t s = 0; s < x.o.K; s++) {
         uint32_t n = x.a.oo[s + 1] - x.a.oo[s];
         if (n < 2) continue;
@@ -128,13 +127,11 @@ int cmd_prune(const char* in, const char* rd, const char* out, int t) {
     each_read(&p, x.o.g, rd, t, both, &q);
     for (uint32_t b = 0; b < w.size(); b += 2)
         if (!w[b].s.empty() && !w[b + 1].s.empty() && same(w[b].s, w[b + 1].s))
-            for (uint32_t u = 0; u < 2; u++) if (vf[b / 2] >> u & 1) for (uint32_t j = 1; j + 1 < w[b + u].p.size(); j++) d.push_back(x.o.g[w[b + u].p[j]]);
+            for (uint32_t u = 0; u < 2; u++) if (vf[b / 2] >> u & 1) for (uint32_t j = 1; j + 1 < w[b + u].p.size(); j++) drop[w[b + u].p[j]] = 1;
+    for (uint64_t v = 0; v < x.o.K; v++) if (drop[v]) d.push_back(x.o.g[v]);
     std::sort(d.begin(), d.end());
-    d.erase(std::unique(d.begin(), d.end()), d.end());
     std::string o(out);
     write_set((o + ".drp").c_str(), "SVBP", d, w.size() / 2);
-    drop.assign(x.o.K, 0);
-    for (uint64_t h : d) drop[std::lower_bound(x.o.g.begin(), x.o.g.end(), h) - x.o.g.begin()] = 1;
     keep_keys(&q.k, seeds(&x.o, drop));
     std::vector<found> st;
     gather(&q.k, drop, st);
