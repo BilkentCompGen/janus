@@ -1,7 +1,7 @@
 CXX      := g++
 CXXFLAGS := -std=c++17 -O3 -march=native -flto=auto -Wall -Wextra -Wpedantic -MMD -MP
 INC      := -Ilib/lcptools -Isrc
-LDFLAGS  := -Llib/lcptools -llcptools -lm
+LDFLAGS  := -Llib/lcptools -llcptools -lm -lz
 LDFLAGS  += $(shell command -v mold >/dev/null 2>&1 && echo -fuse-ld=mold)
 
 BUILD := build

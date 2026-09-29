@@ -1,10 +1,22 @@
 #include <algorithm>
 #include "keys.h"
 
-static const uint32_t NONE = ~0u;
+static const uint32_t NONE = ~0u, MT = 3, ZF = 16;
 
-void make_keys(keys* x, const gph* g, const adj* a, int mode) {
-    uint64_t nb = 0, nu = 0;
+static std::vector<uint8_t> seeds(const gph* g, const std::vector<uint8_t>& drop) {
+    std::vector<uint8_t> sd(g->K, 0);
+    for (uint64_t i = 0; i < g->E; i++) {
+        uint64_t u = g->e[i] >> 32, v = g->e[i] & 0xffffffff;
+        bool t = false;
+        for (uint64_t s = 1; s < g->S; s++) t |= g->ec[s * g->E + i] >= MT;
+        if (t && !g->ec[i] && !drop[u] && !drop[v]) sd[u] = sd[v] = 1;
+    }
+    return sd;
+}
+
+void make_keys(keys* x, const gph* g, const adj* a, int mode, const std::vector<uint8_t>& drop) {
+    std::vector<uint8_t> sd = seeds(g, drop);
+    uint64_t np = 0;
     x->S = g->S;
     x->g = g;
     x->a = a;
@@ -12,7 +24,7 @@ void make_keys(keys* x, const gph* g, const adj* a, int mode) {
     x->unit.assign(g->K, NONE);
     x->off.assign(g->K, 0);
     x->br.assign(g->K, 0);
-    for (uint64_t v = 0; v < g->K; v++) nb += x->br[v] = a->io[v + 1] - a->io[v] > 1 || a->oo[v + 1] - a->oo[v] > 1;
+    for (uint64_t v = 0; v < g->K; v++) np += x->br[v] = sd[v] && (a->io[v + 1] - a->io[v] > 1 || a->oo[v + 1] - a->oo[v] > 1);
     for (int pass = 0; pass < 2; pass++)
         for (uint64_t v = 0; v < g->K; v++) {
             bool head = a->io[v + 1] - a->io[v] != 1 || a->oo[a->in[a->io[v]] + 1] - a->oo[a->in[a->io[v]]] != 1;
@@ -27,9 +39,13 @@ void make_keys(keys* x, const gph* g, const adj* a, int mode) {
                 w = nx;
             }
             x->len.push_back(i);
-            nu++;
         }
-    for (x->Z = 1; x->Z < 4 * (nu + nb); x->Z <<= 1);
+    x->ku.assign(x->len.size(), 0);
+    for (uint64_t v = 0; v < g->K; v++) x->ku[x->unit[v]] |= sd[v] && x->len[x->unit[v]] > 1;
+    for (uint8_t k : x->ku) np += k;
+    x->kb.assign(g->K, 0);
+    for (uint64_t v = 0; v < g->K; v++) x->kb[v] = x->br[v] || x->ku[x->unit[v]];
+    for (x->Z = 1; x->Z < ZF * np; x->Z <<= 1);
     x->k.assign(x->Z, 0);
     x->n.assign(x->Z * x->S, 0);
     x->best.assign(x->Z * x->S, 0);
@@ -50,15 +66,9 @@ void chain_keys(const keys* x, rth* c, uint32_t m, std::vector<hit>& out) {
     for (uint32_t i = 1, j; i + 1 < m; i = j + 1) {
         uint32_t u = x->unit[c->id[i]];
         for (j = i; j + 1 < m && e[j] != NONE && x->unit[c->id[j + 1]] == u; j++);
-        if (x->len[u] > 1 && x->off[c->id[i]] == 0 && j - i + 1 == x->len[u] && j + 1 < m && e[i - 1] != NONE && e[j] != NONE)
+        if (x->ku[u] && x->off[c->id[i]] == 0 && j - i + 1 == x->len[u] && j + 1 < m && e[i - 1] != NONE && e[j] != NONE)
             out.push_back({(uint64_t)(e[i - 1] + 1) << 32 | e[j], i - 1, j + 1});
     }
-}
-
-uint64_t slot_of(const keys* x, uint64_t key) {
-    uint64_t i = (key * 0x9e3779b97f4a7c15ull) >> 20 & (x->Z - 1);
-    while (x->k[i] && x->k[i] != key) i = (i + 1) & (x->Z - 1);
-    return i;
 }
 
 static void add(keys* x, uint64_t key, uint64_t s, uint64_t sc) {
@@ -78,6 +88,9 @@ struct kctx { keys* x; std::vector<std::vector<hit>> h; };
 
 static void tally(rpass* p, rth* c, const uint8_t*, uint32_t m, uint32_t, uint64_t rid) {
     kctx* q = (kctx*)p->ctx;
+    uint32_t i = 0;
+    while (i < m && !q->x->kb[c->id[i]]) i++;
+    if (i == m) return;
     std::vector<hit>& h = q->h[c - p->t.data()];
     chain_keys(q->x, c, m, h);
     for (const hit& o : h) {
@@ -86,8 +99,8 @@ static void tally(rpass* p, rth* c, const uint8_t*, uint32_t m, uint32_t, uint64
     }
 }
 
-void count_keys(keys* x, const char* reads, int t) {
+void count_keys(keys* x, const char* reads, const char* ids, int t) {
     kctx q = {x, std::vector<std::vector<hit>>(t)};
     rpass p;
-    each_read(&p, x->g->g, reads, t, tally, &q);
+    each_read(&p, x->g->g, reads, ids, t, tally, &q);
 }
