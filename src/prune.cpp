@@ -125,7 +125,7 @@ int cmd_prune(const char* in, const char* rd, const char* out, int t) {
     q.h.resize(t);
     wanted(&q.f, w, x.o.K);
     rpass p;
-    each_read(&p, x.o.g, rd, nullptr, t, both, &q);
+    each_read(&p, x.o.g, rd, t, both, &q);
     for (uint32_t b = 0; b < w.size(); b += 2)
         if (!w[b].s.empty() && !w[b + 1].s.empty() && same(w[b].s, w[b + 1].s))
             for (uint32_t u = 0; u < 2; u++) if (vf[b / 2] >> u & 1) for (uint32_t j = 1; j + 1 < w[b + u].p.size(); j++) d.push_back(x.o.g[w[b + u].p[j]]);

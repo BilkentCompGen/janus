@@ -2,9 +2,9 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
-#include "io.h"
-#include "keys.h"
 #include "cmd.h"
+#include "extract.h"
+#include "keys.h"
 
 static const uint32_t PAD = 1000, NA = 3, MULT = 2;
 static const double DL = 10000;
@@ -15,7 +15,7 @@ struct site { uint64_t read, key; uint32_t s, lo, hi, a, b, pc; std::string n; s
 
 struct piece { uint64_t read; uint32_t lo, hi, k; std::string s; };
 
-struct sctx { keys* x; std::vector<site> w; std::vector<piece> pc; std::vector<uint64_t> rd; std::vector<uint32_t> ro, med, gs; const uint16_t* cn; uint64_t K; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; std::vector<int> fs, fx; int t; };
+struct sctx { keys* x; rpass* p; std::vector<site> w; std::vector<piece> pc; std::vector<uint64_t> rd; std::vector<uint32_t> ro, med, gs; const uint16_t* cn; uint64_t K, lo, hi; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; std::vector<scr> sc; std::vector<int> fs, fx; int t; };
 
 static bool by_score(const anc& p, const anc& q) { return p.sc > q.sc; }
 
@@ -123,17 +123,33 @@ static void pieces(sctx* c) {
     for (site& e : c->w) e.pc = std::upper_bound(c->pc.begin(), c->pc.end(), std::make_pair(e.read, e.lo), before) - c->pc.begin() - 1;
 }
 
+static void fetch(const sctx* c, uint64_t rd, std::vector<uint8_t>& rec) {
+    uint64_t off;
+    uint32_t tag, s = rd >> 40;
+    pread(c->fx[s], &off, 8, sizeof(bin_header) + 8 * (rd & 0xffffffffff));
+    pread(c->fs[s], &tag, 4, off);
+    rec.assign(4 + (tag >> 31 ? tag & 0x7fffffff : ((tag & 0x7fffffff) + 3) / 4) + 8, 0);
+    pread(c->fs[s], rec.data(), rec.size() - 8, off);
+}
+
+static void grab(void* a, int i) {
+    sctx* c = (sctx*)a;
+    rth* t = &c->p->t[i];
+    std::vector<uint8_t> rec;
+    for (uint64_t k = c->lo + i; k < c->hi; k += c->t) {
+        fetch(c, c->rd[k], rec);
+        cores(&c->sc[i], &t->r, rec.data(), LEV);
+        lookup(c->p, t);
+        chains(c->p, t, rec.data(), c->rd[k] & 0xffffffffff);
+    }
+}
+
 static void cut(void* a, int i) {
     sctx* c = (sctx*)a;
     rdcore r;
     std::vector<uint8_t> rec;
     for (size_t k = i; k + 1 < c->gs.size(); k += c->t) {
-        uint64_t rd = c->pc[c->gs[k]].read, off;
-        uint32_t tag, s = rd >> 40;
-        pread(c->fx[s], &off, 8, sizeof(bin_header) + 8 * (rd & 0xffffffffff));
-        pread(c->fs[s], &tag, 4, off);
-        rec.assign(4 + (tag >> 31 ? tag & 0x7fffffff : ((tag & 0x7fffffff) + 3) / 4) + 8, 0);
-        pread(c->fs[s], rec.data(), rec.size() - 8, off);
+        fetch(c, c->pc[c->gs[k]].read, rec);
         collapse(&r, rec.data());
         for (uint32_t j = c->gs[k]; j < c->gs[k + 1]; j++) c->pc[j].s = bases(&r, rec.data(), c->pc[j].lo, c->pc[j].hi, 0);
     }
@@ -150,6 +166,7 @@ static std::string name(const piece& q) {
 }
 
 int cmd_select(const char* in, const char* dr, const char* rd, const char* out, int t) {
+    LCP_INIT();
     gph g;
     adj a;
     keys x;
@@ -171,10 +188,18 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     load(&c, dr);
     c.h.resize(t);
     c.ids.resize(t);
-    rpass p;
-    each_read(&p, g.g, rd, &c.rd, t, anchor, &c);
+    for (std::string& f : split(rd)) { c.fs.push_back(fileno(std::fopen(f.c_str(), "rb"))); c.fx.push_back(fileno(std::fopen((f + ".idx").c_str(), "rb"))); }
+    rpass p = {std::vector<rth>(t), &g.g, {}, 0, anchor, &c, 0, 0};
+    make_map(&p);
+    c.p = &p;
+    c.sc.resize(t);
+    for (uint64_t k = 0; k < c.rd.size(); p.f++) {
+        c.lo = k;
+        while (k < c.rd.size() && c.rd[k] >> 40 == (uint64_t)p.f) k++;
+        c.hi = k;
+        par(t, grab, &c);
+    }
     pieces(&c);
-    for (std::string& s : split(rd)) { c.fs.push_back(fileno(std::fopen(s.c_str(), "rb"))); c.fx.push_back(fileno(std::fopen((s + ".idx").c_str(), "rb"))); }
     par(t, cut, &c);
     std::string o(out);
     FILE *f = std::fopen((o + ".fa").c_str(), "w"), *v = std::fopen((o + ".tsv").c_str(), "w");

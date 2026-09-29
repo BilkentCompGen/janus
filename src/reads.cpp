@@ -16,7 +16,7 @@ std::string bases(const rdcore* r, const uint8_t* rec, uint32_t lo, uint32_t hi,
 
 static const uint32_t NONE = ~0u;
 
-static void make_map(rpass* x) {
+void make_map(rpass* x) {
     uint64_t z = 1, n = x->g->size();
     while (z < n + n / 2) z <<= 1;
     x->tab.assign(z, {0, NONE});
@@ -28,10 +28,8 @@ static void make_map(rpass* x) {
     }
 }
 
-static void hashed(rpass* x, rth* c, const uint8_t* rec, const uint8_t* exc) {
-    rdcore* r = &c->r;
-    collapse(r, rec);
-    load_cores(r, exc, x->wb);
+void lookup(const rpass* x, rth* c) {
+    const rdcore* r = &c->r;
     if (c->h.size() < r->n + r->k / 32 + 2) c->h.resize(2 * r->n + r->k / 16 + 4);
     if (c->nd.size() < r->n) c->nd.resize(2 * r->n);
     uint64_t* w = c->h.data() + r->n;
@@ -46,27 +44,32 @@ static void hashed(rpass* x, rth* c, const uint8_t* rec, const uint8_t* exc) {
     }
 }
 
-static void rp_work(block* b) {
-    rpass* x = (rpass*)b->ctx;
-    rth* c = &x->t[b->id];
-    rdcore* r = &c->r;
-    uint64_t rid = b->rec;
-    for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2), rid++) {
-        const uint8_t* rec = (const uint8_t*)b->in[0] + o;
-        if (x->only && !std::binary_search(x->only->begin(), x->only->end(), (uint64_t)x->f << 40 | rid)) continue;
-        hashed(x, c, rec, (const uint8_t*)b->in[1] + o2);
-        if (c->id.size() < r->n) { c->id.resize(2 * r->n); c->ix.resize(2 * r->n); }
-        for (uint32_t s = 0; s < 2; s++) {
-            uint32_t m = 0;
-            for (uint32_t i = s ? r->nf : 0; i < (s ? r->n : r->nf); i++)
-                if (c->nd[i] != NONE) { c->id[m] = c->nd[i]; c->ix[m++] = i; }
-            x->fn(x, c, rec, m, s ? 3 : 0, rid);
-        }
+void chains(rpass* x, rth* c, const uint8_t* rec, uint64_t rid) {
+    const rdcore* r = &c->r;
+    if (c->id.size() < r->n) { c->id.resize(2 * r->n); c->ix.resize(2 * r->n); }
+    for (uint32_t s = 0; s < 2; s++) {
+        uint32_t m = 0;
+        for (uint32_t i = s ? r->nf : 0; i < (s ? r->n : r->nf); i++)
+            if (c->nd[i] != NONE) { c->id[m] = c->nd[i]; c->ix[m++] = i; }
+        x->fn(x, c, rec, m, s ? 3 : 0, rid);
     }
 }
 
-void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, const std::vector<uint64_t>* only, int t, read_fn fn, void* ctx) {
-    *x = {std::vector<rth>(t), &g, only, {}, 0, fn, ctx, 0, 0};
+static void rp_work(block* b) {
+    rpass* x = (rpass*)b->ctx;
+    rth* c = &x->t[b->id];
+    uint64_t rid = b->rec;
+    for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2), rid++) {
+        const uint8_t* rec = (const uint8_t*)b->in[0] + o;
+        collapse(&c->r, rec);
+        load_cores(&c->r, (const uint8_t*)b->in[1] + o2, x->wb);
+        lookup(x, c);
+        chains(x, c, rec, rid);
+    }
+}
+
+void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, int t, read_fn fn, void* ctx) {
+    *x = {std::vector<rth>(t), &g, {}, 0, fn, ctx, 0, 0};
     make_map(x);
     FILE* fo = std::fopen("/dev/null", "w");
     for (std::string& s : split(reads)) {

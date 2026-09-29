@@ -44,7 +44,7 @@ static void hashes(scr* s, const std::string& q, uint32_t lo, uint32_t hi, std::
     uint32_t tag = (hi - lo) | 1u << 31;
     std::memcpy(rec.data(), &tag, 4);
     std::memcpy(rec.data() + 4, q.data() + lo, hi - lo);
-    cores(s, rec.data(), LEV);
+    cores(s, &s->r, rec.data(), LEV);
     std::vector<uint64_t> w(s->r.k / 32 + 2);
     h.resize(s->r.n);
     for (uint32_t i = 0; i < s->r.n; i++) h[i] = core_hash(w.data(), core_cut(&s->r, i, w.data()));
