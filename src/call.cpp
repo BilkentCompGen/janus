@@ -10,7 +10,7 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500, KM = 15;
+static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 37, DUPT = 500, KM = 15;
 static const float PCUT = 0.5f, ROT = 0.8f, UNQ = 1.25f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
@@ -199,6 +199,7 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[33] = std::log2(r.n20c + 1.f);
     f[34] = std::log2(r.nspc + 1.f);
     f[35] = std::min(1.f, (float)r.tspc / std::max(r.tspan, 1u));
+    f[36] = sp ? std::log2(r.dmax - r.dmin + 1.f) : 0;
     float z = 0;
     for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
     return 1 / (1 + std::exp(-z));
