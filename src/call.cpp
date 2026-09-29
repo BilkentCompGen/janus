@@ -304,8 +304,8 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         np += p >= PCUT && !dup[i];
         std::string j = (s.e.o & 1 ? "]" : "[") + s.e.c2 + ":" + std::to_string(s.e.p2) + (s.e.o & 1 ? "]" : "["), alt_ = s.e.ty != "BND" ? "<" + s.e.ty + ">" : s.e.o & 2 ? "N" + j : j + "N", fs;
         for (uint32_t k = 0; k < NF; k++) { std::snprintf(nm, sizeof nm, "%s%.4g", k ? "," : "", fv[i][k]); fs += nm; }
-        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s\tGT:DV", s.e.c1.c_str(), s.e.p1, i, alt_.c_str(), dup[i] ? "DUPL" : p >= PCUT ? "PASS" : "LOW", s.e.ty.c_str(),
-                     s.e.ty == "BND" || s.e.ty == "INS" ? s.e.p1 : s.e.p2, s.e.c1 == s.e.c2 ? s.e.p2 - s.e.p1 : 0, s.pc, s.nm.c_str(), 1 - p, fs.c_str());
+        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s\tGT:DV", s.e.c1.c_str(), s.e.p1, i, alt_.c_str(), dup[i] ? "DUPL" : p >= PCUT ? "PASS" : "LOW", s.e.ty.c_str(),
+                     s.e.ty == "BND" || s.e.ty == "INS" ? s.e.p1 : s.e.p2, s.e.c1 == s.e.c2 ? s.e.p2 - s.e.p1 : 0, s.e.o, s.pc, s.nm.c_str(), 1 - p, fs.c_str());
         for (uint32_t n : s.r.n) std::fprintf(o, "\t%s:%u", n >= MM ? "0/1" : "0/0", n);
         std::fprintf(o, "\n");
     }
