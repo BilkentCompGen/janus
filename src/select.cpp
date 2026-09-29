@@ -15,9 +15,9 @@ struct rout { std::vector<std::pair<uint32_t, uint32_t>> iv; std::vector<std::st
 
 struct sctx { keys* x; std::vector<site>* w; std::unordered_map<uint64_t, uint32_t> dix; std::vector<uint32_t> dep; std::vector<uint64_t> mask; const uint8_t* sh; const uint16_t* cn; std::vector<uint32_t> med; uint64_t K; std::vector<job> jb; std::vector<uint64_t> rd, all; std::vector<uint32_t> ro; std::vector<rout> out; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; };
 
-static bool by_read(const site& p, const site& q) { return p.read < q.read; }
+static bool by_read(const site& p, const site& q) { return p.read != q.read ? p.read < q.read : p.key < q.key; }
 
-static bool by_job(const job& p, const job& q) { return p.read < q.read; }
+static bool by_job(const job& p, const job& q) { return p.read != q.read ? p.read < q.read : p.w != q.w ? p.w < q.w : p.k < q.k; }
 
 static bool odd(const keys* x, uint64_t i) {
     bool on = false;
