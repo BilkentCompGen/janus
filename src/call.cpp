@@ -14,7 +14,7 @@ static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4,
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
-struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; };
+struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; uint32_t o; };
 
 struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; uint32_t nspc, n20c, tspc; std::vector<uint32_t> n, d; };
 
@@ -35,18 +35,18 @@ static uint32_t fit(const arow& r, const ev& e) {
 static bool cmp_seg(const seg& x, const seg& y) { return x.qs < y.qs; }
 
 static bool cmp_sv(const sv& x, const sv& y) {
-    return x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
+    return x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.o != y.e.o ? x.e.o < y.e.o : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
 }
 
 static uint32_t top(const std::vector<uint32_t>& n) {
     return *std::max_element(n.begin() + 1, n.end());
 }
 
-static void add(std::vector<ev>& o, uint32_t q, const char* ty, std::string c1, uint32_t p1, std::string c2, uint32_t p2, const seg& x, const seg& y) {
+static void add(std::vector<ev>& o, uint32_t q, const char* ty, std::string c1, uint32_t p1, std::string c2, uint32_t p2, const seg& x, const seg& y, uint32_t d = 0) {
     if (c1 == c2 && (p1 > p2 ? p1 - p2 : p2 - p1) < MS && std::strcmp(ty, "INS")) return;
     uint32_t l1 = x.qe - x.qs, l2 = y.qe - y.qs;
-    if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); std::swap(l1, l2); }
-    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de)});
+    if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); std::swap(l1, l2); d = (d & 1) * 2 + d / 2; }
+    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de), d});
 }
 
 static std::vector<ev> events(std::vector<seg>& sg) {
@@ -75,10 +75,10 @@ static std::vector<ev> events(std::vector<seg>& sg) {
     for (size_t i = 0; i + 1 < sg.size(); i++) {
         const seg &x = sg[i], &y = sg[i + 1];
         if (x.mq < MQ || y.mq < MQ) continue;
-        uint32_t p1 = x.st == '+' ? x.te : x.ts, p2 = y.st == '+' ? y.ts : y.te, q = x.qe;
+        uint32_t p1 = x.st == '+' ? x.te : x.ts, p2 = y.st == '+' ? y.ts : y.te, q = x.qe, b = (x.st == '+') * 2 + (y.st == '-');
         int64_t g = (int64_t)y.qs - x.qe, d = x.st == '+' ? (int64_t)y.ts - x.te : (int64_t)x.ts - y.te;
-        if (x.t != y.t) add(o, q, "BND", x.t, p1, y.t, p2, x, y);
-        else if (x.st != y.st) add(o, q, "INV", x.t, p1, y.t, p2, x, y);
+        if (x.t != y.t) add(o, q, "BND", x.t, p1, y.t, p2, x, y, b);
+        else if (x.st != y.st) add(o, q, "INV", x.t, p1, y.t, p2, x, y, b);
         else if (d - g >= MS) add(o, q, "DEL", x.t, p1, y.t, p2, x, y);
         else if (g - d >= MS && d > -(int64_t)MS) add(o, q, "INS", x.t, p1, x.t, p1 + g - d, x, y);
         else if (d <= -(int64_t)MS) add(o, q, "DUP", x.t, p1, y.t, p2, x, y);
@@ -87,7 +87,7 @@ static std::vector<ev> events(std::vector<seg>& sg) {
 }
 
 static bool near(const sv& x, const sv& y) {
-    return x.e.ty == y.e.ty && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
+    return x.e.ty == y.e.ty && x.e.o == y.e.o && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
 }
 
 static bool primary(const std::string& c) {
@@ -262,13 +262,13 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     std::sort(ix.begin(), ix.end(), [&](size_t a, size_t b) { const ev &x = res[a].e, &y = res[b].e; return x.c1 != y.c1 ? x.c1 < y.c1 : x.c2 != y.c2 ? x.c2 < y.c2 : x.p1 != y.p1 ? x.p1 < y.p1 : x.p2 != y.p2 ? x.p2 < y.p2 : a < b; });
     for (size_t a = 0; a < ix.size(); a++)
         for (size_t b = a + 1; b < ix.size() && res[ix[b]].e.c1 == res[ix[a]].e.c1 && res[ix[b]].e.c2 == res[ix[a]].e.c2 && res[ix[b]].e.p1 <= res[ix[a]].e.p1 + DUPT; b++)
-            if (res[ix[b]].e.p2 + DUPT >= res[ix[a]].e.p2 && res[ix[a]].e.p2 + DUPT >= res[ix[b]].e.p2) dup[pv[ix[a]] < pv[ix[b]] ? ix[a] : ix[b]] = 1;
+            if (res[ix[b]].e.p2 + DUPT >= res[ix[a]].e.p2 && res[ix[a]].e.p2 + DUPT >= res[ix[b]].e.p2 && (res[ix[a]].e.ty != res[ix[b]].e.ty || res[ix[a]].e.o == res[ix[b]].e.o)) dup[pv[ix[a]] < pv[ix[b]] ? ix[a] : ix[b]] = 1;
     uint64_t np = 0;
     for (size_t i = 0; i < res.size(); i++) {
         const sv& s = res[i];
         float p = pv[i];
         np += p >= PCUT && !dup[i];
-        std::string alt_ = s.e.ty == "BND" ? "N[" + s.e.c2 + ":" + std::to_string(s.e.p2) + "[" : "<" + s.e.ty + ">", fs;
+        std::string j = (s.e.o & 1 ? "]" : "[") + s.e.c2 + ":" + std::to_string(s.e.p2) + (s.e.o & 1 ? "]" : "["), alt_ = s.e.ty != "BND" ? "<" + s.e.ty + ">" : s.e.o & 2 ? "N" + j : j + "N", fs;
         for (uint32_t k = 0; k < NF; k++) { std::snprintf(nm, sizeof nm, "%s%.4g", k ? "," : "", fv[i][k]); fs += nm; }
         std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s\tGT:DV", s.e.c1.c_str(), s.e.p1, i, alt_.c_str(), dup[i] ? "DUPL" : p >= PCUT ? "PASS" : "LOW", s.e.ty.c_str(),
                      s.e.ty == "BND" || s.e.ty == "INS" ? s.e.p1 : s.e.p2, s.e.c1 == s.e.c2 ? s.e.p2 - s.e.p1 : 0, s.pc, s.nm.c_str(), 1 - p, fs.c_str());
