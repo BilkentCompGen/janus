@@ -9,14 +9,14 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 32, DUPT = 500;
-static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0};
+static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500;
+static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
 struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; };
 
-struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d; };
+struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; uint32_t nspc, n20c, tspc; std::vector<uint32_t> n, d; };
 
 struct sv { ev e; std::string nm; uint32_t pc; arow r; uint32_t nf, ms, mn; };
 
@@ -174,6 +174,10 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[29] = s.ms > 0;
     f[30] = (float)s.ms / std::max(s.mn, 1u);
     f[31] = ind ? std::min(1.f, (float)s.nf / std::max(L, 1u)) : s.nf;
+    f[32] = r.n20c > 0;
+    f[33] = std::log2(r.n20c + 1.f);
+    f[34] = std::log2(r.nspc + 1.f);
+    f[35] = std::min(1.f, (float)r.tspc / std::max(r.tspan, 1u));
     float z = 0;
     for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
     return 1 / (1 + std::exp(-z));
@@ -193,7 +197,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     FILE* fi = std::fopen(evi, "r");
     while (std::fgets(line, sizeof line, fi)) {
         arow r;
-        std::sscanf(line, "%255s %u %u %u %4095s %4095s %*s %u %u %u %u %u %u %d %d %d %u %u %u %u", nm, &r.a, &r.b, &r.u, cn, dd, &r.s, &r.ncl, &r.cl, &r.tspan, &r.nspan, &r.nsame, &r.lest, &r.dmin, &r.dmax, &r.shadow, &r.tonly, &r.nbr, &r.span);
+        std::sscanf(line, "%255s %u %u %u %4095s %4095s %*s %u %u %u %u %u %u %d %d %d %u %u %u %u %*s %*s %*u %*u %*u %u %u %u", nm, &r.a, &r.b, &r.u, cn, dd, &r.s, &r.ncl, &r.cl, &r.tspan, &r.nspan, &r.nsame, &r.lest, &r.dmin, &r.dmax, &r.shadow, &r.tonly, &r.nbr, &r.span, &r.nspc, &r.n20c, &r.tspc);
         r.n = nums(cn);
         r.d = nums(dd);
         dep.push_back(r.d[r.s]);
@@ -229,6 +233,8 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         if (s.nf < q.nf || (s.nf == q.nf && s.ms > q.ms)) { q.nf = s.nf; q.ms = s.ms; q.mn = s.mn; }
         m.nsame = std::max(s.r.nsame, q.r.nsame);
         m.nspan = std::max(s.r.nspan, q.r.nspan);
+        m.nspc = std::max(s.r.nspc, q.r.nspc);
+        m.n20c = std::max(s.r.n20c, q.r.n20c);
         m.ncl = std::max(s.r.ncl, q.r.ncl);
         m.shadow = std::max(s.r.shadow, q.r.shadow);
         q.r = m;
