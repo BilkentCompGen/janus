@@ -61,3 +61,10 @@ paper/*.synctex.gz
 /results/exp1/
 archive/
 paper/measure/out/
+
+# side builds (make BUILD=build4 ...) used to keep a variant binary next to the main one
+/build*/
+
+# benchmark harness and its outputs, and the reference data (hg38 fasta, minimap2 index, core index, VNTR bed)
+/bench/
+/ref/
