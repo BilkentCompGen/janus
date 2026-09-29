@@ -213,8 +213,8 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
         for (uint32_t k = 0; k < CL; k++) ncl += e.cl[k].n > 0;
         std::vector<uint32_t> lc, rc;
         for (uint64_t s = 0; s < x.S; s++) { lc.push_back(e.cov[2 * s]); rc.push_back(e.cov[2 * s + 1]); }
-        std::fprintf(v, "s%lu_%lu_%u\t%u\t%u\t%u\t%s\t%s\t%lu\t%u\t%u\t%u\t%u\t%u\t%u\t%d\t%d\t%d\t%u\t%u\t%u\t%u\t%s\t%s\t%u\t%u\t%u\n", (uint64_t)(j.read >> 40), (uint64_t)(j.read & 0xffffffffff), j.pc, j.a, j.b, j.w,
-                     list(&x.n[e.key * x.S], x.S).c_str(), depth(&c, e, g.K).c_str(), (unsigned long)e.key, e.s, ncl, j.k == NONE ? 0 : e.cl[j.k].n, e.tspan, e.nspan, e.nspan ? same(&e, o) : 0, e.lest - o, e.dmin - o, e.dmax - o, e.shadow, e.tonly, e.nbr, e.span, list(lc.data(), x.S).c_str(), list(rc.data(), x.S).c_str(), e.tsame, e.n20, e.t20);
+        std::fprintf(v, "s%lu_%lu_%u\t%u\t%u\t%u\t%s\t%s\t%lu\t%u\t%u\t%u\t%u\t%u\t%u\t%d\t%d\t%d\t%u\t%u\t%u\t%u\t%s\t%s\t%u\t%u\t%u\t%u\t%u\t%u\n", (uint64_t)(j.read >> 40), (uint64_t)(j.read & 0xffffffffff), j.pc, j.a, j.b, j.w,
+                     list(&x.n[e.key * x.S], x.S).c_str(), depth(&c, e, g.K).c_str(), (unsigned long)e.key, e.s, ncl, j.k == NONE ? 0 : e.cl[j.k].n, e.tspan, e.nspan, e.nspan ? same(&e, o) : 0, e.lest - o, e.dmin - o, e.dmax - o, e.shadow, e.tonly, e.nbr, e.span, list(lc.data(), x.S).c_str(), list(rc.data(), x.S).c_str(), e.tsame, e.n20, e.t20, e.nspc, e.n20c, e.tspc);
     }
     std::fclose(f);
     std::fclose(v);

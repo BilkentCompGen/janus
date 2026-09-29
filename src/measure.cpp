@@ -2,13 +2,17 @@
 #include <cstdlib>
 #include "measure.h"
 
-static const uint32_t CLT = 20, NONE = ~0u;
+static const uint32_t CLT = 20, AGREE = 2, NONE = ~0u;
 
 struct mctx { std::vector<site>* w; const keys* x; std::vector<uint32_t> ao, ai, tag; std::vector<std::vector<hit>> h; std::vector<std::vector<std::pair<uint32_t, uint32_t>>> ps; std::vector<std::vector<uint32_t>> st; std::vector<std::vector<uint64_t>> ks; };
 
 static uint32_t only(const std::vector<std::pair<uint32_t, uint32_t>>& ps, uint32_t v) {
     auto a = std::lower_bound(ps.begin(), ps.end(), std::make_pair(v, 0u)), b = std::lower_bound(ps.begin(), ps.end(), std::make_pair(v, NONE));
     return b - a == 1 ? a->second : NONE;
+}
+
+static bool fits(const rth* t, uint32_t i, uint32_t j, uint32_t o) {
+    return std::abs((int32_t)(t->r.a[t->ix[i]] - t->r.a[t->ix[j]]) - (int32_t)o) <= (int32_t)CLT;
 }
 
 static void keep(site* w, int32_t d, uint32_t pr) {
@@ -19,14 +23,15 @@ static void keep(site* w, int32_t d, uint32_t pr) {
     w->pn[m] = pr;
 }
 
-static void take(site* w, uint32_t s, uint32_t side, bool span, bool route, int32_t d, uint64_t sc, uint32_t lo, uint32_t hi, uint32_t a, uint32_t b) {
+static void take(site* w, uint32_t s, uint32_t side, bool span, bool ok, bool route, int32_t d, uint64_t sc, uint32_t lo, uint32_t hi, uint32_t a, uint32_t b) {
     while (__atomic_exchange_n(&w->lk, 1, __ATOMIC_ACQUIRE));
     w->cov[2 * s] += side & 1;
     w->cov[2 * s + 1] += side >> 1;
     if (!span) {}
-    else if (!s) { keep(w, d, (0xffffffffu - (uint32_t)sc) * 2654435761u); w->nspan++; w->n20 += std::abs(d) <= (int32_t)CLT; }
+    else if (!s) { keep(w, d, (0xffffffffu - (uint32_t)sc) * 2654435761u); w->nspan++; w->n20 += std::abs(d) <= (int32_t)CLT; w->nspc += ok; w->n20c += ok && std::abs(d) <= (int32_t)CLT; }
     else if (s == w->s) {
         w->tspan++;
+        w->tspc += ok;
         w->t20 += std::abs(d) <= (int32_t)CLT;
         if (route) {
             uint32_t k = 0, j;
@@ -64,13 +69,13 @@ static void look(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, uint
             while (li < w->la.size() && (pi = only(ps, w->la[li])) == NONE) li++;
             while (ri < w->ra.size() && (pj = only(ps, w->ra[ri])) == NONE) ri++;
             uint32_t side = (pi != NONE && li < COV) | (pj != NONE && ri < COV) << 1;
-            if (pi == NONE || pj == NONE || pi >= pj) { if (side) take(w, p->f, side, false, false, 0, 0, 0, 0, 0, 0); continue; }
-            uint32_t lo = pi, hi = pj;
-            for (uint32_t k = li + 1; k < w->la.size(); k++) lo = std::min(lo, only(ps, w->la[k]));
-            for (uint32_t k = ri + 1; k < w->ra.size(); k++) { uint32_t v = only(ps, w->ra[k]); if (v != NONE) hi = std::max(hi, v); }
+            if (pi == NONE || pj == NONE || pi >= pj) { if (side) take(w, p->f, side, false, false, false, 0, 0, 0, 0, 0, 0); continue; }
+            uint32_t lo = pi, hi = pj, cl = 0, cr = 0;
+            for (uint32_t k = li + 1; k < w->la.size(); k++) { uint32_t v = only(ps, w->la[k]); if (v != NONE) { lo = std::min(lo, v); cl += fits(t, pi, v, w->lp[li] - w->lp[k]); } }
+            for (uint32_t k = ri + 1; k < w->ra.size(); k++) { uint32_t v = only(ps, w->ra[k]); if (v != NONE) { hi = std::max(hi, v); cr += fits(t, v, pj, w->rp[k] - w->rp[ri]); } }
             int32_t d = (int32_t)(r->a[t->ix[pj]] - r->a[t->ix[pi]]) - (int32_t)(w->rp[ri] - w->lp[li]);
             uint64_t sc = (uint64_t)std::min(r->a[t->ix[pi]], r->len - r->b[t->ix[pj]]) << 33 | (uint64_t)(rc != 0) << 32 | (0xffffffffu - (uint32_t)rid);
-            take(w, p->f, side, true, std::binary_search(ks.begin(), ks.end(), c->x->k[w->key]), d, sc, r->a[t->ix[lo]], r->b[t->ix[hi]], r->a[t->ix[pi]], r->b[t->ix[pj]]);
+            take(w, p->f, side, true, cl >= AGREE && cr >= AGREE, std::binary_search(ks.begin(), ks.end(), c->x->k[w->key]), d, sc, r->a[t->ix[lo]], r->b[t->ix[hi]], r->a[t->ix[pi]], r->b[t->ix[pj]]);
         }
 }
 
