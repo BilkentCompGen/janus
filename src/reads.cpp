@@ -22,6 +22,7 @@ void make_map(rpass* x) {
     x->tab.assign(z, {0, NONE});
     x->mask = z - 1;
     for (uint32_t v = 0; v < n; v++) {
+        if (v + 16 < n) __builtin_prefetch(&x->tab[(*x->g)[v + 16] & x->mask]);
         uint64_t h = (*x->g)[v], i = h & x->mask;
         while (x->tab[i].h) i = (i + 1) & x->mask;
         x->tab[i] = {h, v};

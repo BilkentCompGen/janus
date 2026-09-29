@@ -74,15 +74,24 @@ void make_adj(const gph* x, adj* a) {
     a->io.assign(x->K + 1, 0);
     a->on.resize(x->E);
     a->in.resize(x->E);
-    for (uint64_t v : x->e) { a->oo[(v >> 32) + 1]++; a->io[(v & 0xffffffff) + 1]++; }
+    const uint64_t M = 0xffffffff, PF = 16;
+    for (uint64_t i = 0; i < x->E; i++) {
+        if (i + PF < x->E) __builtin_prefetch(&a->io[(x->e[i + PF] & M) + 1]);
+        a->oo[(x->e[i] >> 32) + 1]++;
+        a->io[(x->e[i] & M) + 1]++;
+    }
     for (uint64_t i = 0; i < x->K; i++) { a->oo[i + 1] += a->oo[i]; a->io[i + 1] += a->io[i]; }
     std::vector<uint32_t> p(a->io.begin(), a->io.end() - 1);
-    for (uint64_t i = 0; i < x->E; i++) { a->on[i] = x->e[i] & 0xffffffff; a->in[p[x->e[i] & 0xffffffff]++] = x->e[i] >> 32; }
+    for (uint64_t i = 0; i < x->E; i++) {
+        if (i + PF < x->E) { __builtin_prefetch(&p[x->e[i + PF] & M]); __builtin_prefetch(&a->in[p[x->e[i + PF / 2] & M]]); }
+        a->on[i] = x->e[i] & M;
+        a->in[p[x->e[i] & M]++] = x->e[i] >> 32;
+    }
 }
 
 void masks(const gph* x, std::vector<uint64_t>& m) {
     m.assign(x->K, 0);
-    for (uint64_t i = 0; i < x->S * x->K; i++) m[i % x->K] |= (uint64_t)(x->c[i] > 0) << (i / x->K);
+    for (uint64_t s = 0; s < x->S; s++) for (uint64_t v = 0; v < x->K; v++) m[v] |= (uint64_t)(x->c[s * x->K + v] > 0) << s;
 }
 
 std::vector<uint64_t> read_set(const char* path) {

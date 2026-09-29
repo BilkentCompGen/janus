@@ -7,7 +7,9 @@
 
 static const uint32_t ML = 4, MM = 3, ZF = 16, NONE = ~0u;
 
-struct graph { gph o; std::vector<uint64_t> m; adj a; uint64_t full; };
+// Shared by the parallel graph passes: thread i takes nodes K*i/t .. K*(i+1)/t (tips, bubbles) or every t-th bubble
+// (judging), and its results are merged in thread order, so the outputs match a single thread.
+struct graph { gph o; std::vector<uint64_t> m; adj a; uint64_t full; int t, back; std::vector<std::vector<uint32_t>> tp; std::vector<std::vector<want>> bw; std::vector<std::vector<uint8_t>> bf; const std::vector<want>* w; std::vector<uint8_t> jd; };
 
 struct pctx { fctx f; keys k; std::vector<std::vector<hit>> h; };
 
@@ -15,16 +17,18 @@ struct found { uint64_t read, key; std::vector<uint64_t> n; };
 
 static bool by_read(const found& p, const found& q) { return p.read != q.read ? p.read < q.read : p.key < q.key; }
 
-static void tips(const graph* x, const std::vector<uint32_t>& fo, const std::vector<uint32_t>& fn, const std::vector<uint32_t>& bo, std::vector<uint8_t>& d) {
+static void tips(void* a, int t) {
+    graph* x = (graph*)a;
+    const std::vector<uint32_t>& fo = x->back ? x->a.io : x->a.oo, &fn = x->back ? x->a.in : x->a.on, &bo = x->back ? x->a.oo : x->a.io;
     std::vector<uint32_t> ch;
-    for (uint64_t v = 0; v < x->o.K; v++)
+    for (uint64_t v = x->o.K * t / x->t; v < x->o.K * (t + 1) / x->t; v++)
         for (uint32_t i = fo[v]; fo[v + 1] - fo[v] > 1 && i < fo[v + 1]; i++) {
             ch.clear();
             for (uint32_t u = fn[i]; ch.size() < ML && x->m[u] != x->full && x->m[u] == x->m[fn[i]] && bo[u + 1] - bo[u] == 1; u = fn[fo[u]]) {
                 ch.push_back(u);
                 if (fo[u + 1] - fo[u] != 1) break;
             }
-            if (!ch.empty() && fo[ch.back() + 1] == fo[ch.back()]) for (uint32_t w : ch) d[w] = 1;
+            if (!ch.empty() && fo[ch.back() + 1] == fo[ch.back()]) x->tp[t].insert(x->tp[t].end(), ch.begin(), ch.end());
         }
 }
 
@@ -50,6 +54,32 @@ static void add_arm(std::vector<want>& w, uint32_t s, const std::vector<uint32_t
     r.p.insert(r.p.end(), a.begin(), a.end());
     r.p.push_back(m);
     w.push_back(r);
+}
+
+static void bubbles(void* p, int t) {
+    graph* x = (graph*)p;
+    for (uint64_t s = x->o.K * t / x->t; s < x->o.K * (t + 1) / x->t; s++) {
+        uint32_t n = x->a.oo[s + 1] - x->a.oo[s];
+        if (n < 2) continue;
+        std::vector<std::vector<uint32_t>> a(n);
+        std::vector<uint32_t> m(n);
+        for (uint32_t i = 0; i < n; i++) m[i] = trace(x, x->a.on[x->a.oo[s] + i], a[i]);
+        for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = i + 1; j < n; j++) {
+                if (m[i] == NONE || m[i] != m[j]) continue;
+                uint8_t f = variant(x, a[i], a[j]) | variant(x, a[j], a[i]) << 1;
+                if (!f) continue;
+                x->bf[t].push_back(f);
+                add_arm(x->bw[t], s, a[i], m[i]);
+                add_arm(x->bw[t], s, a[j], m[i]);
+            }
+    }
+}
+
+static void judge(void* p, int t) {
+    graph* x = (graph*)p;
+    const std::vector<want>& w = *x->w;
+    for (uint64_t b = 2 * t; b < w.size(); b += 2 * x->t) x->jd[b / 2] = !w[b].s.empty() && !w[b + 1].s.empty() && same(w[b].s, w[b + 1].s);
 }
 
 static std::vector<uint8_t> seeds(const gph* g, const std::vector<uint8_t>& drop) {
@@ -95,25 +125,20 @@ int cmd_prune(const char* in, const char* rd, const char* out, int t) {
     make_adj(&x.o, &x.a);
     masks(&x.o, x.m);
     x.full = (1ull << x.o.S) - 1;
+    x.t = t;
+    x.tp.resize(t);
+    x.bw.resize(t);
+    x.bf.resize(t);
     drop.assign(x.o.K, 0);
-    tips(&x, x.a.oo, x.a.on, x.a.io, drop);
-    tips(&x, x.a.io, x.a.in, x.a.oo, drop);
-    for (uint32_t s = 0; s < x.o.K; s++) {
-        uint32_t n = x.a.oo[s + 1] - x.a.oo[s];
-        if (n < 2) continue;
-        std::vector<std::vector<uint32_t>> a(n);
-        std::vector<uint32_t> m(n);
-        for (uint32_t i = 0; i < n; i++) m[i] = trace(&x, x.a.on[x.a.oo[s] + i], a[i]);
-        for (uint32_t i = 0; i < n; i++)
-            for (uint32_t j = i + 1; j < n; j++) {
-                if (m[i] == NONE || m[i] != m[j]) continue;
-                uint8_t f = variant(&x, a[i], a[j]) | variant(&x, a[j], a[i]) << 1;
-                if (!f) continue;
-                vf.push_back(f);
-                add_arm(w, s, a[i], m[i]);
-                add_arm(w, s, a[j], m[i]);
-            }
+    for (x.back = 0; x.back < 2; x.back++) par(t, tips, &x);
+    par(t, bubbles, &x);
+    for (int i = 0; i < t; i++) {
+        for (uint32_t v : x.tp[i]) drop[v] = 1;
+        w.insert(w.end(), x.bw[i].begin(), x.bw[i].end());
+        vf.insert(vf.end(), x.bf[i].begin(), x.bf[i].end());
     }
+    x.tp = {};
+    x.bw = {};
     x.m = {};
     make_keys(&q.k, &x.o, &x.a);
     uint64_t np = keep_keys(&q.k, seeds(&x.o, std::vector<uint8_t>(x.o.K, 0)));
@@ -125,8 +150,11 @@ int cmd_prune(const char* in, const char* rd, const char* out, int t) {
     wanted(&q.f, w, x.o.K);
     rpass p;
     each_read(&p, x.o.g, rd, t, both, &q);
+    x.w = &w;
+    x.jd.assign(w.size() / 2, 0);
+    par(t, judge, &x);
     for (uint32_t b = 0; b < w.size(); b += 2)
-        if (!w[b].s.empty() && !w[b + 1].s.empty() && same(w[b].s, w[b + 1].s))
+        if (x.jd[b / 2])
             for (uint32_t u = 0; u < 2; u++) if (vf[b / 2] >> u & 1) for (uint32_t j = 1; j + 1 < w[b + u].p.size(); j++) drop[w[b + u].p[j]] = 1;
     for (uint64_t v = 0; v < x.o.K; v++) if (drop[v]) d.push_back(x.o.g[v]);
     std::sort(d.begin(), d.end());
