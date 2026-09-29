@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include "extract.h"
-#include "place.h"
+#include "cmd.h"
 
 static const uint32_t WIN = 40000, MAR = 2000, TOL = 500, MINC = 3, EXPL = 100;
 
@@ -17,6 +17,8 @@ struct hitr { uint32_t cs, st; int64_t d; uint32_t q, pos; };
 struct win { uint32_t ci, lo, hi; };
 
 struct rctx { const seqs* f; std::vector<win> job; std::vector<std::vector<ent>> out; std::vector<scr> s; std::vector<ent> idx; std::vector<uint8_t> on; std::vector<std::vector<win>> w; int t; };
+
+static bool by_hash(const ent& a, const ent& b) { return a.h < b.h; }
 
 static bool by_ent(const ent& a, const ent& b) { return a.h != b.h ? a.h < b.h : a.cs != b.cs ? a.cs < b.cs : a.pos < b.pos; }
 
@@ -42,7 +44,7 @@ static void hashes(scr* s, const std::string& q, uint32_t lo, uint32_t hi, std::
     uint32_t tag = (hi - lo) | 1u << 31;
     std::memcpy(rec.data(), &tag, 4);
     std::memcpy(rec.data() + 4, q.data() + lo, hi - lo);
-    cores(s, rec.data(), 5);
+    cores(s, rec.data(), LEV);
     std::vector<uint64_t> w(s->r.k / 32 + 2);
     h.resize(s->r.n);
     for (uint32_t i = 0; i < s->r.n; i++) h[i] = core_hash(w.data(), core_cut(&s->r, i, w.data()));
@@ -100,7 +102,7 @@ static void place_job(void* a, int i) {
         hashes(&c->s[i], q, 0, q.size(), h);
         hs.clear();
         for (uint32_t k = 0; k < h.size(); k++) {
-            auto r = std::equal_range(c->idx.begin(), c->idx.end(), ent{h[k], 0, 0}, [](const ent& x, const ent& y) { return x.h < y.h; });
+            auto r = std::equal_range(c->idx.begin(), c->idx.end(), ent{h[k], 0, 0}, by_hash);
             if (r.second - r.first != 1) continue;
             uint32_t st = (r.first->cs & 1) ^ (k >= c->s[i].r.nf), p = fwd(&c->s[i].r, k);
             hs.push_back({r.first->cs >> 1, st, st ? (int64_t)r.first->pos + p : (int64_t)r.first->pos - p, p, r.first->pos});

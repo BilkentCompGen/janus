@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include "files.h"
-#include "prune.h"
+#include "cmd.h"
 #include "reads.h"
 
 static const uint32_t ML = 4, NONE = ~0u;

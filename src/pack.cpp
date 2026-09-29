@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include "io.h"
-#include "pack.h"
+#include "cmd.h"
 
 static bool line(gzFile g, std::string& s, char* b) {
     s.clear();

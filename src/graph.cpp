@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include "files.h"
-#include "graph.h"
+#include "cmd.h"
 #include "io.h"
 
 static void unite(std::vector<uint64_t>& a, const std::vector<uint64_t>& b, std::vector<uint64_t>& t) {

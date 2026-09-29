@@ -4,7 +4,7 @@
 #include <string>
 #include "io.h"
 #include "keys.h"
-#include "select.h"
+#include "cmd.h"
 
 static const uint32_t MM = 3, PAD = 1000, NA = 3, MULT = 2;
 static const double DL = 10000;
@@ -15,11 +15,13 @@ struct site { uint64_t read, key, slot; uint32_t s, lo, hi, a, b, pc; std::vecto
 
 struct piece { uint64_t read; uint32_t lo, hi, k; std::string s; };
 
-struct sctx { keys* x; std::vector<site> w; std::vector<piece> pc; std::vector<uint64_t> mask, rd; std::vector<uint32_t> ro, med, gs; const uint16_t* cn; uint64_t K; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; std::vector<int> fs, fx; int t; };
+struct sctx { keys* x; std::vector<site> w; std::vector<piece> pc; std::vector<uint64_t> rd; std::vector<uint32_t> ro, med, gs; const uint16_t* cn; uint64_t K; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; std::vector<int> fs, fx; int t; };
 
 static bool by_read(const site& p, const site& q) { return p.read != q.read ? p.read < q.read : p.key < q.key; }
 
 static bool by_score(const anc& p, const anc& q) { return p.sc > q.sc; }
+
+static bool by_near(const anc& p, const anc& q) { return p.sc < q.sc; }
 
 static bool odd(const keys* x, uint64_t i) {
     bool on = false;
@@ -43,9 +45,14 @@ static void gather(sctx* c, const std::vector<uint8_t>& drop) {
     c->ro.push_back(c->w.size());
 }
 
+static bool full(const gph* g, uint64_t v) {
+    for (uint64_t s = 0; s < g->S; s++) if (!g->c[s * g->K + v]) return false;
+    return true;
+}
+
 static double fit(const sctx* c, const std::vector<uint32_t>& ids, uint32_t v, uint64_t s) {
     auto r = std::equal_range(ids.begin(), ids.end(), v);
-    if ((c->mask[v] & (1ull | 1ull << s)) != (1ull | 1ull << s) || r.second - r.first != 1 || c->cn[v] > MULT * c->med[0] || c->cn[s * c->K + v] > MULT * c->med[s]) return 0;
+    if (!c->cn[v] || !c->cn[s * c->K + v] || r.second - r.first != 1 || c->cn[v] > MULT * c->med[0] || c->cn[s * c->K + v] > MULT * c->med[s]) return 0;
     double n = (double)c->cn[v] / c->med[0], t = (double)c->cn[s * c->K + v] / c->med[s];
     return std::min(n, 1 / n) * std::min(t, 1 / t);
 }
@@ -63,8 +70,7 @@ static void side(const sctx* c, const rth* t, const std::vector<uint32_t>& ids, 
         if (o.size() > NA) o.pop_back();
     }
     for (anc& x : o) x.sc = x.a > at ? x.a - at : at - x.a;
-    std::sort(o.begin(), o.end(), by_score);
-    std::reverse(o.begin(), o.end());
+    std::sort(o.begin(), o.end(), by_near);
 }
 
 static void flip(uint32_t len, uint32_t rc, uint32_t* a, uint32_t* b) {
@@ -148,26 +154,25 @@ static std::string name(const piece& q) {
     return "s" + std::to_string(q.read >> 40) + "_" + std::to_string(q.read & 0xffffffffff) + "_" + std::to_string(q.k);
 }
 
-int cmd_select(const char* in, const char* dr, const char* rd, const char* out, int t, int mode) {
+int cmd_select(const char* in, const char* dr, const char* rd, const char* out, int t) {
     gph g;
     adj a;
     keys x;
     sctx c;
     read_gph(in, &g);
     make_adj(&g, &a);
-    masks(&g, c.mask);
     c.cn = g.c.data();
     c.K = g.K;
     c.t = t;
     for (uint64_t s = 0; s < g.S; s++) {
         std::vector<uint32_t> smp;
-        for (uint64_t v = 0; v < g.K; v += 997) if (c.mask[v] == (1ull << g.S) - 1) smp.push_back(g.c[s * g.K + v]);
+        for (uint64_t v = 0; v < g.K; v += 997) if (full(&g, v)) smp.push_back(g.c[s * g.K + v]);
         std::sort(smp.begin(), smp.end());
         c.med.push_back(smp[smp.size() / 2]);
     }
     std::vector<uint8_t> drop(g.K);
     for (uint64_t h : read_set(dr)) drop[std::lower_bound(g.g.begin(), g.g.end(), h) - g.g.begin()] = 1;
-    make_keys(&x, &g, &a, mode, drop);
+    make_keys(&x, &g, &a, drop);
     g.ec = {};
     count_keys(&x, rd, in, t);
     c.x = &x;

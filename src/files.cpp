@@ -63,18 +63,6 @@ void masks(const gph* x, std::vector<uint64_t>& m) {
     for (uint64_t i = 0; i < x->S * x->K; i++) m[i % x->K] |= (uint64_t)(x->c[i] > 0) << (i / x->K);
 }
 
-void make_look(const std::vector<uint64_t>& g, std::vector<uint32_t>& off) {
-    off.assign((1 << 24) + 1, 0);
-    for (uint64_t h : g) off[(h >> 40) + 1]++;
-    for (uint32_t i = 0; i < 1 << 24; i++) off[i + 1] += off[i];
-}
-
-uint32_t look(const std::vector<uint64_t>& g, const std::vector<uint32_t>& off, uint64_t h) {
-    uint32_t i = off[h >> 40], e = off[(h >> 40) + 1];
-    while (i < e && g[i] < h) i++;
-    return i;
-}
-
 std::vector<uint64_t> read_set(const char* path) {
     bin_header h;
     FILE* f = open_in(path, &h);

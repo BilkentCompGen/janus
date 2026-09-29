@@ -13,7 +13,5 @@ void read_gph(const char* path, gph* x);
 void write_gph(const char* path, const gph* x);
 void make_adj(const gph* x, adj* a);
 void masks(const gph* x, std::vector<uint64_t>& m);
-void make_look(const std::vector<uint64_t>& g, std::vector<uint32_t>& off);
-uint32_t look(const std::vector<uint64_t>& g, const std::vector<uint32_t>& off, uint64_t h);
 std::vector<uint64_t> read_set(const char* path);
 void write_set(const char* path, const char* magic, const std::vector<uint64_t>& v, uint64_t aux);

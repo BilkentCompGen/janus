@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdlib>
+#include "cmd.h"
 #include "extract.h"
 
 static const char SYM[5] = "ACGT";
@@ -76,13 +77,13 @@ static void ex_work(block* bl) {
     }
 }
 
-int cmd_extract(const char* in, const char* out, int t, int l) {
+int cmd_extract(const char* in, const char* out, int t) {
     LCP_INIT();
     bin_header h;
     std::vector<scr> s(t);
-    ectx c = {s.data(), l, l + 4};
+    ectx c = {s.data(), LEV, LEV + 4};
     FILE* fo = open_tmp(out);
-    bin_header o = {{'S', 'V', 'B', 'X'}, 3, stream_run(open_in(in, &h), nullptr, fo, t, svb_size, nullptr, ex_work, &c), 0, {(uint8_t)l, (uint8_t)(l + 4)}};
+    bin_header o = {{'S', 'V', 'B', 'X'}, 3, stream_run(open_in(in, &h), nullptr, fo, t, svb_size, nullptr, ex_work, &c), 0, {(uint8_t)LEV, (uint8_t)(LEV + 4)}};
     for (scr& x : s) { o.total += x.nc; std::free(x.mem); }
     finish(fo, out, &o);
     return 0;

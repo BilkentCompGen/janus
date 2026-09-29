@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstring>
+#include "cmd.h"
 #include "files.h"
 #include "io.h"
 #include "reads.h"
@@ -19,6 +20,18 @@ std::string bases(const rdcore* r, const uint8_t* rec, uint32_t lo, uint32_t hi,
 }
 
 static const uint32_t NONE = ~0u;
+
+static void make_look(const std::vector<uint64_t>& g, std::vector<uint32_t>& off) {
+    off.assign((1 << 24) + 1, 0);
+    for (uint64_t h : g) off[(h >> 40) + 1]++;
+    for (uint32_t i = 0; i < 1 << 24; i++) off[i + 1] += off[i];
+}
+
+static uint32_t look(const std::vector<uint64_t>& g, const std::vector<uint32_t>& off, uint64_t h) {
+    uint32_t i = off[h >> 40], e = off[(h >> 40) + 1];
+    while (i < e && g[i] < h) i++;
+    return i;
+}
 
 static size_t nid_size(const char* p, size_t n) {
     if (n < 8) return 0;
@@ -76,16 +89,16 @@ static void id_work(block* b) {
     }
 }
 
-static void samples(rpass* x, const char* reads, const char* ids, int t, work_fn wf) {
+static void samples(rpass* x, const char* reads, const char* ids, int t) {
     make_look(*x->g, x->off);
     for (std::string& s : split(reads)) {
         bin_header h, e;
-        std::string nid = std::string(ids ? ids : "") + "." + std::to_string(x->f) + ".nid";
+        std::string nid = std::string(ids) + "." + std::to_string(x->f) + ".nid";
         FILE *fa = open_in((x->ids ? s + ".exc" : s).c_str(), &h), *fb = open_in((x->ids ? nid : s + ".exc").c_str(), &e);
+        FILE* fo = x->fn ? std::fopen("/dev/null", "w") : open_tmp(nid.c_str());
         x->wb = x->ids ? h.resv[1] : e.resv[1];
-        FILE* fo = wf == rp_work ? std::fopen("/dev/null", "w") : open_tmp(nid.c_str());
-        bin_header o = {{'S', 'V', 'B', 'N'}, 1, stream_run(fa, fb, fo, t, x->ids ? exc_size : svb_size, x->ids ? nid_size : exc_size, wf, x), x->g->size(), {}};
-        if (wf == rp_work) std::fclose(fo);
+        bin_header o = {{'S', 'V', 'B', 'N'}, 1, stream_run(fa, fb, fo, t, x->ids ? exc_size : svb_size, x->ids ? nid_size : exc_size, x->fn ? rp_work : id_work, x), x->g->size(), {}};
+        if (x->fn) std::fclose(fo);
         else finish(fo, nid.c_str(), &o);
         x->f++;
     }
@@ -93,12 +106,15 @@ static void samples(rpass* x, const char* reads, const char* ids, int t, work_fn
 
 void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, const char* ids, int t, read_fn fn, void* ctx) {
     *x = {std::vector<rth>(t), &g, {}, fn, ctx, 0, 0, ids != nullptr};
-    samples(x, reads, ids, t, rp_work);
+    samples(x, reads, ids ? ids : "", t);
 }
 
-void write_ids(const std::vector<uint64_t>& g, const char* reads, const char* ids, int t) {
-    rpass x = {std::vector<rth>(t), &g, {}, nullptr, nullptr, 0, 0, 0};
-    samples(&x, reads, ids, t, id_work);
+int cmd_ids(const char* in, const char* rd, int t) {
+    gph g;
+    read_gph(in, &g);
+    rpass x = {std::vector<rth>(t), &g.g, {}, nullptr, nullptr, 0, 0, 0};
+    samples(&x, rd, in, t);
+    return 0;
 }
 
 static void match(rpass* x, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t) {

@@ -80,16 +80,6 @@ std::vector<std::string> split(const char* s) {
     return v;
 }
 
-size_t nlines(const char* p, size_t n, int k) {
-    size_t i = 0;
-    while (k--) {
-        const char* e = (const char*)std::memchr(p + i, '\n', n - i);
-        if (!e) return 0;
-        i = e - p + 1;
-    }
-    return i;
-}
-
 size_t svb_size(const char* p, size_t n) {
     if (n < 4) return 0;
     uint32_t tag;

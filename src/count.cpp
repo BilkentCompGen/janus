@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include "core.h"
-#include "count.h"
+#include "cmd.h"
 #include "io.h"
 
 static const uint32_t MM = 3, MARGIN = 10, NS = 65536, M31 = (1u << 31) - 1;

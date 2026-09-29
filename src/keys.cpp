@@ -14,13 +14,12 @@ static std::vector<uint8_t> seeds(const gph* g, const std::vector<uint8_t>& drop
     return sd;
 }
 
-void make_keys(keys* x, const gph* g, const adj* a, int mode, const std::vector<uint8_t>& drop) {
+void make_keys(keys* x, const gph* g, const adj* a, const std::vector<uint8_t>& drop) {
     std::vector<uint8_t> sd = seeds(g, drop);
     uint64_t np = 0;
     x->S = g->S;
     x->g = g;
     x->a = a;
-    x->mode = mode;
     x->unit.assign(g->K, NONE);
     x->off.assign(g->K, 0);
     x->br.assign(g->K, 0);
@@ -94,8 +93,8 @@ static void tally(rpass* p, rth* c, const uint8_t*, uint32_t m, uint32_t, uint64
     std::vector<hit>& h = q->h[c - p->t.data()];
     chain_keys(q->x, c, m, h);
     for (const hit& o : h) {
-        uint32_t st = c->r.a[c->ix[o.a]], en = c->r.b[c->ix[o.b]], f = std::min(st, c->r.len - en), w = q->x->mode == 2 ? std::min(f, 4095u) << 19 | std::min(c->r.len >> 2, (1u << 19) - 1) : q->x->mode ? f : c->r.len;
-        add(q->x, o.key, p->f, (uint64_t)w << 32 | (0xffffffffu - (uint32_t)rid));
+        uint32_t st = c->r.a[c->ix[o.a]], en = c->r.b[c->ix[o.b]];
+        add(q->x, o.key, p->f, (uint64_t)std::min(st, c->r.len - en) << 32 | (0xffffffffu - (uint32_t)rid));
     }
 }
 
