@@ -65,6 +65,8 @@ paper/measure/out/
 # side builds (make BUILD=build4 ...) used to keep a variant binary next to the main one
 /build*/
 
-# benchmark harness and its outputs, and the reference data (hg38 fasta, minimap2 index, core index, VNTR bed)
-/bench/
+# benchmark outputs (the harness scripts in bench/ are tracked), and the reference data (hg38 fasta, minimap2 index,
+# core index, VNTR bed)
+/bench/out/
+/bench/runs/
 /ref/
