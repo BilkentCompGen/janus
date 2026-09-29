@@ -6,15 +6,16 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500;
-static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500, KM = 15;
+static const float PCUT = 0.5f, ROT = 0.8f, UNQ = 1.25f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
-struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; uint32_t o; };
+struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; uint32_t o; char st; };
 
 struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; uint32_t nspc, n20c, tspc; std::vector<uint32_t> n, d; };
 
@@ -47,7 +48,7 @@ static void add(std::vector<ev>& o, uint32_t q, const char* ty, std::string c1, 
     if (c1 == c2 && (p1 > p2 ? p1 - p2 : p2 - p1) < MS && std::strcmp(ty, "INS")) return;
     uint32_t l1 = x.qe - x.qs, l2 = y.qe - y.qs;
     if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); std::swap(l1, l2); d = (d & 1) * 2 + d / 2; }
-    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de), d});
+    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de), d, x.st});
 }
 
 static std::vector<ev> events(std::vector<seg>& sg) {
@@ -102,6 +103,25 @@ static std::string ref(FILE* f, const std::vector<uint64_t>& v, uint32_t a, uint
     r.resize(std::fread(&r[0], 1, e - s, f));
     for (char ch : r) if (ch != '\n') o += ch & 0xdf;
     return o;
+}
+
+static float shared(const std::string& a, const std::string& b) {
+    std::unordered_set<std::string> k;
+    uint32_t m = 0;
+    for (size_t i = 0; i + KM <= b.size(); i++) k.insert(b.substr(i, KM));
+    for (size_t i = 0; i + KM <= a.size(); i++) m += k.count(a.substr(i, KM));
+    return (float)m / (a.size() - KM + 1);
+}
+
+static void tandem(ev& e, const std::string& pc, FILE* fa, const std::vector<uint64_t>& v) {
+    uint32_t L = e.p2 - e.p1;
+    std::string s = pc.substr(e.q, L), o;
+    if (e.st != '+') { for (size_t i = s.size(); i--;) o += s[i] == 'A' ? 'T' : s[i] == 'C' ? 'G' : s[i] == 'G' ? 'C' : s[i] == 'T' ? 'A' : 'N'; s = o; }
+    float u = shared(s, ref(fa, v, e.p1 - L, e.p1)), d = shared(s, ref(fa, v, e.p1, std::min<uint64_t>(e.p1 + L, v[0])));
+    if (u + d < ROT || u + d > UNQ) return;
+    e.ty = "DUP";
+    e.p1 -= (uint32_t)(u / (u + d) * L);
+    e.p2 = e.p1 + L;
 }
 
 static float rep(const std::string& s) {
@@ -214,10 +234,27 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         al[nm].push_back({qs, qe, ts, te, mq, st, tn, cg ? std::string(cg + 5, std::strcspn(cg + 5, "\t\n")) : "", de ? std::strtof(de + 5, nullptr) : 0});
     }
     std::fclose(fi);
+    std::unordered_map<std::string, std::vector<uint64_t>> fai;
+    FILE* fx = std::fopen((std::string(fasta) + ".fai").c_str(), "r");
+    unsigned long fl_[4];
+    while (std::fscanf(fx, "%255s %lu %lu %lu %lu", nm, &fl_[0], &fl_[1], &fl_[2], &fl_[3]) == 5) fai[nm] = {fl_[0], fl_[1], fl_[2], fl_[3]};
+    std::fclose(fx);
+    FILE *fa = std::fopen(fasta, "r"), *fp = std::fopen((std::string(evi, std::strlen(evi) - 3) + "fa").c_str(), "r");
+    std::unordered_map<std::string, std::vector<ev>> evs;
+    std::unordered_map<std::string, std::string> sq;
+    for (auto& pc : alt) if (al.count(pc.first)) for (const ev& e : evs[pc.first] = events(al[pc.first])) if (e.ty == "INS" && e.p2 - e.p1 >= NEAR) sq[pc.first];
+    char* ln = nullptr;
+    size_t cap = 0;
+    std::string* cur = nullptr;
+    for (ssize_t n; (n = getline(&ln, &cap, fp)) > 0;)
+        if (ln[0] == '>') { auto it = sq.find(std::string(ln + 1, n - 2)); cur = it == sq.end() ? nullptr : &it->second; }
+        else if (cur) cur->assign(ln, n - 1);
+    std::free(ln);
+    std::fclose(fp);
     std::vector<sv> som;
     for (auto& pc : alt) {
         if (!al.count(pc.first)) continue;
-        for (const ev& e : events(al[pc.first])) {
+        for (const ev& e : evs[pc.first]) {
             const arow* r = nullptr;
             for (const arow& x : pc.second) if (e.q + ROW >= x.a && e.q <= x.b + ROW && (!r || top(x.n) > top(r->n))) r = &x;
             if (!r || !primary(e.c1) || !primary(e.c2) || top(r->n) < MM) continue;
@@ -241,12 +278,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         q.r = m;
         q.pc++;
     }
-    std::unordered_map<std::string, std::vector<uint64_t>> fai;
-    FILE* fx = std::fopen((std::string(fasta) + ".fai").c_str(), "r");
-    unsigned long fl_[4];
-    while (std::fscanf(fx, "%255s %lu %lu %lu %lu", nm, &fl_[0], &fl_[1], &fl_[2], &fl_[3]) == 5) fai[nm] = {fl_[0], fl_[1], fl_[2], fl_[3]};
-    std::fclose(fx);
-    FILE *fa = std::fopen(fasta, "r"), *o = std::fopen(out, "w");
+    FILE* o = std::fopen(out, "w");
     std::fprintf(o, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
     for (size_t i = 0; i < (res.empty() ? 0 : res[0].r.n.size()); i++) std::fprintf(o, "\tS%zu", i);
     std::fprintf(o, "\n");
@@ -258,6 +290,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         const sv& s = res[i];
         rv[i] = rep(ref(fa, fai[s.e.c1], s.e.p1 > WIN ? s.e.p1 - WIN : 0, std::min<uint64_t>(s.e.p1 + WIN, fai[s.e.c1][0])));
         pv[i] = prob(s, rv[i], inbed(&vn, s.e.c1, s.e.p1) || inbed(&vn, s.e.c2, s.e.p2), med, w, fv[i].data());
+        if (s.e.ty == "INS" && s.e.p2 - s.e.p1 >= NEAR && s.e.p1 > s.e.p2 - s.e.p1) tandem(res[i].e, sq[s.nm], fa, fai[s.e.c1]);
         ix[i] = i;
     }
     std::sort(ix.begin(), ix.end(), [&](size_t a, size_t b) { const ev &x = res[a].e, &y = res[b].e; return x.c1 != y.c1 ? x.c1 < y.c1 : x.c2 != y.c2 ? x.c2 < y.c2 : x.p1 != y.p1 ? x.p1 < y.p1 : x.p2 != y.p2 ? x.p2 < y.p2 : a < b; });
