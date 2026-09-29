@@ -4,8 +4,6 @@
 
 static const uint32_t X = 20;
 
-struct fctx { std::vector<want>* w; std::vector<uint32_t> fo, fi; };
-
 std::string bases(const rdcore* r, const uint8_t* rec, uint32_t lo, uint32_t hi, uint32_t rc) {
     const uint8_t* q = rec[3] >> 7 ? r->raw.data() : rec + 4;
     std::string s(hi - lo, 0);
@@ -55,6 +53,7 @@ static void rp_work(block* b) {
     uint64_t rid = b->rec;
     for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2), rid++) {
         const uint8_t* rec = (const uint8_t*)b->in[0] + o;
+        if (x->only && !std::binary_search(x->only->begin(), x->only->end(), (uint64_t)x->f << 40 | rid)) continue;
         hashed(x, c, rec, (const uint8_t*)b->in[1] + o2);
         if (c->id.size() < r->n) { c->id.resize(2 * r->n); c->ix.resize(2 * r->n); }
         for (uint32_t s = 0; s < 2; s++) {
@@ -66,8 +65,8 @@ static void rp_work(block* b) {
     }
 }
 
-void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, int t, read_fn fn, void* ctx) {
-    *x = {std::vector<rth>(t), &g, {}, 0, fn, ctx, 0, 0};
+void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, const std::vector<uint64_t>* only, int t, read_fn fn, void* ctx) {
+    *x = {std::vector<rth>(t), &g, only, {}, 0, fn, ctx, 0, 0};
     make_map(x);
     FILE* fo = std::fopen("/dev/null", "w");
     for (std::string& s : split(reads)) {
@@ -80,15 +79,14 @@ void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, int 
     std::fclose(fo);
 }
 
-static void match(rpass* x, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t) {
-    fctx* f = (fctx*)x->ctx;
+void match(const fctx* f, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, int s) {
     const rdcore* r = &c->r;
     for (uint32_t i = 0; i < m; i++)
         for (uint32_t q = f->fo[c->id[i]]; q < f->fo[c->id[i] + 1]; q++) {
             want* a = &(*f->w)[f->fi[q]];
             uint32_t n = a->p.size(), j = 0;
             while (j < n && i + j < m && c->id[i + j] == a->p[j]) j++;
-            if (j < n || !(a->mask >> x->f & 1)) continue;
+            if (j < n || !(a->mask >> s & 1)) continue;
             uint32_t st = r->a[c->ix[i]], en = r->b[c->ix[i + n - 1]], tg = std::max(a->pad, a->mul * (en - st)), lp = std::min(tg, st), rp = std::min(tg, r->len - en);
             uint64_t sc = (uint64_t)(lp + rp + 1) << 32 | (uint32_t)(r->hs[0] ^ st ^ r->len);
             if (sc <= __atomic_load_n(&a->score, __ATOMIC_RELAXED)) continue;
@@ -98,14 +96,12 @@ static void match(rpass* x, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc,
         }
 }
 
-void fetch(std::vector<want>& w, const std::vector<uint64_t>& g, const char* reads, int t) {
-    fctx f = {&w, std::vector<uint32_t>(g.size() + 1), std::vector<uint32_t>(w.size())};
-    for (want& a : w) f.fo[a.p[0] + 1]++;
-    for (uint32_t i = 0; i < g.size(); i++) f.fo[i + 1] += f.fo[i];
-    std::vector<uint32_t> p(f.fo.begin(), f.fo.end() - 1);
-    for (uint32_t i = 0; i < w.size(); i++) f.fi[p[w[i].p[0]]++] = i;
-    rpass x;
-    each_read(&x, g, reads, t, match, &f);
+void wanted(fctx* f, std::vector<want>& w, uint64_t K) {
+    *f = {&w, std::vector<uint32_t>(K + 1), std::vector<uint32_t>(w.size())};
+    for (want& a : w) f->fo[a.p[0] + 1]++;
+    for (uint32_t i = 0; i < K; i++) f->fo[i + 1] += f->fo[i];
+    std::vector<uint32_t> p(f->fo.begin(), f->fo.end() - 1);
+    for (uint32_t i = 0; i < w.size(); i++) f->fi[p[w[i].p[0]]++] = i;
 }
 
 static uint32_t edit(const char* x, uint32_t n, const char* y, uint32_t m) {

@@ -6,40 +6,35 @@
 #include "keys.h"
 #include "cmd.h"
 
-static const uint32_t MM = 3, PAD = 1000, NA = 3, MULT = 2;
+static const uint32_t PAD = 1000, NA = 3, MULT = 2;
 static const double DL = 10000;
 
 struct anc { double sc; uint32_t v, a, b; };
 
-struct site { uint64_t read, key, slot; uint32_t s, lo, hi, a, b, pc; std::vector<anc> l, r; };
+struct site { uint64_t read, key; uint32_t s, lo, hi, a, b, pc; std::string n; std::vector<anc> l, r; };
 
 struct piece { uint64_t read; uint32_t lo, hi, k; std::string s; };
 
 struct sctx { keys* x; std::vector<site> w; std::vector<piece> pc; std::vector<uint64_t> rd; std::vector<uint32_t> ro, med, gs; const uint16_t* cn; uint64_t K; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; std::vector<int> fs, fx; int t; };
 
-static bool by_read(const site& p, const site& q) { return p.read != q.read ? p.read < q.read : p.key < q.key; }
-
 static bool by_score(const anc& p, const anc& q) { return p.sc > q.sc; }
 
 static bool by_near(const anc& p, const anc& q) { return p.sc < q.sc; }
 
-static bool odd(const keys* x, uint64_t i) {
-    bool on = false;
-    for (uint64_t s = 1; s < x->S; s++) on |= x->n[i * x->S + s] >= MM;
-    return on && !x->n[i * x->S];
-}
-
-static void gather(sctx* c, const std::vector<uint8_t>& drop) {
-    keys* x = c->x;
-    const gph* g = x->g;
-    for (uint64_t i = 0; i < x->Z; i++) {
-        if (!x->k[i] || !odd(x, i)) continue;
-        uint64_t ei = (x->k[i] >> 32) - 1, eo = x->k[i] & 0xffffffff;
-        if (drop[g->e[ei] >> 32] || drop[g->e[ei] & 0xffffffff] || drop[g->e[eo] >> 32] || drop[g->e[eo] & 0xffffffff]) continue;
-        for (uint64_t s = 1; s < x->S; s++)
-            if (x->n[i * x->S + s] >= MM) { site w = {}; w.read = s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]); w.key = x->k[i]; w.slot = i; w.s = s; c->w.push_back(w); }
+static void load(sctx* c, const char* path) {
+    bin_header h;
+    FILE* f = open_in(path, &h);
+    std::vector<uint64_t> r(2 + h.total);
+    for (uint64_t i = 0; i < h.nreads; i++) {
+        std::fread(r.data(), 8, r.size(), f);
+        site w = {};
+        w.read = r[0];
+        w.key = r[1];
+        w.s = r[0] >> 40;
+        for (uint64_t s = 0; s < h.total; s++) w.n += (s ? "," : "") + std::to_string(r[2 + s]);
+        c->w.push_back(w);
     }
-    std::sort(c->w.begin(), c->w.end(), by_read);
+    std::fclose(f);
     for (size_t i = 0; i < c->w.size(); i++)
         if (!i || c->w[i].read != c->w[i - 1].read) { c->rd.push_back(c->w[i].read); c->ro.push_back(i); }
     c->ro.push_back(c->w.size());
@@ -170,17 +165,14 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
         std::sort(smp.begin(), smp.end());
         c.med.push_back(smp[smp.size() / 2]);
     }
-    std::vector<uint8_t> drop(g.K);
-    for (uint64_t h : read_set(dr)) drop[std::lower_bound(g.g.begin(), g.g.end(), h) - g.g.begin()] = 1;
-    make_keys(&x, &g, &a, drop);
-    g.ec = {};
-    count_keys(&x, rd, t);
+    make_keys(&x, &g, &a);
+    keep_keys(&x, std::vector<uint8_t>(g.K, 1));
     c.x = &x;
-    gather(&c, drop);
+    load(&c, dr);
     c.h.resize(t);
     c.ids.resize(t);
     rpass p;
-    each_read(&p, g.g, rd, t, anchor, &c);
+    each_read(&p, g.g, rd, &c.rd, t, anchor, &c);
     pieces(&c);
     for (std::string& s : split(rd)) { c.fs.push_back(fileno(std::fopen(s.c_str(), "rb"))); c.fx.push_back(fileno(std::fopen((s + ".idx").c_str(), "rb"))); }
     par(t, cut, &c);
@@ -192,9 +184,7 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
         const site& e = c.w[i];
         if (e.hi <= e.lo) continue;
         const piece& q = c.pc[e.pc];
-        std::string n;
-        for (uint64_t s = 0; s < x.S; s++) n += (s ? "," : "") + std::to_string(x.n[e.slot * x.S + s]);
-        std::fprintf(v, "%s\t%u\t%u\t%u\t%s\t%lu\t%u\t%s\t%s\n", name(q).c_str(), e.a - q.lo, e.b - q.lo, i, n.c_str(), (unsigned long)e.key, e.s, list(e.l, q.lo).c_str(), list(e.r, q.lo).c_str());
+        std::fprintf(v, "%s\t%u\t%u\t%u\t%s\t%lu\t%u\t%s\t%s\n", name(q).c_str(), e.a - q.lo, e.b - q.lo, i, e.n.c_str(), (unsigned long)e.key, e.s, list(e.l, q.lo).c_str(), list(e.r, q.lo).c_str());
     }
     std::fclose(f);
     std::fclose(v);

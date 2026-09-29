@@ -8,8 +8,8 @@ step() { n=$1; shift; [ -e done.$n ] && return; /usr/bin/time -f "$n %e s %M KB"
 for s in n t; do step extract_$s $B extract -i $s.svb -o $s.svb.exc -t $P; done
 for s in n t; do step count_$s $B count -i $s.svb -o $s.cnt -t $P; done
 step graph $B graph -i n.cnt,t.cnt -o graph.gph
-step prune $B prune -i graph.gph -r n.svb,t.svb -o prune.drp -t $P
-step select $B select -i graph.gph -d prune.drp -r n.svb,t.svb -o ev -t $P
+step prune $B prune -i graph.gph -r n.svb,t.svb -o prune -t $P
+step select $B select -i graph.gph -d prune.sites -r n.svb,t.svb -o ev -t $P
 step place $B place -i ev.fa -r $R/hg38_parmask.cidx -d $R/hg38_parmask.fa -o ev -t $P
 step local minimap2 -cx map-hifi --secondary=no -t $P -o local.paf ev.win.fa ev.on.fa
 step lift $B lift -i local.paf -r ev.on.fa -d $R/hg38_parmask.fa -o lift
