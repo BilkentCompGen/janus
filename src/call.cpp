@@ -9,8 +9,8 @@
 #include <vector>
 #include "call.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 29, DUPT = 500;
-static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0};
+static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 32, DUPT = 500;
+static const float PCUT = 0.5f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0};
 
 struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
@@ -18,7 +18,7 @@ struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de
 
 struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d; };
 
-struct sv { ev e; std::string nm; uint32_t pc; arow r; uint32_t nf; };
+struct sv { ev e; std::string nm; uint32_t pc; arow r; uint32_t nf, ms, mn; };
 
 struct bed { std::unordered_map<std::string, std::vector<std::pair<uint32_t, uint32_t>>> m; };
 
@@ -171,6 +171,9 @@ static float prob(const sv& s, float rp, bool vn, float med, const float* w, flo
     f[26] = std::log2(r.nsame + 1.f);
     f[27] = std::log2(r.nspan + 1.f);
     f[28] = f[5] - f[25];
+    f[29] = s.ms > 0;
+    f[30] = (float)s.ms / std::max(s.mn, 1u);
+    f[31] = ind ? std::min(1.f, (float)s.nf / std::max(L, 1u)) : s.nf;
     float z = 0;
     for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
     return 1 / (1 + std::exp(-z));
@@ -213,7 +216,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
             const arow* r = nullptr;
             for (const arow& x : pc.second) if (e.q + ROW >= x.a && e.q <= x.b + ROW && (!r || top(x.n) > top(r->n))) r = &x;
             if (!r || !primary(e.c1) || !primary(e.c2) || top(r->n) < MM) continue;
-            som.push_back({e, pc.first, 1, *r, fit(*r, e)});
+            som.push_back({e, pc.first, 1, *r, fit(*r, e), r->nsame, r->nspan});
         }
     }
     std::sort(som.begin(), som.end(), cmp_sv);
@@ -221,14 +224,11 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     for (const sv& s : som) {
         if (res.empty() || !near(res.back(), s)) { res.push_back(s); continue; }
         sv& q = res.back();
-        arow m = top(s.r.n) > top(q.r.n) ? s.r : q.r, n = s.nf < q.nf || (s.nf == q.nf && s.r.nsame > q.r.nsame) ? s.r : q.r;
+        arow m = top(s.r.n) > top(q.r.n) ? s.r : q.r;
         if (top(s.r.n) > top(q.r.n)) { q.e = s.e; q.nm = s.nm; }
-        m.nsame = n.nsame;
-        m.nspan = n.nspan;
-        m.lest = n.lest;
-        m.dmin = n.dmin;
-        m.dmax = n.dmax;
-        q.nf = std::min(q.nf, s.nf);
+        if (s.nf < q.nf || (s.nf == q.nf && s.ms > q.ms)) { q.nf = s.nf; q.ms = s.ms; q.mn = s.mn; }
+        m.nsame = std::max(s.r.nsame, q.r.nsame);
+        m.nspan = std::max(s.r.nspan, q.r.nspan);
         m.ncl = std::max(s.r.ncl, q.r.ncl);
         m.shadow = std::max(s.r.shadow, q.r.shadow);
         q.r = m;
