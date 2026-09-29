@@ -7,7 +7,7 @@
 #include "keys.h"
 
 static const uint32_t PAD = 1000, NA = 3, MULT = 2;
-static const double DL = 10000;
+static const double DL = 15000;
 
 struct anc { double sc; uint32_t v, a, b; };
 
@@ -49,7 +49,7 @@ static double fit(const sctx* c, const std::vector<uint32_t>& ids, uint32_t v, u
     auto r = std::equal_range(ids.begin(), ids.end(), v);
     if (!c->cn[v] || !c->cn[s * c->K + v] || r.second - r.first != 1 || c->cn[v] > MULT * c->med[0] || c->cn[s * c->K + v] > MULT * c->med[s]) return 0;
     double n = (double)c->cn[v] / c->med[0], t = (double)c->cn[s * c->K + v] / c->med[s];
-    return std::min(n, 1 / n) * std::min(t, 1 / t);
+    return std::sqrt(std::min(1.0, n) * std::min(1.0, t));
 }
 
 static void side(const sctx* c, const rth* t, const std::vector<uint32_t>& ids, uint64_t s, int64_t from, int64_t step, int64_t end, std::vector<anc>& o) {
@@ -57,8 +57,8 @@ static void side(const sctx* c, const rth* t, const std::vector<uint32_t>& ids, 
     uint32_t at = d->a[t->ix[from]];
     for (int64_t j = from; j != end; j += step) {
         uint32_t p = d->a[t->ix[j]];
-        double w = std::exp(-(double)(p > at ? p - at : at - p) / DL), f;
-        if (o.size() == NA && w < o.back().sc) break;
+        double w = std::max(0.0, 1 - (p > at ? p - at : at - p) / DL), f;
+        if (w <= 0 || (o.size() == NA && w <= o.back().sc)) break;
         if ((f = fit(c, ids, t->id[j], s)) == 0) continue;
         o.push_back({f * w, t->id[j], p, d->b[t->ix[j]]});
         std::sort(o.begin(), o.end(), by_score);
