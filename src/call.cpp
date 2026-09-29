@@ -18,7 +18,7 @@ struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de
 
 struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; std::vector<uint32_t> n, d; };
 
-struct sv { ev e; std::string nm; uint32_t pc; arow r; };
+struct sv { ev e; std::string nm; uint32_t pc; arow r; uint32_t nf; };
 
 struct bed { std::unordered_map<std::string, std::vector<std::pair<uint32_t, uint32_t>>> m; };
 
@@ -26,6 +26,10 @@ static std::vector<uint32_t> nums(const char* s) {
     std::vector<uint32_t> v;
     for (char* p = (char*)s; *p && *p != '\t' && *p != '\n'; p += *p == ',') v.push_back(std::strtoul(p, &p, 10));
     return v;
+}
+
+static uint32_t fit(const arow& r, const ev& e) {
+    return e.ty == "BND" || e.ty == "INV" ? e.q < r.a || e.q > r.b : r.nspan ? std::abs(std::abs(r.lest) - (int32_t)(e.p2 - e.p1)) : e.p2 - e.p1;
 }
 
 static bool cmp_seg(const seg& x, const seg& y) { return x.qs < y.qs; }
@@ -209,7 +213,7 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
             const arow* r = nullptr;
             for (const arow& x : pc.second) if (e.q + ROW >= x.a && e.q <= x.b + ROW && (!r || top(x.n) > top(r->n))) r = &x;
             if (!r || !primary(e.c1) || !primary(e.c2) || top(r->n) < MM) continue;
-            som.push_back({e, pc.first, 1, *r});
+            som.push_back({e, pc.first, 1, *r, fit(*r, e)});
         }
     }
     std::sort(som.begin(), som.end(), cmp_sv);
@@ -217,10 +221,14 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
     for (const sv& s : som) {
         if (res.empty() || !near(res.back(), s)) { res.push_back(s); continue; }
         sv& q = res.back();
-        arow m = top(s.r.n) > top(q.r.n) ? s.r : q.r;
+        arow m = top(s.r.n) > top(q.r.n) ? s.r : q.r, n = s.nf < q.nf || (s.nf == q.nf && s.r.nsame > q.r.nsame) ? s.r : q.r;
         if (top(s.r.n) > top(q.r.n)) { q.e = s.e; q.nm = s.nm; }
-        m.nsame = std::max(s.r.nsame, q.r.nsame);
-        m.nspan = std::max(s.r.nspan, q.r.nspan);
+        m.nsame = n.nsame;
+        m.nspan = n.nspan;
+        m.lest = n.lest;
+        m.dmin = n.dmin;
+        m.dmax = n.dmax;
+        q.nf = std::min(q.nf, s.nf);
         m.ncl = std::max(s.r.ncl, q.r.ncl);
         m.shadow = std::max(s.r.shadow, q.r.shadow);
         q.r = m;
