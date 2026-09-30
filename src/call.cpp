@@ -9,17 +9,28 @@
 #include <unordered_set>
 #include <vector>
 #include "cmd.h"
+#include "io.h"
 
-static const uint32_t MM = 3, MQ = 10, MS = 50, TOL = 50, NEAR = 500, JN = 100, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500, KM = 15;
-static const float PCUT = 0.5f, ROT = 0.8f, UNQ = 1.25f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+// Every site from select is somatic by construction (its combination has no normal read and at least 3 tumor reads), so call
+// only turns the pieces' alignments into SV records and applies the thresholds of the published long-read somatic callers:
+// MS 50 bp minimum size (Severus, nanomonsv), MQ 20 mapping quality (nanomonsv's median-MAPQ threshold), VAF 0.05 minimum
+// tumor VAF (Severus, nanomonsv), Sniffles2's coverage-scaled minimum support round(SB + SM * coverage) with coverage
+// SR local + (1 - SR) genome-wide (its "auto" rule; local and genome-wide tumor depth come from the anchors), NCOV 3: the normal's zero counts only when the normal has more than 3 reads at the site
+// (Severus' control coverage threshold), TOL 50 bp breakpoint clustering (Severus), and Severus' VNTR rule: events inside
+// one VNTR (VB 25 bp buffer) are one event, and more than VN 3 distinct events in one VNTR fail as complex.
+// Geometry: same-type gaps less than ISL aligned bases apart are one gap, an event belongs to a site whose interval is within
+// ROW bp of it in the read, records within DUPT bp at both ends are duplicates (the benchmark's tolerance), and insertions of
+// NEAR bp or more that copy the adjacent reference (KM-mer share between ROT and UNQ) are tandem duplications.
+static const uint32_t MS = 50, MQ = 20, MM = 3, NCOV = 3, TOL = 50, ISL = 100, ROW = 200, DUPT = 500, NEAR = 500, KM = 15, VN = 3, VB = 25;
+static const float VAF = 0.05f, SB = 1.5f, SM = 0.1f, SR = 0.75f, ROT = 0.8f, UNQ = 1.25f;
 
-struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
+struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; };
 
-struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; uint32_t o; char st; };
+struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, o; char st; };
 
-struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; uint32_t nspc, n20c, tspc; std::vector<uint32_t> n, d; };
+struct spot { uint32_t a, b, s, t, nd, td; std::vector<uint32_t> n; };
 
-struct sv { ev e; std::string nm; uint32_t pc; arow r; uint32_t nf, ms, mn; };
+struct sv { ev e; std::string nm, why; uint32_t pc, t, mq; spot r; };
 
 struct bed { std::unordered_map<std::string, std::vector<std::pair<uint32_t, uint32_t>>> m; };
 
@@ -29,9 +40,29 @@ static std::vector<uint32_t> nums(const char* s) {
     return v;
 }
 
-static uint32_t fit(const arow& r, const ev& e) {
-    uint32_t o = e.q < r.a || e.q > r.b, L = e.p2 - e.p1;
-    return e.ty == "BND" || e.ty == "INV" ? o : o ? 2 * L : r.nspan ? std::abs(std::abs(r.lest) - (int32_t)L) : L;
+static uint32_t median(std::vector<uint32_t> v) {
+    if (v.empty()) return 0;
+    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+    return v[v.size() / 2];
+}
+
+// Depth of sample x at the site: the median graph count of its anchors on each side; nd is the normal's higher side and td the
+// tumor's mean of the sides it has.
+static void depths(spot* r, const char* ls, const char* rs, const std::vector<uint16_t>& c, uint64_t K) {
+    std::vector<uint32_t> side[2][2];
+    const char* p[2] = {ls, rs};
+    for (int k = 0; k < 2; k++)
+        for (const char* q = p[k]; *q && *q != '-' && *q != '\t' && *q != '\n';) {
+            uint64_t v = std::strtoull(q, (char**)&q, 10);
+            std::strtoul(q + 1, (char**)&q, 10);
+            side[k][0].push_back(c[v]);
+            side[k][1].push_back(c[r->s * K + v]);
+            if (*q == ',') q++;
+        }
+    uint32_t n0 = median(side[0][0]), n1 = median(side[1][0]), t0 = median(side[0][1]), t1 = median(side[1][1]);
+    bool h0 = !side[0][0].empty(), h1 = !side[1][0].empty();
+    r->nd = std::max(n0, n1);
+    r->td = h0 && h1 ? (t0 + t1) / 2 : h0 ? t0 : t1;
 }
 
 static bool cmp_seg(const seg& x, const seg& y) { return x.qs < y.qs; }
@@ -40,17 +71,19 @@ static bool cmp_sv(const sv& x, const sv& y) {
     return x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.o != y.e.o ? x.e.o < y.e.o : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
 }
 
-static uint32_t top(const std::vector<uint32_t>& n) {
-    return *std::max_element(n.begin() + 1, n.end());
+static bool cmp_pos(const sv& x, const sv& y) {
+    return x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 < y.e.p2;
 }
+
+static bool better(const sv& x, const sv& y) { return x.t != y.t ? x.t > y.t : x.mq != y.mq ? x.mq > y.mq : x.pc > y.pc; }
 
 static void add(std::vector<ev>& o, uint32_t q, const char* ty, std::string c1, uint32_t p1, std::string c2, uint32_t p2, const seg& x, const seg& y, uint32_t d = 0) {
     if (c1 == c2 && (p1 > p2 ? p1 - p2 : p2 - p1) < MS && std::strcmp(ty, "INS")) return;
-    uint32_t l1 = x.qe - x.qs, l2 = y.qe - y.qs;
-    if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); std::swap(l1, l2); d = (d & 1) * 2 + d / 2; }
-    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de), d, x.st});
+    if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); d = (d & 1) * 2 + d / 2; }
+    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), d, x.st});
 }
 
+// Events of one piece: gaps of MS bp or more inside an alignment, and the jumps between consecutive alignments along the read.
 static std::vector<ev> events(std::vector<seg>& sg) {
     std::vector<ev> o;
     std::sort(sg.begin(), sg.end(), cmp_seg);
@@ -88,8 +121,8 @@ static std::vector<ev> events(std::vector<seg>& sg) {
     return o;
 }
 
-static bool near(const sv& x, const sv& y) {
-    return x.e.ty == y.e.ty && x.e.o == y.e.o && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
+static bool near(const ev& x, const ev& y, uint32_t w) {
+    return x.c1 == y.c1 && x.c2 == y.c2 && x.p1 + w >= y.p1 && y.p1 + w >= x.p1 && x.p2 + w >= y.p2 && y.p2 + w >= x.p2;
 }
 
 static bool primary(const std::string& c) {
@@ -124,16 +157,6 @@ static void tandem(ev& e, const std::string& pc, FILE* fa, const std::vector<uin
     e.p2 = e.p1 + L;
 }
 
-static float rep(const std::string& s) {
-    float b = 0;
-    for (uint32_t p = 1; p <= 6 && s.size() > p; p++) {
-        uint32_t k = 0;
-        for (uint32_t i = p; i < s.size(); i++) k += s[i] == s[i - p];
-        b = std::max(b, (float)k / (s.size() - p));
-    }
-    return b;
-}
-
 static void load_bed(const char* path, bed* b) {
     char c[256];
     uint32_t s, e;
@@ -151,98 +174,66 @@ static void load_bed(const char* path, bed* b) {
     }
 }
 
-static bool inbed(const bed* b, const std::string& c, uint32_t p) {
-    auto it = b->m.find(c);
-    if (it == b->m.end()) return false;
-    auto k = std::upper_bound(it->second.begin(), it->second.end(), std::make_pair(p + 50, ~0u));
-    return k != it->second.begin() && (k - 1)->second + 50 >= p;
+// The VNTR holding both ends of an event on one chromosome (with VB bp of buffer), as its start; 0 when there is none.
+static uint32_t vntr(const bed* b, const ev& e) {
+    auto it = b->m.find(e.c1);
+    if (e.c1 != e.c2 || e.ty == "INV" || it == b->m.end()) return 0;
+    auto k = std::upper_bound(it->second.begin(), it->second.end(), std::make_pair(e.p1 + VB, ~0u));
+    if (k == it->second.begin()) return 0;
+    --k;
+    return k->second + VB >= std::max(e.p1, e.p2) ? k->first + 1 : 0;
 }
 
-static float prob(const sv& s, float rp, bool vn, float med, const float* w, float* f) {
-    const arow& r = s.r;
-    uint32_t t = top(r.n), dt = r.d[r.s], L = s.e.p2 - s.e.p1;
-    int32_t al = std::abs(r.lest);
-    bool sp = r.nspan > 0, ind = s.e.ty != "BND" && s.e.ty != "INV";
-    f[0] = 1;
-    f[1] = std::log2(t + 1.f);
-    f[2] = std::min(1.f, (float)t / std::max(dt, 1u));
-    f[3] = std::log2((float)s.pc);
-    f[4] = r.ncl;
-    f[5] = std::min(1.f, (float)t / std::max(r.tspan, 1u));
-    f[6] = sp;
-    f[7] = r.nsame > 0;
-    f[8] = sp && ind && al < (int32_t)MS;
-    f[9] = sp && al >= (int32_t)MS && ind && (2 * al < (int32_t)L || al > 2 * (int32_t)L);
-    f[10] = r.nspan >= 3 && r.dmin < -20 && r.dmax > 20;
-    f[11] = r.shadow > 0;
-    f[12] = 1000.f * r.tonly / std::max(r.span, 1u);
-    f[13] = 1000.f * r.nbr / std::max(r.span, 1u);
-    f[14] = s.e.mq / 60.f;
-    f[15] = std::min(s.e.de, 0.05f) * 100;
-    f[16] = rp;
-    f[17] = vn;
-    f[18] = s.e.ty == "INS";
-    f[19] = s.e.ty == "DUP";
-    f[20] = s.e.ty == "INV";
-    f[21] = s.e.ty == "BND";
-    f[22] = s.e.ty == "BND" ? 0 : std::log2(L + 1.f);
-    f[23] = std::log2((dt + 1.f) / (med + 1));
-    f[24] = r.d[0] == 0;
-    f[25] = (float)r.nsame / std::max(r.nspan, 1u);
-    f[26] = std::log2(r.nsame + 1.f);
-    f[27] = std::log2(r.nspan + 1.f);
-    f[28] = f[5] - f[25];
-    f[29] = s.ms > 0;
-    f[30] = (float)s.ms / std::max(s.mn, 1u);
-    f[31] = ind ? std::min(1.f, (float)s.nf / std::max(L, 1u)) : s.nf;
-    f[32] = r.n20c > 0;
-    f[33] = std::log2(r.n20c + 1.f);
-    f[34] = std::log2(r.nspc + 1.f);
-    f[35] = std::min(1.f, (float)r.tspc / std::max(r.tspan, 1u));
-    float z = 0;
-    for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
-    return 1 / (1 + std::exp(-z));
-}
-
-int cmd_call(const char* paf, const char* evi, const char* fasta, const char* out, const char* wf, const char* vb) {
-    std::unordered_map<std::string, std::vector<arow>> alt;
+int cmd_call(const char* paf, const char* evi, const char* fasta, const char* gp, const char* out, const char* vb) {
+    std::unordered_map<std::string, std::vector<spot>> sites;
     std::unordered_map<std::string, std::vector<seg>> al;
-    char line[1 << 16], nm[256], cn[4096], dd[4096], st, tn[256];
-    uint32_t qs, qe, ts, te, mq, z;
-    float w[NF];
+    char line[1 << 16], nm[256], cn[4096], ls[4096], rs[4096], st, tn[256];
+    uint32_t qs, qe, ts, te, mq, z, a, b, s;
     bed vn;
-    std::vector<uint32_t> dep;
-    std::copy(W0, W0 + NF, w);
-    if (wf) { FILE* fw = std::fopen(wf, "r"); for (uint32_t i = 0; i < NF; i++) std::fscanf(fw, "%f", &w[i]); std::fclose(fw); }
     if (vb) load_bed(vb, &vn);
+    bin_header h;
+    FILE* fg = open_in(gp, &h);
+    uint64_t K = h.nreads, S = h.resv[0], U;
+    std::vector<uint16_t> c(S * K);
+    std::fread(&U, 8, 1, fg);
+    std::fseek(fg, 8 * K, SEEK_CUR);
+    std::fread(c.data(), 2, S * K, fg);
+    std::fclose(fg);
     FILE* fi = std::fopen(evi, "r");
     while (std::fgets(line, sizeof line, fi)) {
-        arow r;
-        std::sscanf(line, "%255s %u %u %u %4095s %4095s %*s %u %u %u %u %u %u %d %d %d %u %u %u %u %*s %*s %*u %*u %*u %u %u %u", nm, &r.a, &r.b, &r.u, cn, dd, &r.s, &r.ncl, &r.cl, &r.tspan, &r.nspan, &r.nsame, &r.lest, &r.dmin, &r.dmax, &r.shadow, &r.tonly, &r.nbr, &r.span, &r.nspc, &r.n20c, &r.tspc);
-        r.n = nums(cn);
-        r.d = nums(dd);
-        dep.push_back(r.d[r.s]);
-        alt[nm].push_back(r);
+        std::sscanf(line, "%255s %u %u %*u %4095s %*s %u %4095s %4095s", nm, &a, &b, cn, &s, ls, rs);
+        spot r = {a, b, s, 0, 0, 0, nums(cn)};
+        r.t = r.n[s];
+        depths(&r, ls, rs, c, K);
+        sites[nm].push_back(r);
     }
     std::fclose(fi);
-    std::sort(dep.begin(), dep.end());
-    float med = dep.empty() ? 0 : dep[dep.size() / 2];
+    c = {};
     fi = std::fopen(paf, "r");
     while (std::fgets(line, sizeof line, fi)) {
         std::sscanf(line, "%255s %u %u %u %c %255s %u %u %u %u %u %u", nm, &z, &qs, &qe, &st, tn, &z, &ts, &te, &z, &z, &mq);
-        const char *cg = std::strstr(line, "cg:Z:"), *de = std::strstr(line, "de:f:");
-        al[nm].push_back({qs, qe, ts, te, mq, st, tn, cg ? std::string(cg + 5, std::strcspn(cg + 5, "\t\n")) : "", de ? std::strtof(de + 5, nullptr) : 0});
+        const char* cg = std::strstr(line, "cg:Z:");
+        al[nm].push_back({qs, qe, ts, te, mq, st, tn, cg ? std::string(cg + 5, std::strcspn(cg + 5, "\t\n")) : ""});
     }
     std::fclose(fi);
     std::unordered_map<std::string, std::vector<uint64_t>> fai;
     FILE* fx = std::fopen((std::string(fasta) + ".fai").c_str(), "r");
-    unsigned long fl_[4];
-    while (std::fscanf(fx, "%255s %lu %lu %lu %lu", nm, &fl_[0], &fl_[1], &fl_[2], &fl_[3]) == 5) fai[nm] = {fl_[0], fl_[1], fl_[2], fl_[3]};
+    unsigned long f4[4];
+    while (std::fscanf(fx, "%255s %lu %lu %lu %lu", nm, &f4[0], &f4[1], &f4[2], &f4[3]) == 5) fai[nm] = {f4[0], f4[1], f4[2], f4[3]};
     std::fclose(fx);
-    FILE *fa = std::fopen(fasta, "r"), *fp = std::fopen((std::string(evi, std::strlen(evi) - 3) + "fa").c_str(), "r");
-    std::unordered_map<std::string, std::vector<ev>> evs;
+    std::vector<sv> som;
     std::unordered_map<std::string, std::string> sq;
-    for (auto& pc : alt) if (al.count(pc.first)) for (const ev& e : evs[pc.first] = events(al[pc.first])) if (e.ty == "INS" && e.p2 - e.p1 >= NEAR) sq[pc.first];
+    for (auto& pc : sites) {
+        if (!al.count(pc.first)) continue;
+        for (const ev& e : events(al[pc.first])) {
+            const spot* r = nullptr;
+            for (const spot& x : pc.second) if (e.q + ROW >= x.a && e.q <= x.b + ROW && (!r || x.t > r->t)) r = &x;
+            if (!r || !primary(e.c1) || !primary(e.c2) || r->t < MM) continue;
+            som.push_back({e, pc.first, "", 1, r->t, e.mq, *r});
+            if (e.ty == "INS" && e.p2 - e.p1 >= NEAR) sq[pc.first];
+        }
+    }
+    FILE *fa = std::fopen(fasta, "r"), *fp = std::fopen((std::string(evi, std::strlen(evi) - 3) + "fa").c_str(), "r");
     char* ln = nullptr;
     size_t cap = 0;
     std::string* cur = nullptr;
@@ -251,66 +242,58 @@ int cmd_call(const char* paf, const char* evi, const char* fasta, const char* ou
         else if (cur) cur->assign(ln, n - 1);
     std::free(ln);
     std::fclose(fp);
-    std::vector<sv> som;
-    for (auto& pc : alt) {
-        if (!al.count(pc.first)) continue;
-        for (const ev& e : evs[pc.first]) {
-            const arow* r = nullptr;
-            for (const arow& x : pc.second) if (e.q + ROW >= x.a && e.q <= x.b + ROW && (!r || top(x.n) > top(r->n))) r = &x;
-            if (!r || !primary(e.c1) || !primary(e.c2) || top(r->n) < MM) continue;
-            som.push_back({e, pc.first, 1, *r, fit(*r, e), r->nsame, r->nspan});
-        }
-    }
+    for (sv& x : som) if (x.e.ty == "INS" && x.e.p2 - x.e.p1 >= NEAR && x.e.p1 > x.e.p2 - x.e.p1) tandem(x.e, sq[x.nm], fa, fai[x.e.c1]);
+    std::fclose(fa);
+    // one record per event: same type and orientation, both ends within TOL; the best piece (most tumor reads) represents it
     std::sort(som.begin(), som.end(), cmp_sv);
     std::vector<sv> res;
-    for (const sv& s : som) {
-        if (res.empty() || !near(res.back(), s)) { res.push_back(s); continue; }
+    for (const sv& x : som) {
+        if (res.empty() || res.back().e.ty != x.e.ty || res.back().e.o != x.e.o || !near(res.back().e, x.e, TOL)) { res.push_back(x); continue; }
         sv& q = res.back();
-        arow m = top(s.r.n) > top(q.r.n) ? s.r : q.r;
-        if (top(s.r.n) > top(q.r.n)) { q.e = s.e; q.nm = s.nm; }
-        if (s.nf < q.nf || (s.nf == q.nf && s.ms > q.ms)) { q.nf = s.nf; q.ms = s.ms; q.mn = s.mn; }
-        m.nsame = std::max(s.r.nsame, q.r.nsame);
-        m.nspan = std::max(s.r.nspan, q.r.nspan);
-        m.nspc = std::max(s.r.nspc, q.r.nspc);
-        m.n20c = std::max(s.r.n20c, q.r.n20c);
-        m.ncl = std::max(s.r.ncl, q.r.ncl);
-        m.shadow = std::max(s.r.shadow, q.r.shadow);
-        q.r = m;
-        q.pc++;
+        uint32_t pc = q.pc + 1, m = std::max(q.mq, x.mq);
+        if (better(x, q)) q = x;
+        q.pc = pc;
+        q.mq = m;
     }
+    std::vector<uint32_t> td;
+    for (const sv& x : res) if (x.r.td) td.push_back(x.r.td);
+    float gd = median(td);
+    for (sv& x : res)
+        x.why = x.r.nd <= NCOV ? "LOWNORMAL" : !x.r.td ? "NODEPTH" : (float)x.t / std::max(x.r.td, x.t) < VAF ? "LOWVAF" : x.t < std::lround(SB + SM * (SR * x.r.td + (1 - SR) * gd)) ? "LOWSUPPORT" : "PASS";
+    // Severus' VNTR rule: same-type events inside one VNTR are one event; more than VN distinct events there fail as complex
+    std::unordered_map<std::string, std::vector<uint32_t>> inv;
+    for (uint32_t i = 0; i < res.size(); i++) {
+        uint32_t v = vn.m.empty() ? 0 : vntr(&vn, res[i].e);
+        if (v && res[i].why == "PASS") inv[res[i].e.c1 + ":" + std::to_string(v)].push_back(i);
+    }
+    for (auto& kv : inv) {
+        std::vector<uint32_t>& g = kv.second;
+        if (g.size() > VN) { for (uint32_t i : g) res[i].why = "VNTR"; continue; }
+        for (uint32_t i = 0; i < g.size(); i++)
+            for (uint32_t j = i + 1; j < g.size(); j++)
+                if (res[g[i]].e.ty == res[g[j]].e.ty && res[g[i]].why == "PASS" && res[g[j]].why == "PASS") res[better(res[g[i]], res[g[j]]) ? g[j] : g[i]].why = "DUPL";
+    }
+    // records within DUPT bp at both ends describe one event; the better one stays
+    std::sort(res.begin(), res.end(), cmp_pos);
+    for (size_t i = 0; i < res.size(); i++)
+        for (size_t j = i + 1; j < res.size() && res[j].e.c1 == res[i].e.c1 && res[j].e.p1 <= res[i].e.p1 + DUPT; j++)
+            if (res[i].why == "PASS" && res[j].why == "PASS" && near(res[i].e, res[j].e, DUPT) && (res[i].e.ty != res[j].e.ty || res[i].e.o == res[j].e.o))
+                res[better(res[i], res[j]) ? j : i].why = "DUPL";
     FILE* o = std::fopen(out, "w");
     std::fprintf(o, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
     for (size_t i = 0; i < (res.empty() ? 0 : res[0].r.n.size()); i++) std::fprintf(o, "\tS%zu", i);
     std::fprintf(o, "\n");
-    std::vector<float> pv(res.size()), rv(res.size());
-    std::vector<std::vector<float>> fv(res.size(), std::vector<float>(NF));
-    std::vector<uint8_t> dup(res.size(), 0);
-    std::vector<size_t> ix(res.size());
-    for (size_t i = 0; i < res.size(); i++) {
-        const sv& s = res[i];
-        rv[i] = rep(ref(fa, fai[s.e.c1], s.e.p1 > WIN ? s.e.p1 - WIN : 0, std::min<uint64_t>(s.e.p1 + WIN, fai[s.e.c1][0])));
-        pv[i] = prob(s, rv[i], inbed(&vn, s.e.c1, s.e.p1) || inbed(&vn, s.e.c2, s.e.p2), med, w, fv[i].data());
-        if (s.e.ty == "INS" && s.e.p2 - s.e.p1 >= NEAR && s.e.p1 > s.e.p2 - s.e.p1) tandem(res[i].e, sq[s.nm], fa, fai[s.e.c1]);
-        ix[i] = i;
-    }
-    std::sort(ix.begin(), ix.end(), [&](size_t a, size_t b) { const ev &x = res[a].e, &y = res[b].e; return x.c1 != y.c1 ? x.c1 < y.c1 : x.c2 != y.c2 ? x.c2 < y.c2 : x.p1 != y.p1 ? x.p1 < y.p1 : x.p2 != y.p2 ? x.p2 < y.p2 : a < b; });
-    for (size_t a = 0; a < ix.size(); a++)
-        for (size_t b = a + 1; b < ix.size() && res[ix[b]].e.c1 == res[ix[a]].e.c1 && res[ix[b]].e.c2 == res[ix[a]].e.c2 && res[ix[b]].e.p1 <= res[ix[a]].e.p1 + DUPT; b++)
-            if (res[ix[b]].e.p2 + DUPT >= res[ix[a]].e.p2 && res[ix[a]].e.p2 + DUPT >= res[ix[b]].e.p2 && (res[ix[a]].e.ty != res[ix[b]].e.ty || res[ix[a]].e.o == res[ix[b]].e.o)) dup[pv[ix[a]] < pv[ix[b]] ? ix[a] : ix[b]] = 1;
     uint64_t np = 0;
     for (size_t i = 0; i < res.size(); i++) {
-        const sv& s = res[i];
-        float p = pv[i];
-        np += p >= PCUT && !dup[i];
-        std::string j = (s.e.o & 1 ? "]" : "[") + s.e.c2 + ":" + std::to_string(s.e.p2) + (s.e.o & 1 ? "]" : "["), alt_ = s.e.ty != "BND" ? "<" + s.e.ty + ">" : s.e.o & 2 ? "N" + j : j + "N", fs;
-        for (uint32_t k = 0; k < NF; k++) { std::snprintf(nm, sizeof nm, "%s%.4g", k ? "," : "", fv[i][k]); fs += nm; }
-        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s\tGT:DV", s.e.c1.c_str(), s.e.p1, i, alt_.c_str(), dup[i] ? "DUPL" : p >= PCUT ? "PASS" : "LOW", s.e.ty.c_str(),
-                     s.e.ty == "BND" || s.e.ty == "INS" ? s.e.p1 : s.e.p2, s.e.c1 == s.e.c2 ? s.e.p2 - s.e.p1 : 0, s.e.o, s.pc, s.nm.c_str(), 1 - p, fs.c_str());
-        for (uint32_t n : s.r.n) std::fprintf(o, "\t%s:%u", n >= MM ? "0/1" : "0/0", n);
+        const sv& x = res[i];
+        np += x.why == "PASS";
+        std::string j = (x.e.o & 1 ? "]" : "[") + x.e.c2 + ":" + std::to_string(x.e.p2) + (x.e.o & 1 ? "]" : "["), alt = x.e.ty != "BND" ? "<" + x.e.ty + ">" : x.e.o & 2 ? "N" + j : j + "N";
+        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;QPOS=%u;SITE=%u-%u;MQ=%u;TDP=%u;NDP=%u;VAF=%.3f\tGT:DV", x.e.c1.c_str(), x.e.p1, i, alt.c_str(), x.why.c_str(), x.e.ty.c_str(),
+                     x.e.ty == "BND" || x.e.ty == "INS" ? x.e.p1 : x.e.p2, x.e.c1 == x.e.c2 ? x.e.p2 - x.e.p1 : 0, x.e.o, x.pc, x.nm.c_str(), x.e.q, x.r.a, x.r.b, x.mq, x.r.td, x.r.nd, x.r.td ? (float)x.t / std::max(x.r.td, x.t) : 0);
+        for (uint32_t n : x.r.n) std::fprintf(o, "\t%s:%u", n >= MM ? "0/1" : "0/0", n);
         std::fprintf(o, "\n");
     }
     std::fclose(o);
-    std::fclose(fa);
-    std::fprintf(stderr, "[call] %zu tumor events at sites, %zu records, %lu PASS\n", som.size(), res.size(), np);
+    std::fprintf(stderr, "[call] %zu events at sites, %zu records, %lu PASS\n", som.size(), res.size(), np);
     return 0;
 }
