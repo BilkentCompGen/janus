@@ -16,7 +16,7 @@
 #include "reads.h"
 
 // call reads the sites (ev.tsv), the pieces (ev.fa) and their alignments (ev.paf), the graph and the packed reads, makes
-// its own pass over every read of both samples, and writes the records with AA3's evidence features for the verdict.
+// its own pass over every read of both samples, and writes the records with their evidence features for the verdict.
 // The pass: each site's tumor read is fetched, the distance between the site's innermost anchors is measured on it and
 // the read's nodes between them are counted (tumor-only, branch); then every read is streamed once, and each read that
 // carries a left and a right anchor of a site gives its distance, so every site gets per-sample spanning reads, their
@@ -24,8 +24,8 @@
 // anchors at the tumor read's spacing). Records come from the alignments (gaps of MS bp or more inside an alignment;
 // jumps between consecutive alignments give DEL/INS/DUP/INV/BND), attached to a site within ROW bp in the piece, merged
 // within TOL bp; insertions of NEAR bp or more copying the adjacent reference (KM-mer share between ROT and UNQ) become
-// tandem duplications. Every record gets AA3's NF features from the measurements, the reference repeat content in WIN bp,
-// the tandem-repeat bed, and the alignment; its error probability is AA3's logistic with weights W0 and PASS is the PCUT
+// tandem duplications. Every record gets NF features from the measurements, the reference repeat content in WIN bp,
+// the tandem-repeat bed, and the alignment; its error probability is a logistic with weights W0 and PASS is the PCUT
 // cut; duplicates within DUPT bp keep the likelier record. The verdict (bench/verdict.py) reads the F= features.
 static const uint32_t MS = 50, MQ = 10, MM = 3, TOL = 50, NEAR = 500, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500, KM = 15, DSAME = 20, SAME = 20, NA = 3, CL = 3;
 static const float PCUT = 0.5f, ROT = 0.8f, UNQ = 1.25f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -35,7 +35,7 @@ struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; 
 
 struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; uint32_t o; char st; };
 
-// AA3's evidence row of a site: interval, site index, tumor sample, tumor length clusters and the piece's cluster size,
+// the evidence row of a site: interval, site index, tumor sample, tumor length clusters and the piece's cluster size,
 // spanning tumor/normal reads, normal reads at the tumor length, shadow (none here), tumor-only and branch nodes and
 // bases between the anchors, the normal's median/min/max length difference, the same counts over consistent reads,
 // the combination counts n and the depths d per sample
@@ -399,7 +399,7 @@ struct by_place {
     }
 };
 
-// AA3's evidence row of a site, from the pass
+// the evidence row of a site, from the pass
 static arow row(const spot& e, uint32_t u) {
     const uint32_t *mn = e.m.data(), *mt = e.m.data() + e.s * NM;
     std::vector<int32_t> dn = e.dl[0];

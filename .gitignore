@@ -70,3 +70,7 @@ paper/measure/out/
 /bench/out/
 /bench/runs/
 /ref/
+
+# figure scripts cache the tables they computed from the runs; the scripts rebuild them
+paper/figures/snape/*/cache/
+paper/figures/snape/*/__pycache__/

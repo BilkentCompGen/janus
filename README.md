@@ -101,7 +101,7 @@ side and keeps the cores whose forward start lies in the window.
 **place** looks up every core of a piece in the core index. Hits with exactly one reference match are grouped by
 chromosome, strand and diagonal (neighbouring diagonals at most `TOL` apart); a group of at least `MINC` hits places the
 piece and gives a reference window from its first to last hit, widened by the piece length plus `MAR` on each side.
-Overlapping windows on a chromosome merge.
+Overlapping windows on a chromosome merge. A piece that no group places gets no alignment and gives no record.
 
 **lift** moves every local alignment back to chromosome coordinates (`aln.paf`). There is no whole-genome alignment:
 a piece's unaligned sides, including the partner side of a junction that lies in repeated sequence and therefore
@@ -114,20 +114,25 @@ complex junction. clip writes the stretches as `ev.gaps.fa` (named `piece|start|
 theirs, back in piece coordinates, as `ev.paf`.
 
 **call** (src/call.cpp) reads the sites, the pieces and their alignments, the graph and the packed reads, makes its own
-pass over every read of both samples, and writes `calls.vcf` with AA3's 36 evidence features per record (`F=`) for the
+pass over every read of both samples, and writes `calls.vcf` with 36 evidence features per record (`F=`) for the
 verdict. The pass fetches each site's tumor read, measures the distance between the site's innermost anchors on it and
 counts the read's nodes between them (tumor-only, branch); then every read is streamed once, and each read carrying a
 left and a right anchor of a site gives its distance, so every site gets per-sample spanning reads, their length
-differences from the tumor allele (`D0`, `D1`), reads within `DSAME` of it, and the same over consistent reads (their
-other anchors at the tumor read's spacing). Records come from the alignments: gaps of `MS` bases or more inside an
-alignment, and the jumps between consecutive alignments (DEL, INS, DUP, INV, BND), attached to the site with most tumor
-reads within `ROW` bases in the piece, merged within `TOL` bases; insertions of `NEAR` bases or more copying the adjacent
-reference become tandem duplications. Each record's features are AA3's: tumor reads and their share of the depth, pieces,
-tumor length clusters, spanning normal reads and those at the tumor length, the normal's length-difference spread,
-tumor-only and branch node density, mapping quality and divergence, reference repeat content in `WIN` bases, the TRF
-tandem-repeat bed, type and length. `ERR` is AA3's logistic error probability with weights `W0`; FILTER is PASS below
-the `PCUT` cut, DUPL for the less likely of two records within `DUPT` bases. `bench/verdict.py` (boosted trees, held out
-per pair) makes the reported PASS from `F=`.
+differences from the tumor allele (`D0`, `D1`), reads within `DSAME` of it (`SAME=`), and the same over consistent
+reads: reads that carry both other anchors on each side at the tumor read's spacing within `DSAME`, so a site with
+fewer than `NA` anchors on a side has none. For the features, the normal reads at the tumor length are those within
+`max(SAME, |median D0| / 2)` of it. Records come from the alignments: gaps of `MS` bases or more inside an
+alignment (two of a kind less than `ISL` apart are one), and the jumps between consecutive alignments of at least
+`MQ` mapping quality (DEL, INS, DUP, INV, BND), attached to the site with most tumor reads within `ROW` bases in the
+piece, merged within `TOL` bases; insertions of `NEAR` bases or more whose `KM`-mers the adjacent reference shares
+(upstream plus downstream share between `ROT` and `UNQ`) become tandem duplications, after the type features are set.
+Each record's features: tumor reads and their share of the depth, pieces, tumor length clusters, spanning normal reads
+and those at the tumor length, the normal's length-difference spread, tumor-only and branch node density, mapping
+quality and divergence, reference repeat content in `WIN` bases, the TRF tandem-repeat bed, type and length, the
+record-to-site length misfit and the consistent-read counts (feature 11 is always 0). `ERR` is a logistic error
+probability with hand-set weights `W0`; FILTER is PASS below the `PCUT` cut, DUPL for the less likely of two records
+within `DUPT` bases. `bench/verdict.py` (boosted trees, a learned component, held out per pair) makes the reported
+PASS from `F=`.
 
 ## Constants
 
@@ -154,7 +159,14 @@ per pair) makes the reported PASS from `F=`.
 | MAR | 2000 | place.cpp | context around a refidx window; margin around a placement |
 | TOL | 500 | place.cpp | largest diagonal step inside one placement |
 | MINC | 3 | place.cpp | unique core hits a placement needs |
-| EXPL | 100 | lift.cpp | uncovered bases that send a piece to genome-wide alignment |
+| MING, MAXG | 50, 20000 | gaps.cpp | shortest and longest unaligned stretch that is aligned on its own |
+| MS, MQ | 50, 10 | call.cpp | smallest event; least mapping quality of an alignment that gives records |
+| ISL, ROW, TOL | 100, 200, 50 | call.cpp | gaps joined into one event; event-to-site distance in the piece; ends merged into one record |
+| NEAR, KM, ROT, UNQ | 500, 15, 0.8, 1.25 | call.cpp | tandem test: least insertion length, k-mer size, bounds on the shared k-mer share |
+| DSAME, SAME | 20, 20 | call.cpp | length difference that counts as the tumor length (pass; features, or half the normal's median if larger) |
+| NA, CL | 3, 3 | call.cpp | anchors per side a consistent read needs; most tumor length clusters counted |
+| WIN | 150 | call.cpp | reference bases around a breakpoint for the repeat content |
+| PCUT, DUPT | 0.5, 500 | call.cpp | cut on the logistic error probability; distance within which the less likely record is a duplicate |
 | IBUF | 64 MiB | io.cpp | stream buffer (doubled while one record does not fit) |
 | NONE | 2^32 - 1 | io.h | no node, edge or slot |
 | PF | 16 | io.h | prefetch distance |
