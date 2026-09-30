@@ -57,29 +57,23 @@ static std::vector<uint32_t> nums(const char* s) {
     return v;
 }
 
-static uint32_t median(std::vector<uint32_t> v) {
-    if (v.empty()) return 0;
-    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-    return v[v.size() / 2];
-}
-
-// anchors "node:pos,node:pos,..." nearest first; depth of a sample at the site is the median count of its anchors per side
-static void anchors(spot* r, const char* ls, const char* rs, const std::vector<uint16_t>& c, uint64_t K) {
-    std::vector<uint32_t> side[2][2];
+// anchors "node:pos,node:pos,..." nearest first
+static void anchors(spot* r, const char* ls, const char* rs) {
     const char* p[2] = {ls, rs};
     for (int k = 0; k < 2; k++)
         for (const char* q = p[k]; *q && *q != '-' && *q != '\t' && *q != '\n';) {
-            uint64_t v = std::strtoull(q, (char**)&q, 10);
+            (k ? r->r : r->l).push_back(std::strtoull(q, (char**)&q, 10));
             std::strtoul(q + 1, (char**)&q, 10);
-            (k ? r->r : r->l).push_back(v);
-            side[k][0].push_back(c[v]);
-            side[k][1].push_back(c[r->s * K + v]);
             if (*q == ',') q++;
         }
-    uint32_t n0 = median(side[0][0]), n1 = median(side[1][0]), t0 = median(side[0][1]), t1 = median(side[1][1]);
-    bool h0 = !side[0][0].empty(), h1 = !side[1][0].empty();
-    r->nd = std::max(n0, n1);
-    r->td = h0 && h1 ? (t0 + t1) / 2 : h0 ? t0 : t1;
+}
+
+// depth of a sample at the site: its count at the node the combination enters from and at the node it leaves to (both are
+// on every allele's path); the larger of the two
+static void depths(spot* r, uint64_t key, const gph* g) {
+    uint64_t u = g->e[(key >> 32) - 1] >> 32, w = g->e[key & 0xffffffff] & 0xffffffff;
+    r->nd = std::max(g->c[u], g->c[w]);
+    r->td = std::max(g->c[r->s * g->K + u], g->c[r->s * g->K + w]);
 }
 
 static bool cmp_seg(const seg& x, const seg& y) { return x.qs < y.qs; }
@@ -323,24 +317,27 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
     std::unordered_map<std::string, std::vector<seg>> al;
     char line[1 << 16], nm[256], cn[4096], ls[4096], rs[4096], st, tn[256];
     uint32_t qs, qe, ts, te, mq, z, a, b, s;
+    unsigned long key;
     gph g;
     read_gph(gp, &g);
     uint64_t K = g.K, S = g.S;
     FILE* fi = std::fopen((pre + ".tsv").c_str(), "r");
     while (std::fgets(line, sizeof line, fi)) {
-        std::sscanf(line, "%255s %u %u %*u %4095s %*s %u %4095s %4095s", nm, &a, &b, cn, &s, ls, rs);
+        std::sscanf(line, "%255s %u %u %*u %4095s %lu %u %4095s %4095s", nm, &a, &b, cn, &key, &s, ls, rs);
         spot r = {a, b, s, 0, 0, 0, 0, nums(cn), {}, {}, std::vector<uint32_t>(S * NM, 0), std::vector<std::vector<int32_t>>(S), {}, "", 0};
         r.t = r.n[s];
         for (uint32_t i = 0; i < NA; i++) for (uint32_t j = 0; j < NA; j++) r.d[i][j] = UNSET;
         unsigned long rs_, ss_;
         std::sscanf(nm, "s%lu_%lu_", &ss_, &rs_);
         r.read = ss_ << 40 | rs_;
-        anchors(&r, ls, rs, g.c, K);
+        anchors(&r, ls, rs);
+        depths(&r, key, &g);
         bypc[nm].push_back(w.size());
         w.push_back(r);
     }
     std::fclose(fi);
     g.c = {};
+    g.e = {};
     // the read pass: which nodes are anchors of which sites, the tumor reads of the sites, then every read of every sample
     mctx x = {&w, {}, {}, std::vector<uint8_t>(K, 0), {}, {}, std::vector<std::vector<uint64_t>>(t), {}, {}, std::vector<scr>(t), nullptr, t};
     std::vector<std::pair<uint32_t, uint32_t>> an;
