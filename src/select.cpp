@@ -8,7 +8,7 @@
 #include "keys.h"
 
 static const uint32_t PAD = 1000; // least flank cut on each side of a site's anchors
-static const uint32_t FL = 3; // the flank is at least FL times the site's anchored span
+static const uint32_t FL = 3; // the flank is at least FL times the site's length (innermost anchor to innermost anchor)
 static const uint32_t NA = 3; // anchors kept on each side of a site
 static const uint32_t MULT = 2; // an anchor's count may be at most MULT times its sample's median node count
 static const double DL = 15000; // an anchor's weight falls linearly to zero at DL bases from the combination
