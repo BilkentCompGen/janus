@@ -1,6 +1,6 @@
 #pragma once
 
-int cmd_pack(const char* fastq, const char* out);
+int cmd_pack(const char* fastq, const char* out, int t);
 int cmd_extract(const char* reads, const char* out, int t);
 int cmd_count(const char* reads, const char* out, int t);
 int cmd_graph(const char* counts, const char* out);

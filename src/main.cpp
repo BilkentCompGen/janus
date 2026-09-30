@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "-t")) t = std::atoi(argv[i + 1]);
         else if (!std::strcmp(argv[i], "-g")) gp = argv[i + 1];
         else if (!std::strcmp(argv[i], "-v")) vb = argv[i + 1];
-    if (!std::strcmp(c, "pack")) return cmd_pack(in, out);
+    if (!std::strcmp(c, "pack")) return cmd_pack(in, out, t);
     if (!std::strcmp(c, "extract")) return cmd_extract(in, out, t);
     if (!std::strcmp(c, "count")) return cmd_count(in, out, t);
     if (!std::strcmp(c, "graph")) return cmd_graph(in, out);

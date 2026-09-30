@@ -17,8 +17,6 @@ SRR28305185 hcc1937_t
 SRR28305182 hcc1937_n
 SRR28305179 h1437_t
 SRR28305175 h1437_n
-SRR31537482 hs578_t
-SRR31537479 hs578_n
 "
 
 free() { df --output=avail -B1 "$OUT" | tail -1; }
