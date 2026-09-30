@@ -62,23 +62,31 @@ static std::vector<uint32_t> nums(const char* s) {
     return v;
 }
 
-// anchors "node:pos,node:pos,..." nearest first
-static void anchors(spot* r, const char* ls, const char* rs) {
+static uint32_t median(std::vector<uint32_t> v) {
+    if (v.empty()) return 0;
+    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+    return v[v.size() / 2];
+}
+
+// anchors "node:pos,node:pos,..." nearest first; the depth of a sample at the site is the median count of its anchors (unique
+// cores, so their counts are the local read depth) when it has any, else its count at the node the combination enters from
+// or leaves to (on every allele's path, but a high-copy repeat there counts every copy). The normal's depth test takes the
+// larger of the two.
+static void anchors(spot* r, const char* ls, const char* rs, uint64_t key, const gph* g) {
     const char* p[2] = {ls, rs};
+    std::vector<uint32_t> cn, ct;
     for (int k = 0; k < 2; k++)
         for (const char* q = p[k]; *q && *q != '-' && *q != '\t' && *q != '\n';) {
-            (k ? r->r : r->l).push_back(std::strtoull(q, (char**)&q, 10));
+            uint64_t v = std::strtoull(q, (char**)&q, 10);
+            (k ? r->r : r->l).push_back(v);
+            cn.push_back(g->c[v]);
+            ct.push_back(g->c[r->s * g->K + v]);
             std::strtoul(q + 1, (char**)&q, 10);
             if (*q == ',') q++;
         }
-}
-
-// depth of a sample at the site: its count at the node the combination enters from and at the node it leaves to (both are
-// on every allele's path); the larger of the two
-static void depths(spot* r, uint64_t key, const gph* g) {
     uint64_t u = g->e[(key >> 32) - 1] >> 32, w = g->e[key & 0xffffffff] & 0xffffffff;
-    r->nd = std::max(g->c[u], g->c[w]);
-    r->td = std::max(g->c[r->s * g->K + u], g->c[r->s * g->K + w]);
+    r->nd = std::max<uint32_t>(std::max(g->c[u], g->c[w]), median(cn));
+    r->td = ct.empty() ? std::max(g->c[r->s * g->K + u], g->c[r->s * g->K + w]) : median(ct);
 }
 
 static bool cmp_seg(const seg& x, const seg& y) { return x.qs < y.qs; }
@@ -369,8 +377,7 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
         unsigned long rs_, ss_;
         std::sscanf(nm, "s%lu_%lu_", &ss_, &rs_);
         r.read = ss_ << 40 | rs_;
-        anchors(&r, ls, rs);
-        depths(&r, key, &g);
+        anchors(&r, ls, rs, key, &g);
         bypc[nm].push_back(w.size());
         w.push_back(r);
     }
