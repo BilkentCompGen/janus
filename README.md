@@ -28,7 +28,7 @@ minimap2 -x sr -t 16 -d hg38_parmask.sr.mmi hg38_parmask.fa       # once per ref
 `pipeline.sh` runs the stages below into `<dir>` (reads are linked in as `n.svb`, `t.svb`), logs each one to
 `log.<step>` with its time and memory in `steps.txt`, and leaves `done.<step>` behind so a rerun continues where it
 stopped. The binary and the reference directory are the `B=` and `R=` paths at its top (`build/snape` and `ref/` of
-the main checkout); `ref/` holds `hg38_parmask.fa` with `.fai`, its minimap2 index `hg38_parmask.mmi` and the core
+the main checkout); `ref/` holds `hg38_parmask.fa` with `.fai`, its short-read minimap2 index `hg38_parmask.sr.mmi` and the core
 index `hg38_parmask.cidx`, and `minimap2` must be on the path. It ends with `ev.paf`; `snape call` then makes the
 VCF (see bench/ for the call and evaluation harness):
 
@@ -48,9 +48,7 @@ or reference FASTA, `-t` threads (at most 64), `-g` graph, `-v` VNTR bed.
 | select | `select -i graph.gph -d prune.sites -r n.svb,t.svb -o ev` | gph, sites, svb + idx | ev.fa, ev.tsv |
 | place | `place -i ev.fa -r hg38_parmask.cidx -d hg38_parmask.fa -o ev` | pieces, cidx, reference | ev.win.fa, ev.on.fa, ev.off.fa |
 | local | `minimap2 -cx map-hifi --secondary=no ev.win.fa ev.on.fa` | windows, placed pieces | local.paf |
-| lift | `lift -i local.paf -r ev.on.fa -d hg38_parmask.fa -o lift` | local.paf, placed pieces, .fai | lift.paf, lift.more.fa |
-| rest | `minimap2 -cx map-hifi --secondary=no hg38_parmask.mmi rest.fa` | rest.fa = ev.off.fa + lift.more.fa | rest.paf |
-| | `cat lift.paf rest.paf > ev.paf` | | ev.paf |
+| lift | `lift -i local.paf -d hg38_parmask.fa -o aln.paf` | local.paf, .fai | aln.paf |
 
 ## Stages
 
@@ -101,8 +99,9 @@ chromosome, strand and diagonal (neighbouring diagonals at most `TOL` apart); a 
 piece and gives a reference window from its first to last hit, widened by the piece length plus `MAR` on each side.
 Overlapping windows on a chromosome merge.
 
-**lift** moves the local alignments back to chromosome coordinates. A piece whose local alignments leave `EXPL` or more
-of its bases uncovered goes to genome-wide alignment instead (lift.more.fa).
+**lift** moves every local alignment back to chromosome coordinates (`aln.paf`). There is no whole-genome alignment:
+a piece's unaligned sides, including the partner side of a junction that lies in repeated sequence and therefore
+found no window, are the clip stage's job.
 
 **clip** and **patch** (src/gaps.cpp) align the pieces' unaligned stretches on their own. A stretch of `MING` to `MAXG`
 bases between two alignments or at a clipped end is too short to survive as a supplementary alignment of a 15 kb piece,
@@ -184,4 +183,4 @@ Text outputs:
 - `ev.win.fa`: reference windows named `<chromosome>:<start>` (0-based). `ev.on.fa`, `ev.off.fa`: pieces with and
   without a placement.
 - `lift.paf`: minimap2 PAF of the placed pieces with the target renamed to the chromosome, its length from the `.fai`
-  and its coordinates shifted by the window start. `lift.more.fa`: placed pieces sent on to genome-wide alignment.
+  and its coordinates shifted by the window start. `aln.paf`: the local alignments in chromosome coordinates.

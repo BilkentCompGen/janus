@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
     if (!std::strcmp(c, "select")) return cmd_select(in, dr, rd, out, t);
     if (!std::strcmp(c, "refidx")) return cmd_refidx(in, out, t);
     if (!std::strcmp(c, "place")) return cmd_place(in, rd, dr, out, t);
-    if (!std::strcmp(c, "lift")) return cmd_lift(in, rd, dr, out);
+    if (!std::strcmp(c, "lift")) return cmd_lift(in, dr, out);
     if (!std::strcmp(c, "clip")) return cmd_clip(in, rd, out);
     if (!std::strcmp(c, "patch")) return cmd_patch(in, rd, dr, out);
     if (!std::strcmp(c, "call")) return cmd_call(in, rd, dr, gp, out, vb, t);
