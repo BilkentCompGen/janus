@@ -49,6 +49,10 @@ or reference FASTA, `-t` threads (at most 64), `-g` graph, `-v` VNTR bed.
 | place | `place -i ev.fa -r hg38_parmask.cidx -d hg38_parmask.fa -o ev` | pieces, cidx, reference | ev.win.fa, ev.on.fa, ev.off.fa |
 | local | `minimap2 -cx map-hifi --secondary=no ev.win.fa ev.on.fa` | windows, placed pieces | local.paf |
 | lift | `lift -i local.paf -d hg38_parmask.fa -o aln.paf` | local.paf, .fai | aln.paf |
+| clip | `clip -i ev -r aln.paf -o ev.gaps.fa` | pieces, aln.paf | ev.gaps.fa |
+| gaps | `minimap2 -cx sr --secondary=no hg38_parmask.sr.mmi ev.gaps.fa` | stretches, short-read index | ev.gaps.raw.paf |
+| patch | `patch -i ev -r ev.gaps.raw.paf -d aln.paf -o ev.paf` | pieces, both alignment sets | ev.paf |
+| call | `call -i ev -r n.svb,t.svb -d hg38_parmask.fa -g graph.gph -o calls.vcf -v vntr.trf.bed` | ev.*, svb + idx + exc, gph, reference, TRF bed | calls.vcf |
 
 ## Stages
 
