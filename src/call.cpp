@@ -30,11 +30,11 @@
 // nanomonsv); the tumor has at least MM reads at that length and at least VAF of its depth (Severus, nanomonsv); the
 // nearest normal allele (a length cluster of at least 2 reads, CVAF of the normal's reads) is at least MS bp away, so the
 // somatic difference is SV-sized; one record per site (the largest event; a junction outranks the gaps next to it); a site
-// with no anchor pair to measure needs Sniffles2's coverage-scaled support SB + SM * depth of its graph count. Set 1 also
-// drops events in or within VB bp of a tandem repeat (the TRF bed, as Severus' --vntr-bed); set 2 keeps such an event when
-// the normal is clean there: at most NC length clusters, NS of its reads in the two largest, the site at most SL bp, VAF2
-// and MQ2; set 3 asks VAF2 and MQ2 of every event. Duplicates are judged as the benchmark does: within DUPT bp at both
-// ends, insertions by position; the record with more tumor reads stays.
+// with no anchor pair to measure needs Sniffles2's coverage-scaled support SB + SM * depth of its graph count. Set 1 stops
+// there. Set 2 keeps an event in or within VB bp of a tandem repeat (the TRF bed, as Severus' --vntr-bed) only when the
+// normal is clean there: at most NC length clusters, NS of its reads in the two largest, the site at most SL bp, VAF2 and
+// MQ2. Set 3 drops every tandem-repeat event. Duplicates are judged as the benchmark does: within DUPT bp at both ends,
+// insertions by position; the record with more tumor reads stays.
 static const uint32_t MS = 50, MQ = 20, MQ2 = 40, MM = 3, NCOV = 3, CN = 1, TOL = 50, ISL = 100, ROW = 200, DUPT = 500, NEAR = 500, KM = 15, DSAME = 20, ESAME = 20, NA = 3, VB = 50, NC = 2, SL = 2000;
 static const float VAF = 0.05f, VAF2 = 0.10f, CVAF = 0.03f, EFRAC = 0.02f, ROT = 0.8f, UNQ = 1.25f, SB = 1.5f, SM = 0.1f, NS = 0.9f;
 static const int32_t UNSET = INT32_MIN;
@@ -471,7 +471,7 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
             bool clean = mt[SPAN] && nclu <= NC && ns >= NS && v.r->b - v.r->a <= SL && vaf >= VAF2 && v.mq >= MQ2;
             v.why = v.r->nd <= NCOV ? "LOWNORMAL" : mn[SAME] > CN || mn[SAME] > CVAF * mn[SPAN] ? "GERMLINE" : nn != NONE && nn < MS ? "SMALL" : v.st < MM || vaf < VAF ? "LOWVAF"
                   : g_.size() > 1 && !top ? "COMPLEX" : !measured && v.st < std::lround(SB + SM * v.r->td) ? "LOWSUPPORT"
-                  : tr && (mode == 1 || (mode == 2 && !clean) || mode == 3) ? "VNTR" : mode == 3 && (vaf < VAF2 || v.mq < MQ2) ? "LOWVAF" : "PASS";
+                  : tr && ((mode == 2 && !clean) || mode == 3) ? "VNTR" : "PASS";
         }
         // records that describe one event within the benchmark tolerance: the better one stays
         std::sort(res.begin(), res.end(), cmp_pos);
