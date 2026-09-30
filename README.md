@@ -26,8 +26,9 @@ snape refidx -i hg38_parmask.fa -o hg38_parmask.cidx -t 32   # once per referenc
 
 `pipeline.sh` runs the stages below into `<dir>` (reads are linked in as `n.svb`, `t.svb`), logs each one to
 `log.<step>` with its time and memory in `steps.txt`, and leaves `done.<step>` behind so a rerun continues where it
-stopped. It expects `build/snape`, `minimap2` on the path and, in `ref/`: `hg38_parmask.fa` with `.fai`, its minimap2
-index `hg38_parmask.mmi` and the core index `hg38_parmask.cidx`. It ends with `ev.paf`; `snape call` then makes the
+stopped. The binary and the reference directory are the `B=` and `R=` paths at its top (`build/snape` and `ref/` of
+the main checkout); `ref/` holds `hg38_parmask.fa` with `.fai`, its minimap2 index `hg38_parmask.mmi` and the core
+index `hg38_parmask.cidx`, and `minimap2` must be on the path. It ends with `ev.paf`; `snape call` then makes the
 VCF (see bench/ for the call and evaluation harness):
 
 ```
