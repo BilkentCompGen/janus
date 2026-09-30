@@ -88,7 +88,7 @@ static bool cmp_sv(const sv& x, const sv& y) {
 }
 
 static bool cmp_pos(const sv& x, const sv& y) {
-    return x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 < y.e.p2;
+    return x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
 }
 
 static bool better(const sv& x, const sv& y) { return x.st != y.st ? x.st > y.st : x.mq != y.mq ? x.mq > y.mq : x.pc > y.pc; }
