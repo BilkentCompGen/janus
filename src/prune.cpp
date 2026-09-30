@@ -8,11 +8,10 @@
 
 static const uint32_t ML = 4; // longest tip removed, in nodes; bubble arms are traced up to ML + 1 nodes
 static const uint32_t MM = 3; // reads a tumor needs on a combination the normal lacks for it to be a site
-static const uint32_t ZF = 16; // combination table slots per candidate combination, rounded up to a power of two
 
-struct want { std::vector<uint32_t> p; uint64_t score; uint8_t lk; std::string s; };
+struct want { std::vector<uint32_t> p; bool v; uint64_t score; uint8_t lk; std::string s; };
 
-struct pctx { gph o; adj a; std::vector<uint64_t> m; uint64_t full; int t, back; std::vector<std::vector<uint32_t>> tp; std::vector<std::vector<want>> bw; std::vector<std::vector<uint8_t>> bf; std::vector<want> w; std::vector<uint8_t> jd; std::vector<uint32_t> fo, fi; keys k; std::vector<std::vector<hit>> h; };
+struct pctx { gph o; adj a; std::vector<uint64_t> m; uint64_t full; int t, back; std::vector<std::vector<uint32_t>> tp; std::vector<std::vector<want>> bw; std::vector<want> w; std::vector<uint8_t> jd; std::vector<uint32_t> fo, fi; keys k; std::vector<std::vector<hit>> h; };
 
 static void masks(pctx* x) {
     const gph* g = &x->o;
@@ -53,8 +52,8 @@ static bool variant(const pctx* x, const std::vector<uint32_t>& a, const std::ve
     return x->m[a[0]] != x->full;
 }
 
-static void add_arm(std::vector<want>& w, uint32_t s, const std::vector<uint32_t>& a, uint32_t m) {
-    want r = {{s}, 0, 0, ""};
+static void add_arm(std::vector<want>& w, uint32_t s, const std::vector<uint32_t>& a, uint32_t m, bool v) {
+    want r = {{s}, v, 0, 0, ""};
     r.p.insert(r.p.end(), a.begin(), a.end());
     r.p.push_back(m);
     w.push_back(r);
@@ -71,11 +70,10 @@ static void bubbles(void* p, int t) {
         for (uint32_t i = 0; i < n; i++)
             for (uint32_t j = i + 1; j < n; j++) {
                 if (m[i] == NONE || m[i] != m[j]) continue;
-                uint8_t f = variant(x, a[i], a[j]) | variant(x, a[j], a[i]) << 1;
-                if (!f) continue;
-                x->bf[t].push_back(f);
-                add_arm(x->bw[t], s, a[i], m[i]);
-                add_arm(x->bw[t], s, a[j], m[i]);
+                bool vi = variant(x, a[i], a[j]), vj = variant(x, a[j], a[i]);
+                if (!vi && !vj) continue;
+                add_arm(x->bw[t], s, a[i], m[i], vi);
+                add_arm(x->bw[t], s, a[j], m[i], vj);
             }
     }
 }
@@ -138,11 +136,11 @@ static void gather(const keys* x, const std::vector<uint8_t>& drop, std::vector<
     const gph* g = x->g;
     std::vector<std::array<uint64_t, 3>> w;
     for (uint64_t i = 0; i < x->Z; i++) {
-        if (!x->k[i] || !odd(x, i) || !kept(x, x->k[i])) continue;
-        uint64_t ei = (x->k[i] >> 32) - 1, eo = x->k[i] & 0xffffffff;
+        if (!x->key[i] || !odd(x, i) || !kept(x, x->key[i])) continue;
+        uint64_t ei = (x->key[i] >> 32) - 1, eo = x->key[i] & 0xffffffff;
         if (drop[g->e[ei] >> 32] || drop[g->e[ei] & 0xffffffff] || drop[g->e[eo] >> 32] || drop[g->e[eo] & 0xffffffff]) continue;
         for (uint64_t s = 1; s < x->S; s++)
-            if (x->n[i * x->S + s] >= MM) w.push_back({s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]), x->k[i], i});
+            if (x->n[i * x->S + s] >= MM) w.push_back({s << 40 | (0xffffffffu - (uint32_t)x->best[i * x->S + s]), x->key[i], i});
     }
     std::sort(w.begin(), w.end());
     for (const std::array<uint64_t, 3>& e : w) {
@@ -155,40 +153,33 @@ static void gather(const keys* x, const std::vector<uint8_t>& drop, std::vector<
 int cmd_prune(const char* in, const char* rd, const char* out, int t) {
     pctx x;
     std::vector<uint64_t> d, rows;
-    std::vector<uint8_t> vf, drop;
+    std::vector<uint8_t> drop;
     read_gph(in, &x.o);
     make_adj(&x.o, &x.a);
     masks(&x);
     x.t = t;
     x.tp.resize(t);
     x.bw.resize(t);
-    x.bf.resize(t);
     drop.assign(x.o.K, 0);
     for (x.back = 0; x.back < 2; x.back++) par(t, tips, &x);
     par(t, bubbles, &x);
     for (int i = 0; i < t; i++) {
         for (uint32_t v : x.tp[i]) drop[v] = 1;
         x.w.insert(x.w.end(), x.bw[i].begin(), x.bw[i].end());
-        vf.insert(vf.end(), x.bf[i].begin(), x.bf[i].end());
     }
     x.tp = {};
     x.bw = {};
     x.m = {};
     make_keys(&x.k, &x.o, &x.a);
-    uint64_t np = keep_keys(&x.k, seeds(&x.o, std::vector<uint8_t>(x.o.K, 0)));
-    for (x.k.Z = 1; x.k.Z < ZF * np; x.k.Z <<= 1);
-    x.k.k.assign(x.k.Z, 0);
-    x.k.n.assign(x.k.Z * x.k.S, 0);
-    x.k.best.assign(x.k.Z * x.k.S, 0);
+    make_table(&x.k, keep_keys(&x.k, seeds(&x.o, std::vector<uint8_t>(x.o.K, 0))));
     x.h.resize(t);
     index_arms(&x);
     rpass p;
     each_read(&p, x.o.g, rd, t, both, &x);
     x.jd.assign(x.w.size() / 2, 0);
     par(t, judge, &x);
-    for (uint32_t b = 0; b < x.w.size(); b += 2)
-        if (x.jd[b / 2])
-            for (uint32_t u = 0; u < 2; u++) if (vf[b / 2] >> u & 1) for (uint32_t j = 1; j + 1 < x.w[b + u].p.size(); j++) drop[x.w[b + u].p[j]] = 1;
+    for (uint32_t b = 0; b < x.w.size(); b++)
+        if (x.jd[b / 2] && x.w[b].v) for (uint32_t j = 1; j + 1 < x.w[b].p.size(); j++) drop[x.w[b].p[j]] = 1;
     for (uint64_t v = 0; v < x.o.K; v++) if (drop[v]) d.push_back(x.o.g[v]);
     std::sort(d.begin(), d.end());
     std::string o(out);

@@ -5,7 +5,7 @@
 #include "files.h"
 #include "io.h"
 
-static const uint32_t MM = 3; // reads of a later sample an edge needs to stay novel
+static const uint32_t MM = 3; // reads a tumor needs on an edge the normal lacks for the edge to be novel
 static const uint32_t WK = 16; // segment walks run side by side
 
 static void unite(std::vector<uint64_t>& a, const std::vector<uint64_t>& b, std::vector<uint64_t>& t) {

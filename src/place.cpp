@@ -14,7 +14,7 @@ static const uint32_t MINC = 3; // unique core hits a placement needs
 
 struct ent { uint64_t h; uint32_t pos, cs; };
 
-struct hitr { uint32_t cs, st; int64_t d; uint32_t q, pos; };
+struct hitr { uint32_t cs, st; int64_t d; uint32_t pos; };
 
 struct win { uint32_t ci, lo, hi; };
 
@@ -26,7 +26,7 @@ static bool by_hash(const ent& a, const ent& b) { return a.h < b.h; }
 
 static bool by_ent(const ent& a, const ent& b) { return a.h != b.h ? a.h < b.h : a.cs != b.cs ? a.cs < b.cs : a.pos < b.pos; }
 
-static bool by_hit(const hitr& a, const hitr& b) { return a.cs != b.cs ? a.cs < b.cs : a.st != b.st ? a.st < b.st : a.d != b.d ? a.d < b.d : a.q < b.q; }
+static bool by_hit(const hitr& a, const hitr& b) { return a.cs != b.cs ? a.cs < b.cs : a.st != b.st ? a.st < b.st : a.d < b.d; }
 
 static bool by_win(const win& a, const win& b) { return a.ci != b.ci ? a.ci < b.ci : a.lo < b.lo; }
 
@@ -93,7 +93,7 @@ static void place_job(void* a, int i) {
             auto r = std::equal_range(c->idx.begin(), c->idx.end(), ent{h[k], 0, 0}, by_hash);
             if (r.second - r.first != 1) continue;
             uint32_t st = (r.first->cs & 1) ^ (k >= c->s[i].r.nf), p = fwd(&c->s[i].r, k);
-            hs.push_back({r.first->cs >> 1, st, st ? (int64_t)r.first->pos + p : (int64_t)r.first->pos - p, p, r.first->pos});
+            hs.push_back({r.first->cs >> 1, st, st ? (int64_t)r.first->pos + p : (int64_t)r.first->pos - p, r.first->pos});
         }
         std::sort(hs.begin(), hs.end(), by_hit);
         for (size_t x = 0, y; x < hs.size(); x = y) {
