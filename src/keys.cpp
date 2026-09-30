@@ -1,7 +1,6 @@
 #include <algorithm>
+#include "io.h"
 #include "keys.h"
-
-static const uint32_t NONE = ~0u;
 
 void make_keys(keys* x, const gph* g, const adj* a) {
     x->S = g->S;

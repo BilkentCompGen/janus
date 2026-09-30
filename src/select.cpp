@@ -4,10 +4,14 @@
 #include <string>
 #include "cmd.h"
 #include "extract.h"
+#include "io.h"
 #include "keys.h"
 
-static const uint32_t PAD = 1000, NA = 3, MULT = 2;
-static const double DL = 15000;
+static const uint32_t PAD = 1000; // least flank cut on each side of a site's anchors
+static const uint32_t FL = 3; // the flank is at least FL times the site's anchored span
+static const uint32_t NA = 3; // anchors kept on each side of a site
+static const uint32_t MULT = 2; // an anchor's count may be at most MULT times its sample's median node count
+static const double DL = 15000; // an anchor's weight falls linearly to zero at DL bases from the combination
 
 struct anc { double sc; uint32_t v, a, b; };
 
@@ -17,9 +21,7 @@ struct piece { uint64_t read; uint32_t lo, hi, k; std::string s; };
 
 struct sctx { keys* x; rpass* p; std::vector<site> w; std::vector<piece> pc; std::vector<uint64_t> rd; std::vector<uint32_t> ro, med, gs; const uint16_t* cn; uint64_t K, lo, hi; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; std::vector<scr> sc; std::vector<int> fs, fx; int t; };
 
-static bool by_score(const anc& p, const anc& q) { return p.sc > q.sc; }
-
-static bool by_near(const anc& p, const anc& q) { return p.sc < q.sc; }
+static bool by_cost(const anc& p, const anc& q) { return p.sc < q.sc; }
 
 static void load(sctx* c, const char* path) {
     bin_header h;
@@ -40,9 +42,19 @@ static void load(sctx* c, const char* path) {
     c->ro.push_back(c->w.size());
 }
 
-static bool full(const gph* g, uint64_t v) {
-    for (uint64_t s = 0; s < g->S; s++) if (!g->c[s * g->K + v]) return false;
-    return true;
+static void medians(sctx* c, const gph* g) {
+    std::vector<uint32_t> fv, smp;
+    for (uint64_t v = 0; v < g->K; v++) {
+        bool full = true;
+        for (uint64_t s = 0; s < g->S; s++) full &= g->c[s * g->K + v] > 0;
+        if (full) fv.push_back(v);
+    }
+    for (uint64_t s = 0; s < g->S; s++) {
+        smp.clear();
+        for (uint32_t v : fv) smp.push_back(g->c[s * g->K + v]);
+        std::nth_element(smp.begin(), smp.begin() + smp.size() / 2, smp.end());
+        c->med.push_back(smp[smp.size() / 2]);
+    }
 }
 
 static double fit(const sctx* c, const std::vector<uint32_t>& ids, uint32_t v, uint64_t s) {
@@ -58,14 +70,14 @@ static void side(const sctx* c, const rth* t, const std::vector<uint32_t>& ids, 
     for (int64_t j = from; j != end; j += step) {
         uint32_t p = d->a[t->ix[j]];
         double w = std::max(0.0, 1 - (p > at ? p - at : at - p) / DL), f;
-        if (w <= 0 || (o.size() == NA && w <= o.back().sc)) break;
+        if (w <= 0 || (o.size() == NA && w <= -o.back().sc)) break;
         if ((f = fit(c, ids, t->id[j], s)) == 0) continue;
-        o.push_back({f * w, t->id[j], p, d->b[t->ix[j]]});
-        std::sort(o.begin(), o.end(), by_score);
+        o.push_back({-(f * w), t->id[j], p, d->b[t->ix[j]]});
+        std::sort(o.begin(), o.end(), by_cost);
         if (o.size() > NA) o.pop_back();
     }
     for (anc& x : o) x.sc = x.a > at ? x.a - at : at - x.a;
-    std::sort(o.begin(), o.end(), by_near);
+    std::sort(o.begin(), o.end(), by_cost);
 }
 
 static void flip(uint32_t len, uint32_t rc, uint32_t* a, uint32_t* b) {
@@ -95,7 +107,7 @@ static void anchor(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, ui
             side(c, t, ids, p->f, q.b, 1, m, e->r);
             e->a = e->l.empty() ? d->a[t->ix[q.a]] : e->l[0].a;
             e->b = e->r.empty() ? d->b[t->ix[q.b]] : e->r[0].b;
-            uint32_t pd = std::max(PAD, 3 * (e->b - e->a)), lo = e->l.empty() ? e->a : e->l.back().a, hi = e->r.empty() ? e->b : e->r.back().b;
+            uint32_t pd = std::max(PAD, FL * (e->b - e->a)), lo = e->l.empty() ? e->a : e->l.back().a, hi = e->r.empty() ? e->b : e->r.back().b;
             e->lo = lo > pd ? lo - pd : 0;
             e->hi = std::min(d->len, hi + pd);
             flip(d->len, rc, &e->lo, &e->hi);
@@ -128,7 +140,7 @@ static void fetch(const sctx* c, uint64_t rd, std::vector<uint8_t>& rec) {
     uint32_t tag, s = rd >> 40;
     pread(c->fx[s], &off, 8, sizeof(bin_header) + 8 * (rd & 0xffffffffff));
     pread(c->fs[s], &tag, 4, off);
-    rec.assign(4 + (tag >> 31 ? tag & 0x7fffffff : ((tag & 0x7fffffff) + 3) / 4) + 8, 0);
+    rec.assign(svb_bytes(tag) + 8, 0);
     pread(c->fs[s], rec.data(), rec.size() - 8, off);
 }
 
@@ -176,14 +188,7 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     c.cn = g.c.data();
     c.K = g.K;
     c.t = t;
-    std::vector<uint32_t> fv, smp;
-    for (uint64_t v = 0; v < g.K; v++) if (full(&g, v)) fv.push_back(v);
-    for (uint64_t s = 0; s < g.S; s++) {
-        smp.clear();
-        for (uint32_t v : fv) smp.push_back(g.c[s * g.K + v]);
-        std::nth_element(smp.begin(), smp.begin() + smp.size() / 2, smp.end());
-        c.med.push_back(smp[smp.size() / 2]);
-    }
+    medians(&c, &g);
     make_keys(&x, &g, &a);
     keep_keys(&x, std::vector<uint8_t>(g.K, 1));
     c.x = &x;

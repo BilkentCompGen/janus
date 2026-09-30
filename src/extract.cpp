@@ -2,10 +2,11 @@
 #include <cstdlib>
 #include "cmd.h"
 #include "extract.h"
+#include "io.h"
 
-static const char SYM[5] = "ACGT";
+static const int W = LEV + 4; // bits of a core's start delta and length in .exc; all ones escapes to two 32-bit fields
 
-struct ectx { scr* s; int lev, w; };
+struct ectx { std::vector<scr> s; std::vector<uint64_t> nc; };
 
 static void sgrow(scr* s, rdcore* r, uint32_t k) {
     if (r->a.size() < 2 * k + 2) { r->a.resize(4 * k + 4); r->b.resize(4 * k + 4); }
@@ -20,7 +21,7 @@ static void sgrow(scr* s, rdcore* r, uint32_t k) {
 }
 
 static void ascii(const uint64_t* w, uint32_t off, uint32_t k, char* out) {
-    for (uint32_t i = off; i < off + k; i++) out[i - off] = SYM[w[i >> 5] >> (62 - 2 * (i & 31)) & 3];
+    for (uint32_t i = off; i < off + k; i++) out[i - off] = "ACGT"[w[i >> 5] >> (62 - 2 * (i & 31)) & 3];
 }
 
 static uint32_t parse(scr* s, rdcore* r, uint32_t k, int lev, uint32_t at) {
@@ -54,36 +55,37 @@ static void ex_work(block* bl) {
     ectx* c = (ectx*)bl->ctx;
     scr* s = &c->s[bl->id];
     const rdcore* r = &s->r;
-    uint32_t m = (1u << c->w) - 1;
-    s->bw.out = &bl->out;
+    bits bw = {&bl->out, 0, 0};
+    uint32_t m = (1u << W) - 1;
     for (size_t off = 0; off < bl->inlen[0]; off += svb_size(bl->in[0] + off, bl->inlen[0] - off)) {
-        cores(s, &s->r, (const uint8_t*)bl->in[0] + off, c->lev);
+        cores(s, &s->r, (const uint8_t*)bl->in[0] + off, LEV);
         size_t t0 = bl->out.size();
         bl->out.resize(t0 + 6);
         for (uint32_t i = 0, prev = 0; i < r->n; prev = r->a[i++]) {
             if (i == r->nf) prev = 0;
             uint32_t d = r->a[i] - prev, len = r->b[i] - r->a[i];
             bool e = d >= m || len > m;
-            if (e) wbits(&s->bw, m, c->w);
-            wbits(&s->bw, d, e ? 32 : c->w);
-            wbits(&s->bw, len, e ? 32 : c->w);
+            if (e) wbits(&bw, m, W);
+            wbits(&bw, d, e ? 32 : W);
+            wbits(&bw, len, e ? 32 : W);
         }
-        wflush(&s->bw);
+        wflush(&bw);
         uint8_t* u = (uint8_t*)bl->out.data() + t0;
         size_t ub = bl->out.size() - t0;
         u[0] = r->n >> 8; u[1] = r->n; u[2] = r->nf >> 8; u[3] = r->nf; u[4] = ub >> 8; u[5] = ub;
-        s->nc += r->n;
+        c->nc[bl->id] += r->n;
     }
 }
 
 int cmd_extract(const char* in, const char* out, int t) {
     LCP_INIT();
     bin_header h;
-    std::vector<scr> s(t);
-    ectx c = {s.data(), LEV, LEV + 4};
+    ectx c = {std::vector<scr>(t), std::vector<uint64_t>(t, 0)};
     FILE* fo = open_tmp(out);
-    bin_header o = {{'S', 'V', 'B', 'X'}, 3, stream_run(open_in(in, &h), nullptr, fo, t, svb_size, nullptr, ex_work, &c), 0, {(uint8_t)LEV, (uint8_t)(LEV + 4)}};
-    for (scr& x : s) { o.total += x.nc; std::free(x.mem); }
+    bin_header o = header('X', 3, stream_run(open_in(in, &h), nullptr, fo, t, ex_work, &c), 0);
+    o.resv[0] = LEV;
+    o.resv[1] = W;
+    for (int i = 0; i < t; i++) { o.total += c.nc[i]; std::free(c.s[i].mem); }
     finish(fo, out, &o);
     return 0;
 }

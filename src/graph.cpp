@@ -1,11 +1,12 @@
 #include <algorithm>
 #include <string>
 #include <vector>
-#include "files.h"
 #include "cmd.h"
+#include "files.h"
 #include "io.h"
 
-static const uint32_t MM = 3, NONE = ~0u, PF = 16, WK = 16;
+static const uint32_t MM = 3; // reads of a later sample an edge needs to stay novel
+static const uint32_t WK = 16; // segment walks run side by side
 
 static void unite(std::vector<uint64_t>& a, const std::vector<uint64_t>& b, std::vector<uint64_t>& t) {
     t.resize(a.size() + b.size());
@@ -13,7 +14,7 @@ static void unite(std::vector<uint64_t>& a, const std::vector<uint64_t>& b, std:
     a.swap(t);
 }
 
-static void place(const std::vector<uint64_t>& g, cnt* s, uint16_t* c) {
+static void to_union(const std::vector<uint64_t>& g, cnt* s, uint16_t* c) {
     std::vector<uint32_t> id(s->hs.size());
     for (uint64_t j = 0, k = 0; j < s->hs.size(); j++) {
         while (g[k] < s->hs[j]) k++;
@@ -23,10 +24,6 @@ static void place(const std::vector<uint64_t>& g, cnt* s, uint16_t* c) {
     for (uint64_t& v : s->e) v = (uint64_t)id[v >> 32] << 32 | id[v & 0xffffffff];
 }
 
-// Segments are the maximal non-branching paths. An edge u -> v joins them when u has one successor and v one
-// predecessor; a segment starts at a node without a joining in-edge (a later pass takes the pure cycles). WK walks
-// run side by side so their cache misses overlap; a segment gets consecutive new ids when its walk ends. The other
-// passes scan the hash-sorted edges in order and prefetch the one random access each step makes.
 static void segments(const gph* o, std::vector<uint32_t>& id, std::vector<uint32_t>& ord, std::vector<uint32_t>& st) {
     const uint64_t K = o->K, E = o->E, M = 0xffffffff;
     const std::vector<uint64_t>& e = o->e;
@@ -70,7 +67,6 @@ static void segments(const gph* o, std::vector<uint32_t>& id, std::vector<uint32
     st.push_back(K);
 }
 
-// Renumber nodes and edges to the segment order; edges stay sorted by (source, target) in the new ids.
 static void renumber(gph* o, const std::vector<uint32_t>& id, const std::vector<uint32_t>& ord) {
     const uint64_t K = o->K, E = o->E, M = 0xffffffff;
     std::vector<uint64_t> g(K), e(E);
@@ -118,7 +114,7 @@ int cmd_graph(const char* in, const char* out) {
     o.c.resize(o.S * o.K);
     for (uint64_t i = 0; i < o.S; i++) {
         read_cnt(ps[i].c_str(), &s);
-        place(o.g, &s, o.c.data() + i * o.K);
+        to_union(o.g, &s, o.c.data() + i * o.K);
         unite(o.e, s.e, t);
     }
     t = {};
@@ -127,7 +123,7 @@ int cmd_graph(const char* in, const char* out) {
     o.nv.assign(o.E, 1);
     for (uint64_t i = 0; i < o.S; i++) {
         read_cnt(ps[i].c_str(), &s);
-        place(o.g, &s, o.c.data() + i * o.K);
+        to_union(o.g, &s, o.c.data() + i * o.K);
         for (uint64_t j = 0, k = 0; j < s.e.size(); j++) {
             while (o.e[k] < s.e[j]) k++;
             if (!i) o.nv[k] = !s.ec[j];

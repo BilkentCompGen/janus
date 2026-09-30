@@ -1,22 +1,26 @@
 #include <algorithm>
 #include <cstring>
-#include <map>
 #include <string>
 #include <vector>
-#include "extract.h"
 #include "cmd.h"
+#include "extract.h"
+#include "files.h"
+#include "io.h"
 
-static const uint32_t WIN = 40000, MAR = 2000, TOL = 500, MINC = 3, EXPL = 100;
+static const uint32_t WIN = 40000; // reference bases per refidx job
+static const uint32_t MAR = 2000; // bases parsed past a refidx window on each side, and added around a placed piece
+static const uint32_t TOL = 500; // largest diagonal step between neighbouring core hits of one placement
+static const uint32_t MINC = 3; // unique core hits a placement needs
 
 struct ent { uint64_t h; uint32_t pos, cs; };
-
-struct seqs { std::vector<std::string> name, seq; };
 
 struct hitr { uint32_t cs, st; int64_t d; uint32_t q, pos; };
 
 struct win { uint32_t ci, lo, hi; };
 
-struct rctx { const seqs* f; std::vector<win> job; std::vector<std::vector<ent>> out; std::vector<scr> s; std::vector<ent> idx; std::vector<uint8_t> on; std::vector<std::vector<win>> w; int t; };
+struct rctx { const seqs* f; std::vector<win> job; std::vector<std::vector<ent>> out; std::vector<scr> s; int t; };
+
+struct wctx { const seqs* f; std::vector<scr> s; std::vector<ent> idx; std::vector<uint8_t> on; std::vector<std::vector<win>> w; int t; };
 
 static bool by_hash(const ent& a, const ent& b) { return a.h < b.h; }
 
@@ -25,19 +29,6 @@ static bool by_ent(const ent& a, const ent& b) { return a.h != b.h ? a.h < b.h :
 static bool by_hit(const hitr& a, const hitr& b) { return a.cs != b.cs ? a.cs < b.cs : a.st != b.st ? a.st < b.st : a.d != b.d ? a.d < b.d : a.q < b.q; }
 
 static bool by_win(const win& a, const win& b) { return a.ci != b.ci ? a.ci < b.ci : a.lo < b.lo; }
-
-static void fasta(const char* path, seqs* f) {
-    FILE* in = std::fopen(path, "r");
-    char* ln = nullptr;
-    size_t cap = 0;
-    for (ssize_t n; (n = getline(&ln, &cap, in)) > 0;) {
-        while (n && (ln[n - 1] == '\n' || ln[n - 1] == '\r')) n--;
-        if (ln[0] == '>') { f->name.push_back(std::string(ln + 1, std::strcspn(ln + 1, " \t\n"))); f->seq.push_back(""); }
-        else for (ssize_t i = 0; i < n; i++) f->seq.back() += ln[i] & 0xdf;
-    }
-    std::free(ln);
-    std::fclose(in);
-}
 
 static void hashes(scr* s, const std::string& q, uint32_t lo, uint32_t hi, std::vector<uint64_t>& h) {
     std::vector<uint8_t> rec(4 + hi - lo + 8, 0);
@@ -72,8 +63,8 @@ static void ref_job(void* a, int i) {
 int cmd_refidx(const char* in, const char* out, int t) {
     LCP_INIT();
     seqs f;
-    fasta(in, &f);
-    rctx c = {&f, {}, std::vector<std::vector<ent>>(t), std::vector<scr>(t), {}, {}, {}, t};
+    read_fasta(in, &f);
+    rctx c = {&f, {}, std::vector<std::vector<ent>>(t), std::vector<scr>(t), t};
     for (uint32_t ci = 0; ci < f.seq.size(); ci++)
         for (uint32_t a = 0, b; a < f.seq[ci].size(); a = b) {
             while (a < f.seq[ci].size() && f.seq[ci][a] == 'N') a++;
@@ -84,17 +75,14 @@ int cmd_refidx(const char* in, const char* out, int t) {
     std::vector<ent> all;
     for (auto& v : c.out) all.insert(all.end(), v.begin(), v.end());
     std::sort(all.begin(), all.end(), by_ent);
-    FILE* fo = open_tmp(out);
-    std::fseek(fo, sizeof(bin_header), SEEK_SET);
-    std::fwrite(all.data(), sizeof(ent), all.size(), fo);
-    bin_header o = {{'S', 'V', 'B', 'R'}, 1, all.size(), f.seq.size(), {}};
-    finish(fo, out, &o);
+    bin_header o = header('R', 1, all.size(), f.seq.size());
+    save(out, &o, all.data(), all.size() * sizeof(ent));
     std::fprintf(stderr, "[refidx] %zu cores on %zu sequences\n", all.size(), f.seq.size());
     return 0;
 }
 
 static void place_job(void* a, int i) {
-    rctx* c = (rctx*)a;
+    wctx* c = (wctx*)a;
     std::vector<uint64_t> h;
     std::vector<hitr> hs;
     for (size_t j = i; j < c->f->seq.size(); j += c->t) {
@@ -127,17 +115,17 @@ static void write_fa(const char* path, const seqs& f, const std::vector<uint8_t>
 int cmd_place(const char* in, const char* idx, const char* ref, const char* out, int t) {
     LCP_INIT();
     seqs f, g;
-    fasta(in, &f);
+    read_fasta(in, &f);
     bin_header h;
     FILE* fi = open_in(idx, &h);
-    rctx c = {&f, {}, {}, std::vector<scr>(t), std::vector<ent>(h.nreads), std::vector<uint8_t>(f.seq.size(), 0), std::vector<std::vector<win>>(t), t};
+    wctx c = {&f, std::vector<scr>(t), std::vector<ent>(h.nreads), std::vector<uint8_t>(f.seq.size(), 0), std::vector<std::vector<win>>(t), t};
     std::fread(c.idx.data(), sizeof(ent), h.nreads, fi);
     std::fclose(fi);
     par(t, place_job, &c);
     std::vector<win> w;
     for (auto& v : c.w) w.insert(w.end(), v.begin(), v.end());
     std::sort(w.begin(), w.end(), by_win);
-    fasta(ref, &g);
+    read_fasta(ref, &g);
     std::string o(out);
     FILE* fo = std::fopen((o + ".win.fa").c_str(), "w");
     for (size_t x = 0, y; x < w.size(); x = y) {
@@ -152,49 +140,5 @@ int cmd_place(const char* in, const char* idx, const char* ref, const char* out,
     uint64_t n = 0;
     for (uint8_t v : c.on) n += v;
     std::fprintf(stderr, "[place] %zu pieces, %lu placed by cores\n", f.seq.size(), n);
-    return 0;
-}
-
-int cmd_lift(const char* paf, const char* on, const char* ref, const char* out) {
-    std::map<std::string, uint64_t> len;
-    char nm[256];
-    unsigned long l, z;
-    FILE* fi = std::fopen((std::string(ref) + ".fai").c_str(), "r");
-    while (std::fscanf(fi, "%255s %lu %lu %lu %lu", nm, &l, &z, &z, &z) == 5) len[nm] = l;
-    std::fclose(fi);
-    std::map<std::string, std::vector<std::string>> rows;
-    std::map<std::string, std::vector<std::pair<uint32_t, uint32_t>>> cov;
-    std::map<std::string, uint32_t> ql;
-    fi = std::fopen(paf, "r");
-    char* ln = nullptr;
-    size_t cap = 0;
-    for (ssize_t n; (n = getline(&ln, &cap, fi)) > 0;) {
-        char q[256], s[4], tn[512];
-        unsigned qn, qs, qe, tl, ts, te;
-        int k;
-        std::sscanf(ln, "%255s %u %u %u %3s %511s %u %u %u%n", q, &qn, &qs, &qe, s, tn, &tl, &ts, &te, &k);
-        char* c = std::strrchr(tn, ':');
-        *c = 0;
-        uint32_t lo = std::strtoul(c + 1, nullptr, 10);
-        rows[q].push_back(std::string(q) + "\t" + std::to_string(qn) + "\t" + std::to_string(qs) + "\t" + std::to_string(qe) + "\t" + s + "\t" + tn + "\t" + std::to_string(len[tn]) + "\t" + std::to_string(ts + lo) + "\t" + std::to_string(te + lo) + (ln + k));
-        cov[q].push_back({qs, qe});
-        ql[q] = qn;
-    }
-    std::free(ln);
-    std::fclose(fi);
-    seqs f;
-    fasta(on, &f);
-    std::string o(out);
-    FILE *fp = std::fopen((o + ".paf").c_str(), "w"), *fm = std::fopen((o + ".more.fa").c_str(), "w");
-    for (size_t j = 0; j < f.name.size(); j++) {
-        std::vector<std::pair<uint32_t, uint32_t>>& v = cov[f.name[j]];
-        std::sort(v.begin(), v.end());
-        uint32_t got = 0, end = 0;
-        for (auto& x : v) { if (x.second > end) got += x.second - std::max(x.first, end); end = std::max(end, x.second); }
-        if (f.seq[j].size() - got >= EXPL) std::fprintf(fm, ">%s\n%s\n", f.name[j].c_str(), f.seq[j].c_str());
-        else for (std::string& r : rows[f.name[j]]) std::fputs(r.c_str(), fp);
-    }
-    std::fclose(fp);
-    std::fclose(fm);
     return 0;
 }
