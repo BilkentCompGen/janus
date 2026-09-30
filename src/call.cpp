@@ -15,46 +15,45 @@
 #include "io.h"
 #include "reads.h"
 
-// Every site from select is somatic by construction (its combination has no normal read and at least 3 tumor reads). call
-// validates that on the reads themselves: it fetches each site's tumor read, measures the distance between the site's
-// innermost anchors on it and keeps the sequence between them, then streams every read of every sample once and, for each
-// read that carries a left and a right anchor of a site in the same orientation, measures the same distance. A read whose
-// distance differs from the tumor read's by less than DSAME bp carries the same-length allele; by MS bp or more a different
-// one. Reads within MS bp are also compared by sequence (bounded edit distance ESAME plus EFRAC of the length). Per site and
-// sample this gives spanning, same-length, near, different and same-sequence read counts, symmetric for normal and tumor.
-// The records come from the pieces' alignments (gaps of MS bp or more inside an alignment; jumps between consecutive
-// alignments give DEL/INS/DUP/INV/BND), attached to a site whose interval is within ROW bp in the read, merged within TOL bp;
-// insertions of NEAR bp or more copying the adjacent reference (KM-mer share between ROT and UNQ) are tandem duplications.
-// Rules shared by the three sets (thresholds of the published long-read somatic callers): the normal has more than NCOV
-// reads at the site and at most CN reads at the tumor allele's length, at most CVAF of its spanning reads (Severus,
-// nanomonsv); the tumor has at least MM reads at that length and at least VAF of its depth (Severus, nanomonsv); the
-// nearest normal allele (a length cluster of at least 2 reads, CVAF of the normal's reads) is at least MS bp away, so the
-// somatic difference is SV-sized; a site with no anchor pair to measure needs Sniffles2's coverage-scaled support
-// SB + SM * depth of its graph count. Set 1 stops there. Sets 2 and 3 keep at most two records per site (the largest
-// events; a junction outranks the gaps next to it). Set 2 keeps an event in or within VB bp of a tandem repeat (the TRF
-// bed, as Severus' --vntr-bed) only when the normal is clean there: NC length cluster, NS of its reads in the two
-// largest, the site at most SL bp, VAF2 and MQ2. Set 3 drops every tandem-repeat event. Duplicates are judged as the
-// benchmark does: within DUPT bp at both ends, insertions by position; the record with more tumor reads stays.
-static const uint32_t MS = 50, MQ = 20, MQ2 = 40, MM = 3, NCOV = 3, CN = 1, TOL = 50, ISL = 100, ROW = 200, DUPT = 500, NEAR = 500, KM = 15, DSAME = 20, ESAME = 20, NA = 3, VB = 50, NC = 1, SL = 2000;
-static const float VAF = 0.05f, VAF2 = 0.10f, CVAF = 0.03f, EFRAC = 0.02f, ROT = 0.8f, UNQ = 1.25f, SB = 1.5f, SM = 0.1f, NS = 0.9f;
+// call reads the sites (ev.tsv), the pieces (ev.fa) and their alignments (ev.paf), the graph and the packed reads, makes
+// its own pass over every read of both samples, and writes the records with AA3's evidence features for the verdict.
+// The pass: each site's tumor read is fetched, the distance between the site's innermost anchors is measured on it and
+// the read's nodes between them are counted (tumor-only, branch); then every read is streamed once, and each read that
+// carries a left and a right anchor of a site gives its distance, so every site gets per-sample spanning reads, their
+// length differences from the tumor allele, reads within DSAME of it, and the same over consistent reads (their other
+// anchors at the tumor read's spacing). Records come from the alignments (gaps of MS bp or more inside an alignment;
+// jumps between consecutive alignments give DEL/INS/DUP/INV/BND), attached to a site within ROW bp in the piece, merged
+// within TOL bp; insertions of NEAR bp or more copying the adjacent reference (KM-mer share between ROT and UNQ) become
+// tandem duplications. Every record gets AA3's NF features from the measurements, the reference repeat content in WIN bp,
+// the tandem-repeat bed, and the alignment; its error probability is AA3's logistic with weights W0 and PASS is the PCUT
+// cut; duplicates within DUPT bp keep the likelier record. The verdict (bench/verdict.py) reads the F= features.
+static const uint32_t MS = 50, MQ = 10, MM = 3, TOL = 50, NEAR = 500, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500, KM = 15, DSAME = 20, SAME = 20, NA = 3, CL = 3;
+static const float PCUT = 0.5f, ROT = 0.8f, UNQ = 1.25f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const int32_t UNSET = INT32_MIN;
 
-struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; };
+struct seg { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
-struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, o; char st; };
+struct ev { std::string ty, c1, c2; uint32_t p1, p2, q, mq, ln, l1, l2; float de; uint32_t o; char st; };
 
-// a site: interval a..b in its piece, tumor sample s, combination counts n, tumor count t, anchor depths nd/td, the read it
-// came from, anchor nodes l/r nearest first, the tumor read's distances d[li][ri], its sequence sq between the innermost
-// anchors, and the per-sample measurements m[sample * NM + kind]
-enum { SPAN, SAME, NEAR_, DIFF, SEQ, NM };
-struct spot { uint32_t a, b, s, t, nd, td; uint64_t read; std::vector<uint32_t> n, l, r, m; std::vector<std::vector<int32_t>> dl; int32_t d[NA][NA]; std::string sq; uint8_t lk; };
+// AA3's evidence row of a site: interval, site index, tumor sample, tumor length clusters and the piece's cluster size,
+// spanning tumor/normal reads, normal reads at the tumor length, shadow (none here), tumor-only and branch nodes and
+// bases between the anchors, the normal's median/min/max length difference, the same counts over consistent reads,
+// the combination counts n and the depths d per sample
+struct arow { uint32_t a, b, u, s, ncl, cl, tspan, nspan, nsame, shadow, tonly, nbr, span; int32_t lest, dmin, dmax; uint32_t nspc, n20c, tspc; std::vector<uint32_t> n, d; };
 
-struct sv { ev e; std::string nm, why; uint32_t pc, t, mq, st, rank; const spot* r; };
+struct sv { ev e; std::string nm; uint32_t pc; arow r; uint32_t nf, ms, mn; };
 
 struct bed { std::unordered_map<std::string, std::vector<std::pair<uint32_t, uint32_t>>> m; };
 
-// the read pass: anchors sorted by node (av) with their site/side/index (ai), a flag per node, sites by tumor read (rs, ri)
-struct mctx { std::vector<spot>* w; std::vector<uint32_t> av, ai; std::vector<uint8_t> isa; std::vector<uint64_t> rs; std::vector<uint32_t> ri; std::vector<std::vector<uint64_t>> hb; std::vector<int> fs, fx; std::vector<scr> sc; rpass* p; int t; };
+// a site as measured: interval a..b in its piece, tumor sample s, tumor count t, depths, tumor-only and branch nodes
+// between the innermost anchors, the read and combination it came from, counts n, anchor nodes l/r nearest first,
+// per-sample measurements m[sample * NM + kind] and length differences dl, the tumor read's distances d[li][ri]
+enum { SPAN, SAME_, OKS, OK20, NM };
+struct spot { uint32_t a, b, s, t, nd, td, tonly, nbr; uint64_t read, key; std::vector<uint32_t> n, l, r, m, dep; std::vector<std::vector<int32_t>> dl; int32_t d[NA][NA]; std::string nm; uint8_t lk; };
+
+// the read pass: anchors sorted by node (av) with their site/side/index (ai), flags per node (anchor, no normal read,
+// branch), the sites' tumor reads (rs), per-thread hit buffers, the read files and indexes, core scratch, the map
+struct mctx { std::vector<spot>* w; std::vector<uint32_t> av, ai; std::vector<uint8_t> isa, nz, br; std::vector<uint64_t> rs; std::vector<std::vector<uint64_t>> hb; std::vector<int> fs, fx; std::vector<scr> sc; rpass* p; int t; };
 
 static std::vector<uint32_t> nums(const char* s) {
     std::vector<uint32_t> v;
@@ -87,6 +86,12 @@ static void anchors(spot* r, const char* ls, const char* rs, uint64_t key, const
     uint64_t u = g->e[(key >> 32) - 1] >> 32, w = g->e[key & 0xffffffff] & 0xffffffff;
     r->nd = std::max<uint32_t>(std::max(g->c[u], g->c[w]), median(cn));
     r->td = ct.empty() ? std::max(g->c[r->s * g->K + u], g->c[r->s * g->K + w]) : median(ct);
+    for (uint64_t k = 0; k < g->S; k++) r->dep.push_back(r->l.empty() || r->r.empty() ? std::max(g->c[k * g->K + u], g->c[k * g->K + w]) : std::min(g->c[k * g->K + r->l[0]], g->c[k * g->K + r->r[0]]));
+}
+
+static uint32_t fit(const arow& r, const ev& e) {
+    uint32_t o = e.q < r.a || e.q > r.b, L = e.p2 - e.p1;
+    return e.ty == "BND" || e.ty == "INV" ? o : o ? 2 * L : r.nspan ? std::abs(std::abs(r.lest) - (int32_t)L) : L;
 }
 
 static bool cmp_seg(const seg& x, const seg& y) { return x.qs < y.qs; }
@@ -95,16 +100,8 @@ static bool cmp_sv(const sv& x, const sv& y) {
     return x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.o != y.e.o ? x.e.o < y.e.o : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
 }
 
-static bool cmp_pos(const sv& x, const sv& y) {
-    return x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
-}
-
-static bool better(const sv& x, const sv& y) { return x.st != y.st ? x.st > y.st : x.mq != y.mq ? x.mq > y.mq : x.pc > y.pc; }
-
-// the benchmark's match: both ends within w bp (either orientation), insertions by position
-static bool match(const ev& x, const ev& y, uint32_t w) {
-    if (x.c1 != y.c1 || x.p1 + w < y.p1 || y.p1 + w < x.p1) return false;
-    return x.ty == "INS" || y.ty == "INS" || (x.c2 == y.c2 && x.p2 + w >= y.p2 && y.p2 + w >= x.p2);
+static uint32_t top(const std::vector<uint32_t>& n) {
+    return *std::max_element(n.begin() + 1, n.end());
 }
 
 // the length clusters of a sample's spanning reads (single linkage within DSAME bp), sizes largest first
@@ -120,57 +117,28 @@ static std::vector<uint32_t> clusters(std::vector<int32_t> d) {
     return o;
 }
 
-// the nearest allele of a sample to the tumor allele: a length cluster of at least two reads and CVAF of the sample's
-// spanning reads; NONE when the sample has no such cluster
-static uint32_t nearest(std::vector<int32_t> d) {
-    std::sort(d.begin(), d.end());
-    uint32_t best = NONE;
-    for (size_t i = 0, j; i < d.size(); i = j) {
-        double sum = 0;
-        for (j = i; j < d.size() && (j == i || d[j] - d[j - 1] <= (int32_t)DSAME); j++) sum += d[j];
-        if (j - i >= std::max<size_t>(2, (size_t)std::ceil(CVAF * d.size()))) best = std::min<uint32_t>(best, std::fabs(sum / (j - i)));
-    }
-    return best;
-}
-
 static void load_bed(const char* path, bed* b) {
     char c[256];
     uint32_t s, e;
     FILE* f = std::fopen(path, "r");
     while (std::fscanf(f, "%255s %u %u%*[^\n]", c, &s, &e) == 3) b->m[c].push_back({s, e});
     std::fclose(f);
-    for (auto& kv : b->m) std::sort(kv.second.begin(), kv.second.end());
+    for (auto& kv : b->m) {
+        std::vector<std::pair<uint32_t, uint32_t>>& v = kv.second;
+        std::sort(v.begin(), v.end());
+        size_t j = 0;
+        for (size_t i = 1; i < v.size(); i++)
+            if (v[i].first <= v[j].second) v[j].second = std::max(v[j].second, v[i].second);
+            else v[++j] = v[i];
+        v.resize(j + 1);
+    }
 }
 
-// whether position p of chromosome c lies in or within VB bp of a tandem repeat
 static bool inbed(const bed* b, const std::string& c, uint32_t p) {
     auto it = b->m.find(c);
     if (it == b->m.end()) return false;
-    const std::vector<std::pair<uint32_t, uint32_t>>& v = it->second;
-    size_t i = std::upper_bound(v.begin(), v.end(), std::make_pair(p + VB, ~0u)) - v.begin();
-    for (size_t j = i > 3 ? i - 3 : 0; j < i; j++) if (v[j].second + VB >= p) return true;
-    return false;
-}
-
-// bounded edit distance between two sequences (common ends trimmed first); returns X when it is X or more
-static uint32_t edits(const std::string& a, const std::string& b, uint32_t X) {
-    uint32_t k = std::min(a.size(), b.size()), s = 0, e = 0;
-    while (s < k && a[s] == b[s]) s++;
-    while (e < k - s && a[a.size() - 1 - e] == b[b.size() - 1 - e]) e++;
-    uint32_t n = a.size() - s - e, m = b.size() - s - e;
-    if (n > m + X || m > n + X) return X;
-    const char *x = a.data() + s, *y = b.data() + s;
-    std::vector<uint32_t> p(m + 2, X), c(m + 2, X);
-    for (uint32_t j = 0; j <= m && j < X; j++) p[j] = j;
-    for (uint32_t i = 1; i <= n; i++) {
-        uint32_t lo = i > X ? i - X : 1, hi = std::min(m, i + X), best = X;
-        c[lo - 1] = lo == 1 ? std::min(i, X) : X;
-        for (uint32_t j = lo; j <= hi; j++) best = std::min(best, c[j] = std::min(std::min(p[j] + 1, c[j - 1] + 1), std::min(p[j - 1] + (x[i - 1] != y[j - 1]), X)));
-        if (hi < m) c[hi + 1] = X;
-        if (best >= X) return X;
-        p.swap(c);
-    }
-    return std::min(p[m], X);
+    auto k = std::upper_bound(it->second.begin(), it->second.end(), std::make_pair(p + 50, ~0u));
+    return k != it->second.begin() && (k - 1)->second + 50 >= p;
 }
 
 // the anchor hits of one read strand, one 64-bit key each: site, side, anchor index, then the position in the strand's list
@@ -186,7 +154,7 @@ static void hits(mctx* x, const rth* c, uint32_t m, std::vector<uint64_t>& h) {
 
 // the tumor read of its own sites: every left/right pair present gives d[li][ri] (the anchors' order in the strand that
 // carries them is the same in every read, since a node is one orientation of a core); the innermost pair gives the sequence
-static void own(rpass* p, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t rid) {
+static void own(rpass* p, rth* c, const uint8_t*, uint32_t m, uint32_t, uint64_t rid) {
     mctx* x = (mctx*)p->ctx;
     std::vector<uint64_t>& h = x->hb[c - p->t.data()];
     hits(x, c, m, h);
@@ -202,38 +170,49 @@ static void own(rpass* p, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, u
                 uint32_t li = la, ri = rb - 4, al = c->r.a[c->ix[pa]], ar = c->r.a[c->ix[pb]];
                 if (w->d[li][ri] != UNSET) continue;
                 w->d[li][ri] = al < ar ? ar - al : al - ar;
-                if (!li && !ri) w->sq = bases(&c->r, rec, std::min(al, ar), std::max(al, ar), rc);
+                if (!li && !ri) {
+                    w->tonly = w->nbr = 0;
+                    for (uint32_t k = std::min(pa, pb); k <= std::max(pa, pb); k++) { w->tonly += x->nz[c->id[k]]; w->nbr += x->br[c->id[k]]; }
+                }
             }
     }
 }
 
 // every read of every sample: the innermost pair present in strand order gives the distance; count it against the tumor's
-static void measure(rpass* p, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t) {
+static void measure(rpass* p, rth* c, const uint8_t*, uint32_t m, uint32_t, uint64_t) {
     mctx* x = (mctx*)p->ctx;
     std::vector<uint64_t>& h = x->hb[c - p->t.data()];
     hits(x, c, m, h);
     for (size_t i = 0, j; i < h.size(); i = j) {
-        uint32_t s = h[i] >> 35, li = NONE, ri = NONE, pl = 0, pr = 0;
+        uint32_t s = h[i] >> 35, li = NONE, ri = NONE, pl = 0, pr = 0, ps[2][NA];
+        for (uint32_t k = 0; k < NA; k++) ps[0][k] = ps[1][k] = NONE;
         for (j = i; j < h.size() && h[j] >> 35 == s; j++) {
             uint32_t k = h[j] >> 32 & 7, pos = (uint32_t)h[j];
             if (k < 4 && li == NONE) { li = k; pl = pos; }
             if (k >= 4 && ri == NONE) { ri = k - 4; pr = pos; }
+            if (ps[k >= 4][k & 3] == NONE) ps[k >= 4][k & 3] = pos;
         }
         spot* w = &(*x->w)[s];
         if (li == NONE || ri == NONE || pl == pr || w->d[li][ri] == UNSET) continue;
         uint32_t al = c->r.a[c->ix[pl]], ar = c->r.a[c->ix[pr]], *cnt = w->m.data() + p->f * NM;
         if (al > ar) std::swap(al, ar);
         int32_t dl = (int32_t)(ar - al) - w->d[li][ri], ad = dl < 0 ? -dl : dl;
+        // consistent read: its other anchors on each side sit at the tumor read's spacing from the innermost one
+        uint32_t ok[2] = {0, 0};
+        for (uint32_t sd = 0; sd < 2; sd++)
+            for (uint32_t k = 1; k < NA; k++) {
+                if (ps[sd][0] == NONE || ps[sd][k] == NONE) continue;
+                int32_t t0 = sd ? w->d[0][0] : w->d[0][0], tk = sd ? w->d[0][k] : w->d[k][0];
+                if (t0 == UNSET || tk == UNSET) continue;
+                int32_t sp = std::labs(t0 - tk), got = std::labs((int32_t)c->r.a[c->ix[ps[sd][k]]] - (int32_t)c->r.a[c->ix[ps[sd][0]]]);
+                ok[sd] += std::labs(got - sp) <= (int32_t)DSAME;
+            }
+        if (ok[0] >= NA - 1 && ok[1] >= NA - 1) { __atomic_fetch_add(&cnt[OKS], 1, __ATOMIC_RELAXED); if (ad < (int32_t)DSAME) __atomic_fetch_add(&cnt[OK20], 1, __ATOMIC_RELAXED); }
         __atomic_fetch_add(&cnt[SPAN], 1, __ATOMIC_RELAXED);
-        __atomic_fetch_add(&cnt[ad < (int32_t)DSAME ? SAME : ad < (int32_t)MS ? NEAR_ : DIFF], 1, __ATOMIC_RELAXED);
+        if (ad < (int32_t)DSAME) __atomic_fetch_add(&cnt[SAME_], 1, __ATOMIC_RELAXED);
         while (__atomic_exchange_n(&w->lk, 1, __ATOMIC_ACQUIRE));
         w->dl[p->f].push_back(dl);
         __atomic_store_n(&w->lk, 0, __ATOMIC_RELEASE);
-        if (ad < (int32_t)MS && !li && !ri && !w->sq.empty()) {
-            std::string q = bases(&c->r, rec, al, ar, rc);
-            uint32_t X = std::max(ESAME, (uint32_t)(EFRAC * w->sq.size()));
-            if (edits(q, w->sq, X) < X) __atomic_fetch_add(&cnt[SEQ], 1, __ATOMIC_RELAXED);
-        }
     }
 }
 
@@ -251,7 +230,7 @@ static void grab(void* a, int i) {
     mctx* x = (mctx*)a;
     rth* c = &x->p->t[i];
     std::vector<uint8_t> rec;
-    for (size_t k = i; k + 1 < x->ri.size(); k += x->t) {
+    for (size_t k = i; k < x->rs.size(); k += x->t) {
         fetch(x, x->rs[k], rec);
         cores(&x->sc[i], &c->r, rec.data(), LEV);
         lookup(x->p, c);
@@ -262,11 +241,11 @@ static void grab(void* a, int i) {
 
 static void add(std::vector<ev>& o, uint32_t q, const char* ty, std::string c1, uint32_t p1, std::string c2, uint32_t p2, const seg& x, const seg& y, uint32_t d = 0) {
     if (c1 == c2 && (p1 > p2 ? p1 - p2 : p2 - p1) < MS && std::strcmp(ty, "INS")) return;
-    if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); d = (d & 1) * 2 + d / 2; }
-    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), d, x.st});
+    uint32_t l1 = x.qe - x.qs, l2 = y.qe - y.qs;
+    if (c1 > c2 || (c1 == c2 && p1 > p2)) { std::swap(c1, c2); std::swap(p1, p2); std::swap(l1, l2); d = (d & 1) * 2 + d / 2; }
+    o.push_back({ty, c1, c2, p1, p2, q, std::min(x.mq, y.mq), std::min(l1, l2), l1, l2, std::min(x.de, y.de), d, x.st});
 }
 
-// events of one piece: gaps of MS bp or more inside an alignment, and the jumps between consecutive alignments along the read
 static std::vector<ev> events(std::vector<seg>& sg) {
     std::vector<ev> o;
     std::sort(sg.begin(), sg.end(), cmp_seg);
@@ -304,8 +283,8 @@ static std::vector<ev> events(std::vector<seg>& sg) {
     return o;
 }
 
-static bool near(const ev& x, const ev& y, uint32_t w) {
-    return x.c1 == y.c1 && x.c2 == y.c2 && x.p1 + w >= y.p1 && y.p1 + w >= x.p1 && x.p2 + w >= y.p2 && y.p2 + w >= x.p2;
+static bool near(const sv& x, const sv& y) {
+    return x.e.ty == y.e.ty && x.e.o == y.e.o && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
 }
 
 static bool primary(const std::string& c) {
@@ -340,6 +319,62 @@ static void tandem(ev& e, const std::string& pc, FILE* fa, const std::vector<uin
     e.p2 = e.p1 + L;
 }
 
+static float rep(const std::string& s) {
+    float b = 0;
+    for (uint32_t p = 1; p <= 6 && s.size() > p; p++) {
+        uint32_t k = 0;
+        for (uint32_t i = p; i < s.size(); i++) k += s[i] == s[i - p];
+        b = std::max(b, (float)k / (s.size() - p));
+    }
+    return b;
+}
+
+static float prob(const sv& s, float rp, bool vn, float med, const float* w, float* f) {
+    const arow& r = s.r;
+    uint32_t t = top(r.n), dt = r.d[r.s], L = s.e.p2 - s.e.p1;
+    int32_t al = std::abs(r.lest);
+    bool sp = r.nspan > 0, ind = s.e.ty != "BND" && s.e.ty != "INV";
+    f[0] = 1;
+    f[1] = std::log2(t + 1.f);
+    f[2] = std::min(1.f, (float)t / std::max(dt, 1u));
+    f[3] = std::log2((float)s.pc);
+    f[4] = r.ncl;
+    f[5] = std::min(1.f, (float)t / std::max(r.tspan, 1u));
+    f[6] = sp;
+    f[7] = r.nsame > 0;
+    f[8] = sp && ind && al < (int32_t)MS;
+    f[9] = sp && al >= (int32_t)MS && ind && (2 * al < (int32_t)L || al > 2 * (int32_t)L);
+    f[10] = r.nspan >= 3 && r.dmin < -20 && r.dmax > 20;
+    f[11] = r.shadow > 0;
+    f[12] = 1000.f * r.tonly / std::max(r.span, 1u);
+    f[13] = 1000.f * r.nbr / std::max(r.span, 1u);
+    f[14] = s.e.mq / 60.f;
+    f[15] = std::min(s.e.de, 0.05f) * 100;
+    f[16] = rp;
+    f[17] = vn;
+    f[18] = s.e.ty == "INS";
+    f[19] = s.e.ty == "DUP";
+    f[20] = s.e.ty == "INV";
+    f[21] = s.e.ty == "BND";
+    f[22] = s.e.ty == "BND" ? 0 : std::log2(L + 1.f);
+    f[23] = std::log2((dt + 1.f) / (med + 1));
+    f[24] = r.d[0] == 0;
+    f[25] = (float)r.nsame / std::max(r.nspan, 1u);
+    f[26] = std::log2(r.nsame + 1.f);
+    f[27] = std::log2(r.nspan + 1.f);
+    f[28] = f[5] - f[25];
+    f[29] = s.ms > 0;
+    f[30] = (float)s.ms / std::max(s.mn, 1u);
+    f[31] = ind ? std::min(1.f, (float)s.nf / std::max(L, 1u)) : s.nf;
+    f[32] = r.n20c > 0;
+    f[33] = std::log2(r.n20c + 1.f);
+    f[34] = std::log2(r.nspc + 1.f);
+    f[35] = std::min(1.f, (float)r.tspc / std::max(r.tspan, 1u));
+    float z = 0;
+    for (uint32_t i = 0; i < NF; i++) z += w[i] * f[i];
+    return 1 / (1 + std::exp(-z));
+}
+
 static std::string list(const std::vector<uint32_t>& m, uint32_t S, uint32_t kind) {
     std::string s;
     for (uint32_t i = 0; i < S; i++) s += (i ? "," : "") + std::to_string(m[i * NM + kind]);
@@ -354,6 +389,28 @@ static std::string deltas(std::vector<int32_t> d) {
     return s.empty() ? "-" : s;
 }
 
+// records in reference order, for the duplicate sweep
+struct by_place {
+    const std::vector<sv>& r;
+    explicit by_place(const std::vector<sv>& v) : r(v) {}
+    bool operator()(size_t a, size_t b) const {
+        const ev &x = r[a].e, &y = r[b].e;
+        return x.c1 != y.c1 ? x.c1 < y.c1 : x.c2 != y.c2 ? x.c2 < y.c2 : x.p1 != y.p1 ? x.p1 < y.p1 : x.p2 != y.p2 ? x.p2 < y.p2 : a < b;
+    }
+};
+
+// AA3's evidence row of a site, from the pass
+static arow row(const spot& e, uint32_t u) {
+    const uint32_t *mn = e.m.data(), *mt = e.m.data() + e.s * NM;
+    std::vector<int32_t> dn = e.dl[0];
+    std::sort(dn.begin(), dn.end());
+    int32_t lest = dn.empty() ? 0 : dn[dn.size() / 2], dmin = dn.empty() ? 0 : dn.front(), dmax = dn.empty() ? 0 : dn.back();
+    uint32_t nsame = 0, ncl = 0;
+    for (int32_t d : dn) nsame += std::labs(d) <= std::max<int32_t>(SAME, std::labs(lest) / 2);
+    for (uint32_t c : clusters(e.dl[e.s])) ncl += c > 0;
+    return {e.a, e.b, u, e.s, std::min(ncl, CL), mt[SAME_], mt[SPAN], mn[SPAN], nsame, 0, e.tonly, e.nbr, e.b - e.a, lest, dmin, dmax, mn[OKS], mn[OK20], mt[OKS], e.n, e.dep};
+}
+
 int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, const char* out, const char* vb, int t) {
     LCP_INIT();
     std::string pre(in);
@@ -363,7 +420,9 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
     char line[1 << 16], nm[256], cn[4096], ls[4096], rs[4096], st, tn[256];
     uint32_t qs, qe, ts, te, mq, z, a, b, s;
     unsigned long key;
+    float wt[NF];
     bed vn;
+    std::copy(W0, W0 + NF, wt);
     if (vb) load_bed(vb, &vn);
     gph g;
     read_gph(gp, &g);
@@ -371,7 +430,7 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
     FILE* fi = std::fopen((pre + ".tsv").c_str(), "r");
     while (std::fgets(line, sizeof line, fi)) {
         std::sscanf(line, "%255s %u %u %*u %4095s %lu %u %4095s %4095s", nm, &a, &b, cn, &key, &s, ls, rs);
-        spot r = {a, b, s, 0, 0, 0, 0, nums(cn), {}, {}, std::vector<uint32_t>(S * NM, 0), std::vector<std::vector<int32_t>>(S), {}, "", 0};
+        spot r = {a, b, s, 0, 0, 0, 0, 0, 0, key, nums(cn), {}, {}, std::vector<uint32_t>(S * NM, 0), {}, std::vector<std::vector<int32_t>>(S), {}, nm, 0};
         r.t = r.n[s];
         for (uint32_t i = 0; i < NA; i++) for (uint32_t j = 0; j < NA; j++) r.d[i][j] = UNSET;
         unsigned long rs_, ss_;
@@ -382,10 +441,16 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
         w.push_back(r);
     }
     std::fclose(fi);
+    // the pass: node flags, which nodes are anchors of which sites, the sites' tumor reads, then every read of every sample
+    mctx x = {&w, {}, {}, std::vector<uint8_t>(K, 0), std::vector<uint8_t>(K, 0), std::vector<uint8_t>(K, 0), {}, std::vector<std::vector<uint64_t>>(t), {}, {}, std::vector<scr>(t), nullptr, t};
+    for (uint64_t v = 0; v < K; v++) x.nz[v] = g.c[v] == 0;
+    {
+        std::vector<uint8_t> in(K, 0), on(K, 0);
+        for (uint64_t e : g.e) { uint64_t u = e >> 32, v = e & 0xffffffff; if (on[u] < 2) on[u]++; if (in[v] < 2) in[v]++; }
+        for (uint64_t v = 0; v < K; v++) x.br[v] = in[v] > 1 || on[v] > 1;
+    }
     g.c = {};
     g.e = {};
-    // the read pass: which nodes are anchors of which sites, the tumor reads of the sites, then every read of every sample
-    mctx x = {&w, {}, {}, std::vector<uint8_t>(K, 0), {}, {}, std::vector<std::vector<uint64_t>>(t), {}, {}, std::vector<scr>(t), nullptr, t};
     std::vector<std::pair<uint32_t, uint32_t>> an;
     for (uint32_t i = 0; i < w.size(); i++) {
         for (uint32_t k = 0; k < w[i].l.size() && k < NA; k++) an.push_back({w[i].l[k], i << 3 | k});
@@ -396,7 +461,6 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
     for (auto& p : an) { x.av.push_back(p.first); x.ai.push_back(p.second); x.isa[p.first] = 1; }
     std::sort(x.rs.begin(), x.rs.end());
     x.rs.erase(std::unique(x.rs.begin(), x.rs.end()), x.rs.end());
-    x.ri.resize(x.rs.size() + 1);
     for (std::string& f : split(rd)) { x.fs.push_back(fileno(std::fopen(f.c_str(), "rb"))); x.fx.push_back(fileno(std::fopen((f + ".idx").c_str(), "rb"))); }
     rpass p = {std::vector<rth>(t), &g.g, {}, 0, own, &x, 0, 0};
     make_map(&p);
@@ -407,12 +471,16 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
     each_read(&p, g.g, rd, t, measure, &x);
     p = {};
     g = {};
-    // records from the pieces' alignments
+    std::vector<uint32_t> dep;
+    for (const spot& e : w) dep.push_back(e.dep[e.s]);
+    std::sort(dep.begin(), dep.end());
+    float med = dep.empty() ? 0 : dep[dep.size() / 2];
+    // records from the pieces' alignments, each attached to the site with most tumor reads within ROW bp of it
     fi = std::fopen((pre + ".paf").c_str(), "r");
     while (std::fgets(line, sizeof line, fi)) {
         std::sscanf(line, "%255s %u %u %u %c %255s %u %u %u %u %u %u", nm, &z, &qs, &qe, &st, tn, &z, &ts, &te, &z, &z, &mq);
-        const char* cg = std::strstr(line, "cg:Z:");
-        al[nm].push_back({qs, qe, ts, te, mq, st, tn, cg ? std::string(cg + 5, std::strcspn(cg + 5, "\t\n")) : ""});
+        const char *cg = std::strstr(line, "cg:Z:"), *de = std::strstr(line, "de:f:");
+        al[nm].push_back({qs, qe, ts, te, mq, st, tn, cg ? std::string(cg + 5, std::strcspn(cg + 5, "\t\n")) : "", de ? std::strtof(de + 5, nullptr) : 0});
     }
     std::fclose(fi);
     std::unordered_map<std::string, std::vector<uint64_t>> fai;
@@ -420,18 +488,9 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
     unsigned long f4[4];
     while (std::fscanf(fx, "%255s %lu %lu %lu %lu", nm, &f4[0], &f4[1], &f4[2], &f4[3]) == 5) fai[nm] = {f4[0], f4[1], f4[2], f4[3]};
     std::fclose(fx);
-    std::vector<sv> som;
+    std::unordered_map<std::string, std::vector<ev>> evs;
     std::unordered_map<std::string, std::string> sq;
-    for (auto& pc : bypc) {
-        if (!al.count(pc.first)) continue;
-        for (const ev& e : events(al[pc.first])) {
-            const spot* r = nullptr;
-            for (uint32_t i : pc.second) if (e.q + ROW >= w[i].a && e.q <= w[i].b + ROW && (!r || w[i].t > r->t)) r = &w[i];
-            if (!r || !primary(e.c1) || !primary(e.c2) || r->t < MM) continue;
-            som.push_back({e, pc.first, "", 1, r->t, e.mq, 0, 0, r});
-            if (e.ty == "INS" && e.p2 - e.p1 >= NEAR) sq[pc.first];
-        }
-    }
+    for (auto& pc : bypc) if (al.count(pc.first)) for (const ev& e : evs[pc.first] = events(al[pc.first])) if (e.ty == "INS" && e.p2 - e.p1 >= NEAR) sq[pc.first];
     FILE *fa = std::fopen(fasta, "r"), *fp = std::fopen((pre + ".fa").c_str(), "r");
     char* ln = nullptr;
     size_t cap = 0;
@@ -441,71 +500,70 @@ int cmd_call(const char* in, const char* rd, const char* fasta, const char* gp, 
         else if (cur) cur->assign(ln, n - 1);
     std::free(ln);
     std::fclose(fp);
-    for (sv& v : som) if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1) tandem(v.e, sq[v.nm], fa, fai[v.e.c1]);
-    std::fclose(fa);
-    // one record per event: same type and orientation, both ends within TOL; the best piece (most tumor reads) represents it
+    std::vector<sv> som;
+    for (auto& pc : bypc) {
+        if (!al.count(pc.first)) continue;
+        for (const ev& e : evs[pc.first]) {
+            const spot* r = nullptr;
+            uint32_t u = 0;
+            for (uint32_t i : pc.second) if (e.q + ROW >= w[i].a && e.q <= w[i].b + ROW && (!r || w[i].t > r->t)) { r = &w[i]; u = i; }
+            if (!r || !primary(e.c1) || !primary(e.c2) || r->t < MM) continue;
+            arow a_ = row(*r, u);
+            som.push_back({e, pc.first, 1, a_, fit(a_, e), a_.nsame, a_.nspan});
+        }
+    }
+    // one record per event: same type and orientation, both ends within TOL; the piece with most tumor reads represents it
     std::sort(som.begin(), som.end(), cmp_sv);
     std::vector<sv> res;
     for (const sv& v : som) {
-        if (res.empty() || res.back().e.ty != v.e.ty || res.back().e.o != v.e.o || !near(res.back().e, v.e, TOL)) { res.push_back(v); continue; }
+        if (res.empty() || !near(res.back(), v)) { res.push_back(v); continue; }
         sv& q = res.back();
-        uint32_t pc = q.pc + 1, m = std::max(q.mq, v.mq);
-        if (better(v, q)) q = v;
-        q.pc = pc;
-        q.mq = m;
+        arow m = top(v.r.n) > top(q.r.n) ? v.r : q.r;
+        if (top(v.r.n) > top(q.r.n)) { q.e = v.e; q.nm = v.nm; }
+        if (v.nf < q.nf || (v.nf == q.nf && v.ms > q.ms)) { q.nf = v.nf; q.ms = v.ms; q.mn = v.mn; }
+        m.nsame = std::max(v.r.nsame, q.r.nsame);
+        m.nspan = std::max(v.r.nspan, q.r.nspan);
+        m.nspc = std::max(v.r.nspc, q.r.nspc);
+        m.n20c = std::max(v.r.n20c, q.r.n20c);
+        m.ncl = std::max(v.r.ncl, q.r.ncl);
+        q.r = m;
+        q.pc++;
     }
-    // the measurements behind the rules: tumor reads at the tumor allele's length (the graph count when the site has no
-    // anchor pair to measure), the normal's; per site the number of records and which is the largest event
-    std::unordered_map<const spot*, std::vector<uint32_t>> bysite;
-    for (uint32_t i = 0; i < res.size(); i++) {
-        sv& v = res[i];
-        const uint32_t* mn = v.r->m.data(), *mt = v.r->m.data() + v.r->s * NM;
-        v.st = mn[SPAN] || mt[SPAN] ? mt[SAME] : v.r->t;
-        v.rank = v.e.ty == "BND" || v.e.ty == "INV" ? 3 : v.e.p2 - v.e.p1 >= NEAR ? 2 : 1;
-        bysite[v.r].push_back(i);
+    FILE* o = std::fopen(out, "w");
+    std::fprintf(o, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
+    for (uint64_t i = 0; i < S; i++) std::fprintf(o, "\tS%lu", (unsigned long)i);
+    std::fprintf(o, "\n");
+    std::vector<float> pv(res.size()), rv(res.size());
+    std::vector<std::vector<float>> fv(res.size(), std::vector<float>(NF));
+    std::vector<uint8_t> dup(res.size(), 0);
+    std::vector<size_t> ix(res.size());
+    for (size_t i = 0; i < res.size(); i++) {
+        const sv& v = res[i];
+        rv[i] = rep(ref(fa, fai[v.e.c1], v.e.p1 > WIN ? v.e.p1 - WIN : 0, std::min<uint64_t>(v.e.p1 + WIN, fai[v.e.c1][0])));
+        pv[i] = prob(v, rv[i], inbed(&vn, v.e.c1, v.e.p1) || inbed(&vn, v.e.c2, v.e.p2), med, wt, fv[i].data());
+        if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1) tandem(res[i].e, sq[v.nm], fa, fai[v.e.c1]);
+        ix[i] = i;
     }
-    for (int mode = 1; mode <= 3; mode++) {
-        for (sv& v : res) {
-            const uint32_t* mn = v.r->m.data(), *mt = v.r->m.data() + v.r->s * NM;
-            const std::vector<uint32_t>& g_ = bysite[v.r];
-            const std::vector<int32_t>& dn = v.r->dl[0];
-            std::vector<uint32_t> cn_ = clusters(dn);
-            uint32_t nn = nearest(dn), L = v.e.p2 - v.e.p1, nclu = 0;
-            for (uint32_t c_ : cn_) nclu += c_ >= 2;
-            bool top = true, measured = mn[SPAN] || mt[SPAN], tr = inbed(&vn, v.e.c1, v.e.p1);
-            for (uint32_t i : g_) top &= res[i].rank < v.rank || (res[i].rank == v.rank && res[i].e.p2 - res[i].e.p1 <= L);
-            float vaf = (float)v.st / std::max(v.r->td, v.st), ns = dn.empty() ? 0 : (float)(cn_[0] + (cn_.size() > 1 ? cn_[1] : 0)) / dn.size();
-            bool clean = mt[SPAN] && nclu <= NC && ns >= NS && v.r->b - v.r->a <= SL && vaf >= VAF2 && v.mq >= MQ2;
-            v.why = v.r->nd <= NCOV ? "LOWNORMAL" : mn[SAME] > CN || mn[SAME] > CVAF * mn[SPAN] ? "GERMLINE" : nn != NONE && nn < MS ? "SMALL" : v.st < MM || vaf < VAF ? "LOWVAF"
-                  : mode >= 2 && g_.size() > 2 && !top ? "COMPLEX" : !measured && v.st < std::lround(SB + SM * v.r->td) ? "LOWSUPPORT"
-                  : tr && ((mode == 2 && !clean) || mode == 3) ? "VNTR" : "PASS";
-        }
-        // records that describe one event within the benchmark tolerance: the better one stays
-        std::sort(res.begin(), res.end(), cmp_pos);
-        for (size_t i = 0; i < res.size(); i++)
-            for (size_t j = i + 1; j < res.size() && res[j].e.c1 == res[i].e.c1 && res[j].e.p1 <= res[i].e.p1 + DUPT; j++)
-                if (res[i].why == "PASS" && res[j].why == "PASS" && match(res[i].e, res[j].e, DUPT)) res[better(res[i], res[j]) ? j : i].why = "DUPL";
-        FILE* o = std::fopen((std::string(out) + "." + std::to_string(mode) + ".vcf").c_str(), "w");
-        std::fprintf(o, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
-        for (uint64_t i = 0; i < S; i++) std::fprintf(o, "\tS%lu", (unsigned long)i);
+    std::sort(ix.begin(), ix.end(), by_place(res));
+    for (size_t a_ = 0; a_ < ix.size(); a_++)
+        for (size_t b_ = a_ + 1; b_ < ix.size() && res[ix[b_]].e.c1 == res[ix[a_]].e.c1 && res[ix[b_]].e.c2 == res[ix[a_]].e.c2 && res[ix[b_]].e.p1 <= res[ix[a_]].e.p1 + DUPT; b_++)
+            if (res[ix[b_]].e.p2 + DUPT >= res[ix[a_]].e.p2 && res[ix[a_]].e.p2 + DUPT >= res[ix[b_]].e.p2 && (res[ix[a_]].e.ty != res[ix[b_]].e.ty || res[ix[a_]].e.o == res[ix[b_]].e.o)) dup[pv[ix[a_]] < pv[ix[b_]] ? ix[a_] : ix[b_]] = 1;
+    uint64_t np = 0;
+    for (size_t i = 0; i < res.size(); i++) {
+        const sv& v = res[i];
+        const spot& e = w[v.r.u];
+        float pr = pv[i];
+        np += pr >= PCUT && !dup[i];
+        std::string j = (v.e.o & 1 ? "]" : "[") + v.e.c2 + ":" + std::to_string(v.e.p2) + (v.e.o & 1 ? "]" : "["), alt = v.e.ty != "BND" ? "<" + v.e.ty + ">" : v.e.o & 2 ? "N" + j : j + "N", fs, dls;
+        for (uint32_t k = 0; k < NF; k++) { std::snprintf(nm, sizeof nm, "%s%.4g", k ? "," : "", fv[i][k]); fs += nm; }
+        for (uint64_t k = 0; k < S; k++) dls += ";D" + std::to_string(k) + "=" + deltas(e.dl[k]);
+        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s;SPAN=%s;SAME=%s%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), dup[i] ? "DUPL" : pr >= PCUT ? "PASS" : "LOW", v.e.ty.c_str(),
+                     v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), 1 - pr, fs.c_str(), list(e.m, S, SPAN).c_str(), list(e.m, S, SAME_).c_str(), dls.c_str());
+        for (uint32_t n : v.r.n) std::fprintf(o, "\t%s:%u", n >= MM ? "0/1" : "0/0", n);
         std::fprintf(o, "\n");
-        uint64_t np = 0;
-        for (size_t i = 0; i < res.size(); i++) {
-            const sv& v = res[i];
-            const spot* r = v.r;
-            std::string dls;
-            for (uint64_t k = 0; k < S; k++) dls += (k ? ";D" : "D") + std::to_string(k) + "=" + deltas(r->dl[k]);
-            np += v.why == "PASS";
-            std::string j = (v.e.o & 1 ? "]" : "[") + v.e.c2 + ":" + std::to_string(v.e.p2) + (v.e.o & 1 ? "]" : "["), alt = v.e.ty != "BND" ? "<" + v.e.ty + ">" : v.e.o & 2 ? "N" + j : j + "N";
-            std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;QPOS=%u;SITE=%u-%u;MQ=%u;TDP=%u;NDP=%u;SPAN=%s;SAME=%s;NEAR=%s;DIFF=%s;SEQ=%s;ST=%u;%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), v.why.c_str(), v.e.ty.c_str(),
-                         v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), v.e.q, r->a, r->b, v.mq, r->td, r->nd,
-                         list(r->m, S, SPAN).c_str(), list(r->m, S, SAME).c_str(), list(r->m, S, NEAR_).c_str(), list(r->m, S, DIFF).c_str(), list(r->m, S, SEQ).c_str(), v.st, dls.c_str());
-            for (uint32_t n : r->n) std::fprintf(o, "\t%s:%u", n >= MM ? "0/1" : "0/0", n);
-            std::fprintf(o, "\n");
-        }
-        std::fclose(o);
-        std::fprintf(stderr, "[call] rule set %d: %lu PASS\n", mode, (unsigned long)np);
     }
-    std::fprintf(stderr, "[call] %zu events at sites, %zu records\n", som.size(), res.size());
+    std::fclose(o);
+    std::fclose(fa);
+    std::fprintf(stderr, "[call] %zu tumor events at sites, %zu records, %lu PASS\n", som.size(), res.size(), (unsigned long)np);
     return 0;
 }
