@@ -27,7 +27,7 @@ int cmd_pack(const char* in, const char* out) {
     uint64_t n = 0, tot = 0, pos = sizeof(bin_header), mx = 0;
     while (line(g, q, b.data()) && line(g, s, b.data()) && line(g, q, b.data()) && line(g, q, b.data())) {
         uint32_t L = s.size(), raw = 0;
-        for (char c : s) raw |= (c & 0xdf) != 'A' && (c & 0xdf) != 'C' && (c & 0xdf) != 'G' && (c & 0xdf) != 'T';
+        for (char c : s) raw |= code(c) == 3 && (c & 0xdf) != 'T';
         uint32_t tag = L | raw << 31;
         p.assign(svb_bytes(tag) - 4, 0);
         for (uint32_t i = 0; i < L; i++) if (raw) p[i] = s[i]; else p[i >> 2] |= code(s[i]) << (6 - 2 * (i & 3));

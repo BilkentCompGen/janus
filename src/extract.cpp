@@ -83,8 +83,7 @@ int cmd_extract(const char* in, const char* out, int t) {
     ectx c = {std::vector<scr>(t), std::vector<uint64_t>(t, 0)};
     FILE* fo = open_tmp(out);
     bin_header o = header('X', 3, stream_run(open_in(in, &h), nullptr, fo, t, ex_work, &c), 0);
-    o.resv[0] = LEV;
-    o.resv[1] = W;
+    o.resv[0] = LEV; o.resv[1] = W;
     for (int i = 0; i < t; i++) { o.total += c.nc[i]; std::free(c.s[i].mem); }
     finish(fo, out, &o);
     return 0;

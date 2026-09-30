@@ -148,10 +148,7 @@ int cmd_count(const char* in, const char* out, int t) {
     std::fwrite(ec.data(), 2, E, fo);
     std::fwrite(ob.data(), 1, ob.size(), fo);
     bin_header o = header('C', 1, x.K, E);
-    o.resv[0] = rb;
-    o.resv[1] = db;
-    o.resv[2] = MM;
-    o.resv[3] = MARGIN;
+    o.resv[0] = rb; o.resv[1] = db; o.resv[2] = MM; o.resv[3] = MARGIN;
     finish(fo, out, &o);
     return 0;
 }

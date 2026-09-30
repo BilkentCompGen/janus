@@ -118,21 +118,21 @@ static void anchor(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, ui
         }
 }
 
-static bool before(const std::pair<uint64_t, uint32_t>& v, const piece& q) { return v.first < q.read || (v.first == q.read && v.second < q.lo); }
-
 static void pieces(sctx* c) {
     for (uint32_t k = 0; k + 1 < c->ro.size(); k++) {
         std::vector<std::pair<uint32_t, uint32_t>> iv;
+        uint32_t g = c->pc.size();
         for (uint32_t i = c->ro[k]; i < c->ro[k + 1]; i++) if (c->w[i].hi > c->w[i].lo) iv.push_back({c->w[i].lo, c->w[i].hi});
         std::sort(iv.begin(), iv.end());
         for (uint32_t j = 0; j < iv.size(); j++) {
             if (j && iv[j].first <= c->pc.back().hi) { c->pc.back().hi = std::max(c->pc.back().hi, iv[j].second); continue; }
-            if (!j) c->gs.push_back(c->pc.size());
+            if (!j) c->gs.push_back(g);
             c->pc.push_back({c->rd[k], iv[j].first, iv[j].second, j ? c->pc.back().k + 1 : 0, ""});
         }
+        for (uint32_t i = c->ro[k]; i < c->ro[k + 1]; i++)
+            for (c->w[i].pc = g; c->w[i].pc + 1 < c->pc.size() && c->pc[c->w[i].pc + 1].lo <= c->w[i].lo; c->w[i].pc++);
     }
     c->gs.push_back(c->pc.size());
-    for (site& e : c->w) e.pc = std::upper_bound(c->pc.begin(), c->pc.end(), std::make_pair(e.read, e.lo), before) - c->pc.begin() - 1;
 }
 
 static void fetch(const sctx* c, uint64_t rd, std::vector<uint8_t>& rec) {
