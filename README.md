@@ -21,6 +21,7 @@ g++ (C++17), zlib and pthreads; `-Wall -Wextra -Wpedantic` builds without warnin
 ```
 snape pack -i reads.fastq.gz -o n.svb                  # once per sample (plain or gzipped FASTQ)
 snape refidx -i hg38_parmask.fa -o hg38_parmask.cidx -t 32   # once per reference
+minimap2 -x sr -t 16 -d hg38_parmask.sr.mmi hg38_parmask.fa       # once per reference: short-read index for the gap stretches
 ./pipeline.sh <dir> <normal.svb> <tumor.svb> [threads]      # default 16 threads
 ```
 
@@ -103,7 +104,28 @@ Overlapping windows on a chromosome merge.
 **lift** moves the local alignments back to chromosome coordinates. A piece whose local alignments leave `EXPL` or more
 of its bases uncovered goes to genome-wide alignment instead (lift.more.fa).
 
-**call** (src/call.cpp, work in progress) turns the pieces' alignments into SV records at their sites.
+**clip** and **patch** (src/gaps.cpp) align the pieces' unaligned stretches on their own. A stretch of `MING` to `MAXG`
+bases between two alignments or at a clipped end is too short to survive as a supplementary alignment of a 15 kb piece,
+but on its own, in minimap2's short-read mode against `hg38_parmask.sr.mmi`, it places the partner breakpoint of a
+complex junction. clip writes the stretches as `ev.gaps.fa` (named `piece|start|end`), patch puts their alignments back
+in piece coordinates and appends them to the pieces' own alignments (`ev.paf`).
+
+**call** (src/call.cpp) measures every read of both samples across each site's anchors and turns the pieces'
+alignments into SV records under three rule sets, written as `calls.1.vcf`, `calls.2.vcf` and `calls.3.vcf`. It fetches
+each site's tumor read, measures the distance between the site's innermost anchors on it and keeps the sequence between
+them, then streams every read once; each read carrying a left and a right anchor of a site gives its distance, so every
+site gets per-sample counts of spanning, same-length (within `DSAME`), near, different and same-sequence reads plus the
+per-read length differences (`D0`, `D1` in INFO). Records come from the alignments: gaps of `MS` bases or more inside an
+alignment, and the jumps between consecutive alignments (DEL, INS, DUP, INV, BND); each is attached to a site within `ROW`
+bases in the piece, records of one event within `TOL` bases merge, and insertions of `NEAR` bases or more that copy the
+adjacent reference become tandem duplications. Rules shared by the three sets (thresholds of Severus, nanomonsv and
+Sniffles2): the normal has more than `NCOV` reads at the site and at most `CN` reads (`CVAF` of its spanning reads) at
+the tumor allele's length; the tumor has at least `MM` reads and `VAF` of its depth at it; the nearest normal allele is
+at least `MS` bases away; a site without anchors to measure needs Sniffles2's coverage-scaled support. Set 1 stops
+there. Sets 2 and 3 keep one record per site (the largest event). Set 2 keeps an event in a tandem repeat (`VB` bases of
+the TRF bed) only when the normal is clean there (at most `NC` length clusters, `NS` of its reads in the two largest, the
+site at most `SL` bases, `VAF2`, `MQ2`); set 3 drops every tandem-repeat event. Duplicates within `DUPT` bases (insertions
+by position) keep the record with more tumor reads.
 
 ## Constants
 

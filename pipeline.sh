@@ -1,6 +1,6 @@
 #!/bin/bash
 # pipeline.sh <dir> <normal.svb> <tumor.svb> [threads]: extract, count, graph, prune, select, place, local and fallback
-# alignment into <dir>. Each finished step leaves done.<step>, so a rerun continues where it stopped.
+# alignment, the pieces' unaligned stretches aligned on their own (clip, short-read mode, patch), and call into <dir>. Each finished step leaves done.<step>, so a rerun continues where it stopped.
 D=$1; N=$(realpath $2); T=$(realpath $3); P=${4:-16}; B=/home/yuio/snape/build/snape; R=/home/yuio/snape/ref
 mkdir -p $D; cd $D
 for s in n t; do f=$N; [ $s = t ] && f=$T; ln -sf $f $s.svb; ln -sf $f.idx $s.svb.idx; done
@@ -15,4 +15,9 @@ step local minimap2 -cx map-hifi --secondary=no -t $P -o local.paf ev.win.fa ev.
 step lift $B lift -i local.paf -r ev.on.fa -d $R/hg38_parmask.fa -o lift
 cat ev.off.fa lift.more.fa > rest.fa
 step rest minimap2 -cx map-hifi --secondary=no -t $P -o rest.paf $R/hg38_parmask.mmi rest.fa
-cat lift.paf rest.paf > ev.paf
+cat lift.paf rest.paf > aln.paf
+step clip $B clip -i ev -r aln.paf -o ev.gaps.fa
+step gaps minimap2 -cx sr --secondary=no -t $P -o ev.gaps.raw.paf $R/hg38_parmask.sr.mmi ev.gaps.fa
+cp aln.paf ev.paf
+step patch $B patch -i ev -r ev.gaps.raw.paf -o ev.paf
+step call $B call -i ev -r n.svb,t.svb -d $R/hg38_parmask.fa -g graph.gph -o calls -v $R/vntr.trf.bed -t $P
