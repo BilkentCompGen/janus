@@ -16,12 +16,6 @@ static uint32_t rank(const rdcore* r, uint32_t x) {
     return r->cum[x >> 5] + __builtin_popcountll(r->mk[x >> 5] & (i ? ~0ull << (64 - 2 * i) : 0));
 }
 
-size_t exc_size(const char* p, size_t n) {
-    if (n < 6) return 0;
-    size_t sz = (uint8_t)p[4] << 8 | (uint8_t)p[5];
-    return sz <= n ? sz : 0;
-}
-
 void collapse(rdcore* r, const uint8_t* rec) {
     uint32_t tag;
     std::memcpy(&tag, rec, 4);
@@ -29,7 +23,7 @@ void collapse(rdcore* r, const uint8_t* rec) {
     const uint8_t* q = rec + 4;
     if (tag >> 31) {
         r->raw.assign(nw * 8 + 8, 0);
-        for (uint32_t i = 0; i < len; i++) r->raw[i >> 2] |= CODE.t[q[i] & 0xdf] << (6 - 2 * (i & 3));
+        for (uint32_t i = 0; i < len; i++) r->raw[i >> 2] |= code(q[i]) << (6 - 2 * (i & 3));
         q = r->raw.data();
     }
     if (r->mk.size() < nw + 2) { r->rs.resize(nw + 2); r->mk.resize(nw + 2); r->cum.resize(nw + 2); }
@@ -72,6 +66,15 @@ void load_cores(rdcore* r, const uint8_t* u, int w) {
         r->b[i] = r->a[i] + l;
         prev = r->a[i];
     }
+}
+
+const uint8_t* next_read(rdcore* r, const block* b, size_t* o, size_t* e, int w) {
+    const uint8_t* rec = (const uint8_t*)b->in[0] + *o;
+    collapse(r, rec);
+    load_cores(r, (const uint8_t*)b->in[1] + *e, w);
+    *o += svb_size(b->in[0] + *o, b->inlen[0] - *o);
+    *e += exc_size(b->in[1] + *e, b->inlen[1] - *e);
+    return rec;
 }
 
 uint32_t core_cut(const rdcore* r, uint32_t i, uint64_t* out) {

@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <cstring>
 #include "files.h"
 #include "io.h"
 
@@ -22,8 +24,6 @@ void read_cnt(const char* path, cnt* x) {
         for (uint32_t d = rbits(bb.data(), &pos, h.resv[1]); d; d--) x->e.push_back(i << 32 | rbits(bb.data(), &q, h.resv[0]));
 }
 
-// Nodes are numbered in segment order: segment u holds nodes st[u] .. st[u+1]-1, joined by the internal edges v -> v+1.
-// On disk only the other (external) edges are listed; one novel flag per external edge and one per node for its internal edge.
 void read_gph(const char* path, gph* x) {
     bin_header h;
     FILE* f = open_in(path, &h);
@@ -57,7 +57,6 @@ void write_gph(const char* path, const gph* x) {
         if (in[x->e[i] >> 32]) ni[x->e[i] >> 32] = x->nv[i];
         else { ex.push_back(x->e[i]); nx.push_back(x->nv[i]); }
     FILE* fo = open_tmp(path);
-    std::fseek(fo, sizeof(bin_header), SEEK_SET);
     std::fwrite(&U, 8, 1, fo);
     std::fwrite(x->g.data(), 8, x->K, fo);
     std::fwrite(x->c.data(), 2, x->S * x->K, fo);
@@ -65,16 +64,17 @@ void write_gph(const char* path, const gph* x) {
     std::fwrite(ex.data(), 8, ex.size(), fo);
     std::fwrite(nx.data(), 1, nx.size(), fo);
     std::fwrite(ni.data(), 1, x->K, fo);
-    bin_header o = {{'S', 'V', 'B', 'G'}, 2, x->K, ex.size(), {(uint8_t)x->S}};
+    bin_header o = header('G', 2, x->K, ex.size());
+    o.resv[0] = x->S;
     finish(fo, path, &o);
 }
 
 void make_adj(const gph* x, adj* a) {
+    const uint64_t M = 0xffffffff;
     a->oo.assign(x->K + 1, 0);
     a->io.assign(x->K + 1, 0);
     a->on.resize(x->E);
     a->in.resize(x->E);
-    const uint64_t M = 0xffffffff, PF = 16;
     for (uint64_t i = 0; i < x->E; i++) {
         if (i + PF < x->E) __builtin_prefetch(&a->io[(x->e[i + PF] & M) + 1]);
         a->oo[(x->e[i] >> 32) + 1]++;
@@ -89,24 +89,18 @@ void make_adj(const gph* x, adj* a) {
     }
 }
 
-void masks(const gph* x, std::vector<uint64_t>& m) {
-    m.assign(x->K, 0);
-    for (uint64_t s = 0; s < x->S; s++) for (uint64_t v = 0; v < x->K; v++) m[v] |= (uint64_t)(x->c[s * x->K + v] > 0) << s;
-}
-
-std::vector<uint64_t> read_set(const char* path) {
-    bin_header h;
-    FILE* f = open_in(path, &h);
-    std::vector<uint64_t> v(h.nreads);
-    std::fread(v.data(), 8, h.nreads, f);
-    std::fclose(f);
-    return v;
-}
-
-void write_set(const char* path, const char* magic, const std::vector<uint64_t>& v, uint64_t aux) {
-    FILE* fo = open_tmp(path);
-    std::fseek(fo, sizeof(bin_header), SEEK_SET);
-    std::fwrite(v.data(), 8, v.size(), fo);
-    bin_header o = {{magic[0], magic[1], magic[2], magic[3]}, 1, v.size(), aux, {}};
-    finish(fo, path, &o);
+void read_fasta(const char* path, seqs* f) {
+    FILE* in = std::fopen(path, "r");
+    char* ln = nullptr;
+    size_t cap = 0;
+    for (ssize_t n; (n = getline(&ln, &cap, in)) > 0;) {
+        while (n && (ln[n - 1] == '\n' || ln[n - 1] == '\r')) n--;
+        if (ln[0] == '>') { f->name.push_back(std::string(ln + 1, std::strcspn(ln + 1, " \t\n"))); f->seq.push_back(""); }
+        else {
+            for (ssize_t i = 0; i < n; i++) ln[i] &= 0xdf;
+            f->seq.back().append(ln, n);
+        }
+    }
+    std::free(ln);
+    std::fclose(in);
 }

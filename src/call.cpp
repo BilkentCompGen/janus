@@ -32,7 +32,7 @@
 // mode 2 keeps one record per site (the largest event; a junction outranks the gaps next to it) when a site gives three or
 // more; mode 3 further asks VAF2 of the anchor depth (Sniffles2's coverage-scaled support at typical depth). Duplicates are
 // judged as the benchmark does: within DUPT bp at both ends, insertions by position; the record with more tumor reads stays.
-static const uint32_t MS = 50, MQ = 20, MM = 3, NCOV = 3, CN = 1, TOL = 50, ISL = 100, ROW = 200, DUPT = 500, NEAR = 500, KM = 15, DSAME = 20, ESAME = 20, NA = 3, NONE = ~0u;
+static const uint32_t MS = 50, MQ = 20, MM = 3, NCOV = 3, CN = 1, TOL = 50, ISL = 100, ROW = 200, DUPT = 500, NEAR = 500, KM = 15, DSAME = 20, ESAME = 20, NA = 3;
 static const float VAF = 0.05f, VAF2 = 0.10f, CVAF = 0.03f, EFRAC = 0.02f, ROT = 0.8f, UNQ = 1.25f;
 static const int32_t UNSET = INT32_MIN;
 

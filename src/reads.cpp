@@ -2,7 +2,7 @@
 #include "io.h"
 #include "reads.h"
 
-static const uint32_t X = 20;
+static const uint32_t X = 20; // edits at which two sequences stop being the same allele
 
 std::string bases(const rdcore* r, const uint8_t* rec, uint32_t lo, uint32_t hi, uint32_t rc) {
     const uint8_t* q = rec[3] >> 7 ? r->raw.data() : rec + 4;
@@ -14,15 +14,13 @@ std::string bases(const rdcore* r, const uint8_t* rec, uint32_t lo, uint32_t hi,
     return s;
 }
 
-static const uint32_t NONE = ~0u;
-
 void make_map(rpass* x) {
     uint64_t z = 1, n = x->g->size();
     while (z < n + n / 2) z <<= 1;
     x->tab.assign(z, {0, NONE});
     x->mask = z - 1;
     for (uint32_t v = 0; v < n; v++) {
-        if (v + 16 < n) __builtin_prefetch(&x->tab[(*x->g)[v + 16] & x->mask]);
+        if (v + PF < n) __builtin_prefetch(&x->tab[(*x->g)[v + PF] & x->mask]);
         uint64_t h = (*x->g)[v], i = h & x->mask;
         while (x->tab[i].h) i = (i + 1) & x->mask;
         x->tab[i] = {h, v};
@@ -60,10 +58,8 @@ static void rp_work(block* b) {
     rpass* x = (rpass*)b->ctx;
     rth* c = &x->t[b->id];
     uint64_t rid = b->rec;
-    for (size_t o = 0, o2 = 0; o < b->inlen[0]; o += svb_size(b->in[0] + o, b->inlen[0] - o), o2 += exc_size(b->in[1] + o2, b->inlen[1] - o2), rid++) {
-        const uint8_t* rec = (const uint8_t*)b->in[0] + o;
-        collapse(&c->r, rec);
-        load_cores(&c->r, (const uint8_t*)b->in[1] + o2, x->wb);
+    for (size_t o = 0, e = 0; o < b->inlen[0]; rid++) {
+        const uint8_t* rec = next_read(&c->r, b, &o, &e, x->wb);
         lookup(x, c);
         chains(x, c, rec, rid);
     }
@@ -77,35 +73,10 @@ void each_read(rpass* x, const std::vector<uint64_t>& g, const char* reads, int 
         bin_header h, e;
         FILE *fi = open_in(s.c_str(), &h), *fe = open_in((s + ".exc").c_str(), &e);
         x->wb = e.resv[1];
-        stream_run(fi, fe, fo, t, svb_size, exc_size, rp_work, x);
+        stream_run(fi, fe, fo, t, rp_work, x);
         x->f++;
     }
     std::fclose(fo);
-}
-
-void match(const fctx* f, rth* c, const uint8_t* rec, uint32_t m, uint32_t rc, int s) {
-    const rdcore* r = &c->r;
-    for (uint32_t i = 0; i < m; i++)
-        for (uint32_t q = f->fo[c->id[i]]; q < f->fo[c->id[i] + 1]; q++) {
-            want* a = &(*f->w)[f->fi[q]];
-            uint32_t n = a->p.size(), j = 0;
-            while (j < n && i + j < m && c->id[i + j] == a->p[j]) j++;
-            if (j < n || !(a->mask >> s & 1)) continue;
-            uint32_t st = r->a[c->ix[i]], en = r->b[c->ix[i + n - 1]], tg = std::max(a->pad, a->mul * (en - st)), lp = std::min(tg, st), rp = std::min(tg, r->len - en);
-            uint64_t sc = (uint64_t)(lp + rp + 1) << 32 | (uint32_t)(r->hs[0] ^ st ^ r->len);
-            if (sc <= __atomic_load_n(&a->score, __ATOMIC_RELAXED)) continue;
-            while (__atomic_exchange_n(&a->lk, 1, __ATOMIC_ACQUIRE));
-            if (sc > a->score) { a->score = sc; a->lp = lp; a->rp = rp; a->s = bases(r, rec, st - lp, en + rp, rc); }
-            __atomic_store_n(&a->lk, 0, __ATOMIC_RELEASE);
-        }
-}
-
-void wanted(fctx* f, std::vector<want>& w, uint64_t K) {
-    *f = {&w, std::vector<uint32_t>(K + 1), std::vector<uint32_t>(w.size())};
-    for (want& a : w) f->fo[a.p[0] + 1]++;
-    for (uint32_t i = 0; i < K; i++) f->fo[i + 1] += f->fo[i];
-    std::vector<uint32_t> p(f->fo.begin(), f->fo.end() - 1);
-    for (uint32_t i = 0; i < w.size(); i++) f->fi[p[w[i].p[0]]++] = i;
 }
 
 static uint32_t edit(const char* x, uint32_t n, const char* y, uint32_t m) {
