@@ -107,8 +107,8 @@ of its bases uncovered goes to genome-wide alignment instead (lift.more.fa).
 **clip** and **patch** (src/gaps.cpp) align the pieces' unaligned stretches on their own. A stretch of `MING` to `MAXG`
 bases between two alignments or at a clipped end is too short to survive as a supplementary alignment of a 15 kb piece,
 but on its own, in minimap2's short-read mode against `hg38_parmask.sr.mmi`, it places the partner breakpoint of a
-complex junction. clip writes the stretches as `ev.gaps.fa` (named `piece|start|end`), patch puts their alignments back
-in piece coordinates and appends them to the pieces' own alignments (`ev.paf`).
+complex junction. clip writes the stretches as `ev.gaps.fa` (named `piece|start|end`), patch writes the pieces' own alignments (`aln.paf`) and then
+theirs, back in piece coordinates, as `ev.paf`.
 
 **call** (src/call.cpp) measures every read of both samples across each site's anchors and turns the pieces'
 alignments into SV records under three rule sets, written as `calls.1.vcf`, `calls.2.vcf` and `calls.3.vcf`. It fetches

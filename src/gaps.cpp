@@ -42,20 +42,20 @@ int cmd_clip(const char* in, const char* paf, const char* out) {
     return 0;
 }
 
-// patch: the stretches' alignments back in piece coordinates (query name, length, start, end), appended to the pieces' own
-int cmd_patch(const char* in, const char* paf, const char* out) {
+// patch: the pieces' own alignments (own), then the stretches' alignments back in piece coordinates (query name, length,
+// start, end)
+int cmd_patch(const char* in, const char* paf, const char* own, const char* out) {
     seqs f;
     read_fasta((std::string(in) + ".fa").c_str(), &f);
     std::map<std::string, uint32_t> len;
     for (size_t i = 0; i < f.name.size(); i++) len[f.name[i]] = f.seq[i].size();
     FILE* fo = std::fopen(out, "w");
-    for (const char* src : {in, paf}) {
-        std::string p = src == in ? std::string(in) + ".paf" : std::string(paf);
-        FILE* fi = std::fopen(p.c_str(), "r");
+    for (const char* src : {own, paf}) {
+        FILE* fi = std::fopen(src, "r");
         char* ln = nullptr;
         size_t cap = 0;
         for (ssize_t n; (n = getline(&ln, &cap, fi)) > 0;) {
-            if (src == in) { std::fputs(ln, fo); continue; }
+            if (src == own) { std::fputs(ln, fo); continue; }
             char q[300];
             unsigned qs, qe;
             int k;

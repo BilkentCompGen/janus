@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
     if (!std::strcmp(c, "place")) return cmd_place(in, rd, dr, out, t);
     if (!std::strcmp(c, "lift")) return cmd_lift(in, rd, dr, out);
     if (!std::strcmp(c, "clip")) return cmd_clip(in, rd, out);
-    if (!std::strcmp(c, "patch")) return cmd_patch(in, rd, out);
+    if (!std::strcmp(c, "patch")) return cmd_patch(in, rd, dr, out);
     if (!std::strcmp(c, "call")) return cmd_call(in, rd, dr, gp, out, vb, t);
     std::printf("usage: snape <pack|extract|count|graph|prune|select|refidx|place|lift|clip|patch|call> -i in|ev -o out [-r reads|index|pieces] [-d sites|ref.fa] [-t threads] [-g graph] [-v vntr.bed]\n");
     return 1;

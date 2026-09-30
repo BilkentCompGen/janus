@@ -18,6 +18,5 @@ step rest minimap2 -cx map-hifi --secondary=no -t $P -o rest.paf $R/hg38_parmask
 cat lift.paf rest.paf > aln.paf
 step clip $B clip -i ev -r aln.paf -o ev.gaps.fa
 step gaps minimap2 -cx sr --secondary=no -t $P -o ev.gaps.raw.paf $R/hg38_parmask.sr.mmi ev.gaps.fa
-cp aln.paf ev.paf
-step patch $B patch -i ev -r ev.gaps.raw.paf -o ev.paf
+step patch $B patch -i ev -r ev.gaps.raw.paf -d aln.paf -o ev.paf
 step call $B call -i ev -r n.svb,t.svb -d $R/hg38_parmask.fa -g graph.gph -o calls -v $R/vntr.trf.bed -t $P
