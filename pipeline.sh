@@ -5,7 +5,7 @@
 D=$1; N=$(realpath $2); T=$(realpath $3); P=${4:-16}; B=/home/yuio/snape/build/snape; R=/home/yuio/snape/ref
 mkdir -p $D; cd $D
 step() { n=$1; shift; [ -e done.$n ] && return; /usr/bin/time -f "$n %e s %M KB %U user %S sys" "$@" > log.$n 2>&1 || exit 1; tail -1 log.$n >> steps.txt; touch done.$n; }
-for s in n t; do f=$N; [ $s = t ] && f=$T; step pack_$s $B pack -i $f -o $s.svb -t $P; done
+for s in n t; do f=$N; [ $s = t ] && f=$T; step pack_$s $B pack -i $f -o $s.svb -t $P ${BASES:+-b $BASES}; done
 for s in n t; do step extract_$s $B extract -i $s.svb -o $s.svb.exc -t $P; done
 for s in n t; do step count_$s $B count -i $s.svb -o $s.cnt -t $P; done
 step graph $B graph -i n.cnt,t.cnt -o graph.gph

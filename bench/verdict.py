@@ -1,6 +1,6 @@
 # verdict.py [first seed]: held-out verdict of record. For each pair, boosted trees (5 seeds averaged) are fitted on the
 # other four pairs' calls.vcf records (labels: match to the no-snape consensus, NIST for hg008), the cut is chosen on those pairs,
-# every record of the held-out pair is scored, and duplicates within 500 bp are marked by the probability. Reads bench/runs/<pair>/calls.vcf, writes bench/verdict/<pair>.vcf.
+# every record of the held-out pair is scored, and duplicates within 500 bp are marked by the probability. Reads bench/runs/full/<pair>/calls.vcf, writes bench/verdict/<pair>.vcf.
 import sys, numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 exec(open("/home/yuio/snape/bench/score.py").read().split("T, C = recs")[0])
@@ -10,7 +10,7 @@ NIST = "/home/yuio/snape/hifi/truth/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar
 
 def records(p):
     L, X, K, R = [], [], [], []
-    for l in open(f"{H}/runs/{p}/calls.vcf"):
+    for l in open(f"{H}/runs/full/{p}/calls.vcf"):
         if l[0] == "#": continue
         f = l.split("\t"); info = dict(kv.split("=", 1) for kv in f[7].split(";") if "=" in kv); m = ALT.search(f[4])
         K.append((f[0], m.group(1) if m else f[0], int(f[1]), int(m.group(2)) if m else int(f[1]) + int(info["SVLEN"]), info["SVTYPE"], info["O"]))
@@ -40,6 +40,6 @@ for p in D:
     pt = np.mean([m.predict_proba(Xt)[:, 1] for m in ms], 0); cut = max(np.arange(0.2, 0.81, 0.05), key=lambda c: 2 * ((pt >= c) & (yt > 0)).sum() / max((pt >= c).sum() + (yt > 0).sum(), 1))
     L, X, K = D[p][0], D[p][1], D[p][2]; pr = np.mean([m.predict_proba(X)[:, 1] for m in ms], 0); d = mark(K, pr)
     with open(f"{H}/verdict/{p}.vcf", "w") as o:
-        o.write("".join(l for l in open(f"{H}/runs/{p}/calls.vcf") if l[0] == "#"))
+        o.write("".join(l for l in open(f"{H}/runs/full/{p}/calls.vcf") if l[0] == "#"))
         for l, q, u in zip(L, pr, d): f = l.split("\t"); f[6] = "DUPL" if u else "PASS" if q >= cut else "LOW"; o.write("\t".join(f))
     print(p, "held-out PASS", int(((pr >= cut) & ~d).sum()), "cut %.2f" % cut, "DUPL", int(d.sum()))

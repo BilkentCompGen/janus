@@ -107,7 +107,21 @@ static void encode(pblock* b) {
     }
 }
 
-int cmd_pack(const char* in, const char* out, int t) {
+// keep(b, room): how many of block b's records fit when at most `room` more bases may be written, the record that
+// reaches the limit included; their bytes and bases and the longest of them go to *bytes, *bases, *mx
+static size_t keep(const pblock* b, uint64_t room, size_t* bytes, uint64_t* bases, uint64_t* mx) {
+    size_t k = 0, at = 0; *bases = *mx = 0;
+    while (k < b->size.size() && *bases < room) {
+        uint32_t tag; std::memcpy(&tag, &b->out[at], 4);
+        uint64_t L = tag & 0x7fffffffu;
+        *bases += L; *mx = std::max(*mx, L); at += b->size[k++];
+    }
+    *bytes = at;
+    return k;
+}
+
+// maxb > 0: stop after the first maxb bases (whole reads, in input order; the read that reaches maxb is the last one)
+int cmd_pack(const char* in, const char* out, int t, uint64_t maxb) {
     t = std::max(1, t);
     for (int c = 0; c < 256; c++) { ENC[c] = code(c); BAD[c] = code(c) == 3 && (c & 0xdf) != 'T'; }
     // decoding takes ~90 % of the CPU (one encoder does ~4 GB of text per second), so gzip gets all t threads and
@@ -117,7 +131,7 @@ int cmd_pack(const char* in, const char* out, int t) {
     std::string x = std::string(out) + ".idx";
     FILE *fo = open_tmp(out), *fx = open_tmp(x.c_str());
     std::mutex m; std::condition_variable cv;
-    std::deque<pblock*> todo, pool; std::map<uint64_t, pblock*> done; bool fed = false; uint64_t made = 0;
+    std::deque<pblock*> todo, pool; std::map<uint64_t, pblock*> done; bool fed = false, stop = false; uint64_t made = 0;
     const size_t MAXQ = (size_t)et + 4;   // blocks in flight: bounds memory at about MAXQ x CHUNK x 1.2
     auto alloc = [](size_t head, size_t cap) { return (char*)std::aligned_alloc(AL, head + cap + AL); };
     for (size_t i = 0; i < MAXQ; i++) pool.push_back(new pblock{0, alloc(HEAD, CHUNK), HEAD, CHUNK, nullptr, 0, {}, {}, 0, 0});
@@ -126,7 +140,11 @@ int cmd_pack(const char* in, const char* out, int t) {
         std::vector<char> carry;
         for (bool eof = false; !eof;) {
             pblock* b;
-            { std::unique_lock<std::mutex> l(m); cv.wait(l, [&] { return !pool.empty(); }); b = pool.front(); pool.pop_front(); }
+            {
+                std::unique_lock<std::mutex> l(m); cv.wait(l, [&] { return !pool.empty() || stop; });
+                if (stop) break;
+                b = pool.front(); pool.pop_front();
+            }
             if (carry.size() > b->head) {   // a record longer than HEAD: give this block more room in front
                 std::free(b->buf); b->head = (carry.size() + AL) / AL * AL * 2; b->buf = alloc(b->head, b->cap);
             }
@@ -171,14 +189,21 @@ int cmd_pack(const char* in, const char* out, int t) {
             if (!done.count(id)) break;
             b = done[id]; done.erase(id);
         }
+        size_t k = b->size.size(), bytes = b->out.size(); uint64_t bb = b->bases, bm = b->mx;
+        bool last = maxb && tot + b->bases >= maxb;
+        if (last) k = keep(b, maxb - tot, &bytes, &bb, &bm);
         off.clear();
-        for (uint32_t s : b->size) { off.push_back(pos); pos += s; }
+        for (size_t i = 0; i < k; i++) { off.push_back(pos); pos += b->size[i]; }
         std::fwrite(off.data(), 8, off.size(), fx);
-        std::fwrite(b->out.data(), 1, b->out.size(), fo);
-        nr += b->size.size(); tot += b->bases; mx = std::max(mx, b->mx);
-        std::lock_guard<std::mutex> l(m); pool.push_back(b); cv.notify_all();
+        std::fwrite(b->out.data(), 1, bytes, fo);
+        nr += k; tot += bb; mx = std::max(mx, bm);
+        std::lock_guard<std::mutex> l(m); pool.push_back(b);
+        if (last) stop = true;   // the reader stops taking blocks; the encoders finish what was read
+        cv.notify_all();
+        if (last) break;
     }
     reader.join(); for (auto& w : ws) w.join();
+    for (auto& d : done) pool.push_back(d.second);   // blocks encoded after the stop
     for (pblock* b : pool) { std::free(b->buf); delete b; }
     std::fwrite(&pos, 8, 1, fx);
     bin_header ho = header('1', 1, nr, tot), hx = header('I', 1, nr, mx);

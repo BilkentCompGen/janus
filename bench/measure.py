@@ -2,7 +2,8 @@
 # measure.py <run dir>: turns one pair's run (bench/run.sh) into structured measurements, written next to calls.vcf:
 #   steps.tsv  per step (run.json also has each step's own report lines, e.g. reads and bases from pack): start/end (unix s), wall s, peak RSS KiB, user s, sys s, CPU s (user+sys), drive read/written GB,
 #              mean drive utilization %, max drive composite / controller temperature and CPU Tctl (C)
-#   files.tsv  every file the run produced, with its size in bytes and whether it is kept (calls.vcf, logs) or moved to trash
+#   files.tsv  every file the run produced, with its size in bytes and whether it is kept (calls.vcf, logs), moved to
+#              trash or deleted (coverage runs)
 #   run.json   the pair, how it was run (note.txt, if any), machine, code commit, totals (wall, peak RSS, user, sys, CPU s, drive I/O, temperatures), the steps
 #              and the file sizes, all in one file
 # Sources: work/steps.txt (pipeline.sh's /usr/bin/time per step), work/done.<step> modification times (step ends),
@@ -82,6 +83,7 @@ total["read_gb"], total["written_gb"], total["util_pct"], total["drive_c"], tota
 
 files = sorted(((os.path.getsize(p), os.path.relpath(p, W)) for p in glob.glob(os.path.join(W, "*")) if os.path.isfile(p)), reverse=True)
 files = [dict(file=f, bytes=b, kept=f in KEEP or f.startswith("log.")) for b, f in files if not f.startswith("done.")]
+GONE = "deleted" if os.path.exists(os.path.join(M, "params.json")) and json.load(open(os.path.join(M, "params.json"))).get("intermediates") == "deleted" else "trash"
 total["intermediate_gb"] = round(sum(f["bytes"] for f in files) / 1e9, 2)
 
 cols = ["step", "start", "end", "wall_s", "peak_rss_kib", "user_s", "sys_s", "cpu_s", "read_gb", "written_gb", "util_pct",
@@ -92,9 +94,13 @@ with open(os.path.join(D, "steps.tsv"), "w") as o:
         o.write("\t".join("" if s.get(c) is None else str(s[c]) for c in cols) + "\n")
 with open(os.path.join(D, "files.tsv"), "w") as o:
     o.write("file\tbytes\tkept\n")
-    for f in files: o.write(f"{f['file']}\t{f['bytes']}\t{'yes' if f['kept'] else 'trash'}\n")
+    for f in files: o.write(f"{f['file']}\t{f['bytes']}\t{'yes' if f['kept'] else GONE}\n")
 
-S = "/home/yuio/snape"; pair = os.path.basename(D)
+S = "/home/yuio/snape"
+# the run's parameters, written by run.sh into monitor/params.json: experiment, pair, coverage, base limit, what happened to
+# the intermediates (trash or deleted); a run without that file is a full run of the pair named by its folder
+P = json.load(open(os.path.join(M, "params.json"))) if os.path.exists(os.path.join(M, "params.json")) else {}
+pair = P.get("pair", os.path.basename(D))
 reads = {s: dict(file=os.path.realpath(f"{S}/hifi/{pair}/{s}.fastq.gz"), bytes=os.path.getsize(f"{S}/hifi/{pair}/{s}.fastq.gz")) for s in "nt"}
 for st in steps:                                     # read and base counts from pack's report
     if st["step"] in ("pack_n", "pack_t"):
@@ -105,7 +111,7 @@ cpu = next((l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.start
 mem = int(next(l.split()[1] for l in open("/proc/meminfo") if l.startswith("MemTotal")))
 commit = subprocess.run(["git", "-C", S, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
 note = open(os.path.join(M, "note.txt")).read().strip() if os.path.exists(os.path.join(M, "note.txt")) else ""
-json.dump(dict(pair=pair, commit=commit, note=note, started=datetime.datetime.fromtimestamp(start).isoformat(timespec="seconds"),
+json.dump(dict(pair=pair, run=os.path.basename(D), params=P, commit=commit, note=note, started=datetime.datetime.fromtimestamp(start).isoformat(timespec="seconds"),
                threads=16, cores="taskset 0-15", machine=dict(cpu=cpu, mem_kib=mem, kernel=platform.release()),
                reads=reads, total=total, steps=steps, files=files),
           open(os.path.join(D, "run.json"), "w"), indent=1)
