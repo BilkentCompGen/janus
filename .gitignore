@@ -66,10 +66,19 @@ paper/measure/out/
 # side builds (make BUILD=build4 ...) used to keep a variant binary next to the main one
 /build*/
 
-# benchmark outputs (the harness scripts in bench/ are tracked), and the reference data (hg38 fasta, minimap2 index,
-# core index, VNTR bed)
-/bench/out/
-/bench/runs/
+# benchmark outputs (bench/README.md): the scripts are tracked, and of the runs only the structured measurements
+# (run.json, steps.tsv, files.tsv, note.txt); calls, logs, monitors, verdict and evaluation outputs stay local.
+# Also the reference data (hg38 fasta, minimap2 index, core index, VNTR bed).
+/bench/runs/*/*
+!/bench/runs/*/run.json
+!/bench/runs/*/steps.tsv
+!/bench/runs/*/files.tsv
+!/bench/runs/*/note.txt
+/bench/runs/queue.log
+/bench/eval/
+/bench/verdict/
+/bench/callers/*
+!/bench/callers/*.sh
 /ref/
 
 # figure scripts cache the tables they computed from the runs; the scripts rebuild them

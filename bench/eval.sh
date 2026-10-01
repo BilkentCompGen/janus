@@ -1,10 +1,11 @@
 #!/bin/bash
-# eval.sh <pair> <vcf> <tag>: PASS-only, then (A) fair minda with snape as 5th HiFi voter (NIST truthset for hg008)
-# and (B) our scorer against minda_4_2_ws (CASTLE consensus without Severus), snape and Severus HiFi side by side
-p=$1; V=$2; tag=$3; E=/home/yuio/snape/bench/out; O=$E/$p.$tag; mkdir -p $E
+# eval.sh <pair> <vcf> <name>: PASS records only, scored into bench/eval/<pair>/<name>{.vcf,.log,/}. HG008: minda truthset mode
+# against NIST. CASTLE pairs: (A) minda ensemble with the vcf as the fifth HiFi member of the CASTLE consensus rule (the
+# fair rule) and (B) score.py against the CASTLE consensus without Severus, the vcf and Severus HiFi side by side.
+p=$1; V=$2; tag=$3; E=/home/yuio/snape/bench/eval/$p; O=$E/$tag; mkdir -p $E
 grep -E '^#|PASS' $V > $O.vcf
 B=/home/yuio/snape/hifi/castle-calls/variant_calls_and_benchmarks; M=/home/yuio/.local/bin/minda
-[ -e $O ] && { T=/home/yuio/trash/$(date +%Y%m%d)-bench-out; mkdir -p $T; mv $O $T/$(basename $O).$(date +%H%M%S%N); }
+[ -e $O ] && { T=/home/yuio/trash/$(date +%Y%m%d)-bench-eval; mkdir -p $T; mv $O $T/$p.$tag.$(date +%H%M%S%N); }
 if [ $p = hg008 ]; then
   $M truthset --base /home/yuio/snape/hifi/truth/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar_PASS.draftbenchmark.vcf.gz --vcfs $O.vcf --min_size 50 --tolerance 500 --out_dir $O > $O.log 2>&1
   awk -F'\t' 'NR==2{printf "%s\t%s\tA_nist\tF1 %.4f\tR %.4f\tP %.4f\n","'$p'","'$tag'",$7,$6,$5}' $O/results/overall.tsv

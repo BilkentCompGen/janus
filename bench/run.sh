@@ -1,9 +1,31 @@
-#!/bin/bash
-# run.sh <run dir> <snape binary> [first seed] [select root with <pair>/ev.{tsv,paf,fa}]: call on the five pairs' select outputs, held-out verdict, fair evaluation.
-# Writes <run dir>/<pair>/{calls,verdict}.vcf, evaluation files in bench/out/, and one summary line to <run dir>/summary.txt.
-d=$(realpath -m $1); B=$2; s=${3:-0}; A=${4:-/home/yuio/tmp/snape-castle/accepted3/castle-bench}; H=/home/yuio/snape/bench; mkdir -p $d
-for p in hcc1954 hcc1937 hg008 h1437 h2009; do mkdir -p $d/$p; (cd $A/$p && nice -n 5 $B call -i ev.paf -r ev.tsv -d /home/datasets/references/genomes/hg38/hg38.fa -o $d/$p/calls.vcf -v /home/yuio/snape/ref/vntr.trf.bed > $d/$p/call.log 2>&1) & done; wait
-OMP_NUM_THREADS=8 nice /home/yuio/snape/.venv-ml/bin/python $H/verdict.py $d $s > $d/verdict.log 2>&1
-t=$(basename $d)_s$s
-for p in hcc1954 hcc1937 hg008 h1437 h2009; do nice $H/eval.sh $p $d/$p/verdict.vcf $t > $d/$p/eval.txt 2>&1 & done; wait
-cat $d/*/eval.txt | grep -E 'A_fair|A_nist' | awk -v t=$t '{f[$1]=$5} END {printf "%s hcc1954 %.4f hg008 %.4f h2009 %.4f h1437 %.4f hcc1937 %.4f mean %.4f\n", t, f["hcc1954"], f["hg008"], f["h2009"], f["h1437"], f["hcc1937"], (f["hcc1954"]+f["hg008"]+f["h2009"]+f["h1437"]+f["hcc1937"])/5}' | tee -a $d/summary.txt
+#!/usr/bin/env bash
+# run.sh [pair ...]: snape end to end on each pair, one pair after the other with no pause, from hifi/<pair>/{n,t}.fastq.gz
+# to calls.vcf (pipeline.sh unchanged, 16 threads, pinned to cores 0-15). Per pair, in bench/runs/<pair>/:
+#   calls.vcf            the calls (all the verdict and the evaluation need)
+#   run.json             every measurement in one file (see measure.py); steps.tsv and files.tsv are the same as tables
+#   logs/                each step's own output
+#   monitor/             the raw samples: pidstat (2 s, per snape/minimap2 process), iostat, vmstat, temperatures (5 s)
+# The intermediates (svbs, counts, graph, alignments) are measured, then moved to ~/trash. Trash is on the same drive, so
+# a pair waits while less than 400 GB is free (empty ~/trash to let it go on). Finished pairs (run.json present) are skipped.
+S=/home/yuio/snape; H=$S/bench; Q=$H/runs/queue.log
+PAIRS="${*:-h2009 hcc1937 h1437 hg008 hcc1395 colo829 hg009 h209 h2126}"
+log() { echo "$(date '+%F %T') $*" >> $Q; }
+for p in $PAIRS; do
+    D=$H/runs/$p; [ -s $D/run.json ] && { log "[$p] done before"; continue; }
+    while [ $(df --output=avail -B1G $S | tail -1) -lt 400 ]; do log "[$p] waiting: under 400 GB free (empty ~/trash)"; sleep 600; done
+    mkdir -p $D/work $D/monitor $D/logs; log "[$p] start"
+    pidstat -h -r -u -d -C 'snape|minimap2' 2 >> $D/monitor/pidstat.txt 2>&1 & m1=$!
+    iostat -dxm -t nvme0n1 5 >> $D/monitor/iostat.txt 2>&1 & m2=$!
+    vmstat -t 5 >> $D/monitor/vmstat.txt 2>&1 & m3=$!
+    ( while :; do echo "$(date +%s) $(cat /sys/class/hwmon/hwmon1/temp1_input) $(cat /sys/class/hwmon/hwmon1/temp3_input) $(sensors 2>/dev/null | awk '/Tctl/{print $2}')"; sleep 5; done ) >> $D/monitor/temp.txt & m4=$!
+    [ -s $D/start.txt ] || date +%s.%N > $D/start.txt
+    /usr/bin/time -f "total %e s wall %M KB peak %U s user %S s sys %I fs-in-blocks %O fs-out-blocks %x exit" \
+        taskset -c 0-15 bash $S/pipeline.sh $D/work $S/hifi/$p/n.fastq.gz $S/hifi/$p/t.fastq.gz 16 2> $D/total.txt
+    kill $m1 $m2 $m3 $m4 2>/dev/null; wait $m1 $m2 $m3 $m4 2>/dev/null
+    [ -s $D/work/calls.vcf ] && [ -e $D/work/done.call ] || { log "[$p] FAILED: $(tail -1 $D/total.txt)"; continue; }
+    python3 $H/measure.py $D >> $Q 2>&1 || { log "[$p] measure.py failed, intermediates left in place"; continue; }
+    mv $D/work/calls.vcf $D/; mv $D/work/log.* $D/logs/
+    T=/home/yuio/trash/$(date +%Y%m%d)-runs/$p; mkdir -p $(dirname $T); mv $D/work $T
+    log "[$p] done, intermediates in $T"
+done
+log "queue done"
