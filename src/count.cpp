@@ -7,7 +7,6 @@
 #include "core.h"
 #include "io.h"
 
-static const uint32_t MM = 3; // occurrences a core needs to become a node
 static const uint32_t MARGIN = 10; // cores closer than this to either read end are not counted
 static const uint32_t NS = 65536; // table shards, one per value of the hash's top 16 bits
 static const uint64_t ZDIV = 24; // table size estimate: one slot per ZDIV core occurrences of the .exc

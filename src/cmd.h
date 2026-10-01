@@ -1,6 +1,11 @@
 #pragma once
 #include <cstdint>
 
+// reads (or occurrences) that count as support: a core's occurrences to become a node (count), a tumor's reads on a
+// novel edge (graph) and on a site's combination (prune), a record's tumor reads and a sample's 0/1 genotype (call).
+// 3 by default; -m sets it for a run (e.g. 2 at low coverage). The same for every sample.
+extern uint32_t MM;
+
 int cmd_pack(const char* fastq, const char* out, int t, uint64_t maxb);
 int cmd_extract(const char* reads, const char* out, int t);
 int cmd_count(const char* reads, const char* out, int t);

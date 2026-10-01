@@ -140,14 +140,12 @@ PASS from `F=`.
 |---|---|---|---|
 | LEV | 5 | extract.h | LCP level of the cores |
 | W | LEV + 4 = 9 | extract.cpp | bits of a core's start delta and length in exc |
-| MM | 3 | count.cpp | occurrences a core needs to become a node |
+| MM | 3 (-m) | main.cpp, cmd.h | support reads: a core's occurrences to become a node (count), a tumor's reads on a novel edge (graph) and on a site's combination (prune), a record's tumor reads and a sample's 0/1 genotype (call); the same for every sample; `snape -m`, `MINREADS=` in pipeline.sh |
 | MARGIN | 10 | count.cpp | cores closer than this to a read end are not counted |
 | NS | 65536 | count.cpp | shards of the core table (top 16 hash bits) |
 | ZDIV, ZADD, ZPAD | 24, 120000000, 64 | count.cpp | core table size: total cores / ZDIV + ZADD slots, plus ZPAD per shard; the pair table is 5/4 of it |
-| MM | 3 | graph.cpp | tumor reads an edge the normal lacks needs to be novel |
 | WK | 16 | graph.cpp | segment walks run side by side |
 | ML | 4 | prune.cpp | longest tip; bubble arms are traced up to ML + 1 nodes |
-| MM | 3 | prune.cpp | tumor reads a combination the normal lacks needs to be a site |
 | X | 20 | reads.cpp | edits at which two bubble arms stop being the same allele |
 | ZF | 16 | keys.cpp | combination table slots per possible combination (power of two) |
 | PAD | 1000 | select.cpp | least flank on each side of a site |

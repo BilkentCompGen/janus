@@ -27,7 +27,7 @@
 // tandem duplications. Every record gets NF features from the measurements, the reference repeat content in WIN bp,
 // the tandem-repeat bed, and the alignment; its error probability is a logistic with weights W0 and PASS is the PCUT
 // cut; duplicates within DUPT bp keep the likelier record. The verdict (bench/verdict.py) reads the F= features.
-static const uint32_t MS = 50, MQ = 10, MM = 3, TOL = 50, NEAR = 500, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500, KM = 15, DSAME = 20, SAME = 20, NA = 3, CL = 3;
+static const uint32_t MS = 50, MQ = 10, TOL = 50, NEAR = 500, ISL = 100, ROW = 200, WIN = 150, NF = 36, DUPT = 500, KM = 15, DSAME = 20, SAME = 20, NA = 3, CL = 3;
 static const float PCUT = 0.5f, ROT = 0.8f, UNQ = 1.25f, W0[NF] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const int32_t UNSET = INT32_MIN;
 

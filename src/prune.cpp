@@ -7,7 +7,6 @@
 #include "keys.h"
 
 static const uint32_t ML = 4; // longest tip removed, in nodes; bubble arms are traced up to ML + 1 nodes
-static const uint32_t MM = 3; // reads a tumor needs on a combination the normal lacks for it to be a site
 
 struct want { std::vector<uint32_t> p; bool v; uint64_t score; uint8_t lk; std::string s; };
 
