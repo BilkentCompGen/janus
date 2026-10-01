@@ -67,13 +67,12 @@ paper/measure/out/
 /build*/
 
 # benchmark outputs (bench/README.md): the scripts are tracked, and of the runs only the structured measurements
-# (run.json, steps.tsv, files.tsv, note.txt); calls, logs, monitors, verdict and evaluation outputs stay local.
+# (run.json, steps.tsv, files.tsv); calls, logs, monitors, verdict and evaluation outputs stay local.
 # Also the reference data (hg38 fasta, minimap2 index, core index, VNTR bed).
 /bench/runs/*/*
 !/bench/runs/*/run.json
 !/bench/runs/*/steps.tsv
 !/bench/runs/*/files.tsv
-!/bench/runs/*/note.txt
 /bench/runs/queue.log
 /bench/eval/
 /bench/verdict/

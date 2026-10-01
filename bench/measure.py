@@ -6,10 +6,12 @@
 #   run.json   the pair, how it was run (note.txt, if any), machine, code commit, totals (wall, peak RSS, user, sys, CPU s, drive I/O, temperatures), the steps
 #              and the file sizes, all in one file
 # Sources: work/steps.txt (pipeline.sh's /usr/bin/time per step), work/done.<step> modification times (step ends),
-# start.txt / total.txt (the runner's /usr/bin/time of the whole pipeline), monitor/{iostat,vmstat,temp}.txt.
+# monitor/start.txt, total.txt (the runner's /usr/bin/time of the whole pipeline), note.txt, iostat, vmstat, temp.
 import sys, os, re, json, glob, datetime, subprocess, platform
 
 D = os.path.abspath(sys.argv[1]); W = os.path.join(D, "work"); M = os.path.join(D, "monitor")
+for f in ("start.txt", "total.txt", "note.txt"):   # the runner's raw files: in the pair folder during a run, in monitor/ after
+    if os.path.exists(os.path.join(D, f)): os.replace(os.path.join(D, f), os.path.join(M, f))
 KEEP = {"calls.vcf"}
 
 def iostat():
@@ -65,9 +67,9 @@ for l in open(os.path.join(W, "steps.txt")):
     steps.append(s)
 prev = steps[-1]["end"]
 
-if os.path.exists(os.path.join(D, "total.txt")):
-    start = float(open(os.path.join(D, "start.txt")).read())
-    tot = open(os.path.join(D, "total.txt")).read().split()  # total <wall> s wall <KB> KB peak <user> s user <sys> s sys ...
+if os.path.exists(os.path.join(M, "total.txt")):
+    start = float(open(os.path.join(M, "start.txt")).read())
+    tot = open(os.path.join(M, "total.txt")).read().split()  # total <wall> s wall <KB> KB peak <user> s user <sys> s sys ...
     total = dict(wall_s=float(tot[1]), peak_rss_kib=int(tot[4]), user_s=float(tot[7]), sys_s=float(tot[10]))
 else:                                                # a run made step by step (paused between steps): totals of the steps
     start = steps[0]["start"]
@@ -102,7 +104,7 @@ for st in steps:                                     # read and base counts from
 cpu = next((l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name")), "")
 mem = int(next(l.split()[1] for l in open("/proc/meminfo") if l.startswith("MemTotal")))
 commit = subprocess.run(["git", "-C", S, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
-note = open(os.path.join(D, "note.txt")).read().strip() if os.path.exists(os.path.join(D, "note.txt")) else ""
+note = open(os.path.join(M, "note.txt")).read().strip() if os.path.exists(os.path.join(M, "note.txt")) else ""
 json.dump(dict(pair=pair, commit=commit, note=note, started=datetime.datetime.fromtimestamp(start).isoformat(timespec="seconds"),
                threads=16, cores="taskset 0-15", machine=dict(cpu=cpu, mem_kib=mem, kernel=platform.release()),
                reads=reads, total=total, steps=steps, files=files),
