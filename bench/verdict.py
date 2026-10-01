@@ -1,8 +1,8 @@
 # verdict.py [first seed]: the verdict, a learned component (boosted trees), always applied held out.
-# Training pairs (CASTLE x4, HG008): for each one, trees (5 seeds averaged) are fitted on the records of the other training
-# pairs (all records pooled), the cut on the probability is the one with the best F1 over those records, and the held-out
-# pair is scored. Evaluation pairs (HCC1395, COLO829: truth sets that are incomplete, so they are scored but never trained
-# on) and unlabeled pairs are scored by trees fitted on all five training pairs, with the cut chosen the same way.
+# Labeled pairs (CASTLE x4, HG008, COLO829): for each one, trees (5 seeds averaged) are fitted on the records of the other
+# labeled pairs (all records pooled), the cut on the probability is the one with the best F1 over those records, and the
+# held-out pair is scored. Pairs without a truth set (HG009, NCI-H209, NCI-H2126) are scored by trees fitted on all six.
+# HCC1395 is left out: its truth set (SEQC2) disagrees with every long-read caller (Feng et al. 2025), see bench/README.md.
 # Labels: a record is true when it matches a truth event (score.py). bench/verdict/folds.json keeps, per scored pair, the
 # training pairs, the cut, the training and inference times, and every record's probability and label.
 # Duplicates within 500 bp are marked by the probability. Reads bench/runs/full/<pair>/calls.vcf, writes
@@ -13,9 +13,9 @@ exec(open("/home/yuio/snape/bench/score.py").read().split("T, C = recs")[0])
 H = "/home/yuio/snape/bench"; TR = "/home/yuio/snape/hifi/truth"; S0 = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 TRUTH = {p: f"{TR}/castle_without_snape/{p}/None_minda_ensemble.vcf" for p in ["hcc1954", "h2009", "hcc1937", "h1437"]}
 TRUTH.update(hg008=f"{TR}/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar_PASS.draftbenchmark.vcf.gz",
-             hcc1395=f"{TR}/hcc1395/truth.vcf", colo829=f"{TR}/colo829/truth.vcf")
-TRAIN = ["hcc1954", "h2009", "hcc1937", "h1437", "hg008"]
-EVAL = ["hcc1395", "colo829"]
+             colo829=f"{TR}/colo829/truth.vcf")
+TRAIN = ["hcc1954", "h2009", "hcc1937", "h1437", "hg008", "colo829"]
+EVAL = []
 UNLABELED = ["hg009", "h209", "h2126"]
 LABELED = TRAIN + EVAL
 HGB = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=40, l2_regularization=1.0)
@@ -68,7 +68,7 @@ for p in LABELED + UNLABELED:
     ms, cut, ts, nt = fit(tr)
     L, X, K = D[p][0], D[p][1], D[p][2]
     t = time.time(); pr = np.mean([m.predict_proba(X)[:, 1] for m in ms], 0); ti = time.time() - t; d = mark(K, pr)
-    folds[p] = dict(role="held-out training pair" if p in TRAIN else "evaluation pair" if p in EVAL else "unlabeled", train=tr,
+    folds[p] = dict(labeled=p in TRAIN, train=tr,
                     cut=round(float(cut), 2), train_s=round(ts, 3), train_records=nt, infer_s=round(ti, 4), records=len(L),
                     prob=[round(float(v), 4) for v in pr], label=None if D[p][3] is None else [int(v) for v in D[p][3]],
                     dupl=[int(v) for v in d], features=len(X[0]))
@@ -76,8 +76,8 @@ for p in LABELED + UNLABELED:
         o.write("".join(l for l in open(f"{H}/runs/full/{p}/calls.vcf") if l[0] == "#"))
         for l, q, u in zip(L, pr, d):
             f = l.split("\t"); f[6] = "DUPL" if u else "PASS" if q >= cut else "LOW"; f[7] += ";VP=%.4f" % q; o.write("\t".join(f))
-    s = f"{p} {'held-out' if p in TRAIN else 'evaluation' if p in EVAL else 'unlabeled'} PASS {int(((pr >= cut) & ~d).sum())} cut {cut:.2f} DUPL {int(d.sum())} records {len(L)}"
+    s = f"{p} {'held-out' if p in TRAIN else 'no truth'} PASS {int(((pr >= cut) & ~d).sum())} cut {cut:.2f} DUPL {int(d.sum())} records {len(L)}"
     print(s); log.write(s + "\n")
-s = f"verdict ({len(TRAIN)} training pairs held out, {len(EVAL)} evaluation pairs, {len(UNLABELED)} unlabeled, 5 seeds) {time.time() - t0:.1f} s"
+s = f"verdict ({len(TRAIN)} labeled pairs held out, {len(UNLABELED)} without truth, 5 seeds) {time.time() - t0:.1f} s"
 print(s); log.write(s + "\n")
 import json; json.dump(folds, open(f"{H}/verdict/folds.json", "w"))
