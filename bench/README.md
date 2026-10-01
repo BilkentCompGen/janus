@@ -8,6 +8,9 @@ Everything that runs snape on the real tumor/normal pairs, measures it, and scor
 | script | what it does | writes |
 |---|---|---|
 | `run.sh <experiment> [pair ...]` | runs the whole pipeline (`pipeline.sh`, 16 threads, cores 0-15), one run after the other, profiled with external tools. Experiments: `full` (all reads of each pair) and `coverage` (each pair at 5x, 10x, ... 60x, as deep as both samples go; 1x = 3.1 Gb; pack keeps the first N x 3.1 Gb of each sample, `pack -b`, and the run continues from those svbs; depth by depth over the pairs). Intermediates are measured, then moved to `~/trash` (full) or deleted (coverage). | `runs/<experiment>/...` |
+| `compete.sh [pair ...]` | the competitors on the same reads: per pair, align (minimap2 + samtools sort, measured), every tool in `callers/` on the full BAMs, the core tools (Severus, SAVANA, nanomonsv, Sniffles2, SVision-pro) on 5x/10x/20x/40x subsets of exactly snape's coverage reads; cores 0-15, 16 threads; docker tools measured through a cgroup slice per run; BAMs and intermediates deleted after the pair | `runs/align/<pair>/{n,t}/`, `runs/competitors/<tool>/<pair>[_<N>x]/` |
+| `measure_tool.py <run folder>` | one competitor or alignment run -> run.json (wall, CPU = host + containers, peak memory, calls, file sizes), files.tsv (called by `compete.sh`) | `run.json`, `files.tsv` |
+| `callers/` | one wrapper per competitor (`<tool>.sh <tumor.bam> <normal.bam> <outdir> <threads>`), `COMPETITORS.md` (the literature), `README.md` (images, commands, status) | |
 | `measure.py <run folder>` | turns one run into structured measurements (called by `run.sh`) | `run.json`, `steps.tsv`, `files.tsv` |
 | `verdict.py [seed]` | held-out verdict: boosted trees (a learned component) fitted on the other pairs' calls, applied to the held-out pair | `verdict/<pair>.vcf` |
 | `eval.sh <pair> <vcf> <name>` | PASS records scored with minda (CASTLE consensus rule, or NIST truthset mode for HG008) | `eval/<pair>/<name>/` |
@@ -33,6 +36,8 @@ runs/coverage/<pair>_<N>x/ the same at N x coverage (N = 5, 10, ... 60); same fi
                       total.txt (/usr/bin/time of the whole run), note.txt when the run was made differently from
                       run.sh (also in run.json as "note")
 runs/<experiment>/queue.log  the queue's progress
+runs/align/<pair>/{n,t}/      read alignment for the competitors: run.json (time, CPU, memory, BAM bytes)
+runs/competitors/<tool>/<pair>[_<N>x]/   one competitor run: calls.vcf, log.txt, run.json, files.tsv
 verdict/              the verdict of record: <pair>.vcf (PASS / LOW / DUPL), log.txt (cut and PASS per pair),
                       time.txt / times.txt (its cost), commit.txt (the code commit it ran on)
 eval/<pair>/<name>/   minda outputs: snape = the verdict's PASS records; severus, sniffles = other callers on HG008
