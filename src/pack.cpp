@@ -1,3 +1,5 @@
+#include <fcntl.h>
+#include <unistd.h>
 #include <algorithm>
 #include <condition_variable>
 #include <cstring>
@@ -19,31 +21,38 @@
 // One reader fills CHUNK-sized blocks straight from the source (gzip is inflated in parallel by rapidgzip with ISA-L,
 // on t threads, CRC checked) and cuts each block after its last whole record, found by looking back from the block's
 // end; max(2, t/5) workers encode the blocks; the caller writes them in input order, so the output does not depend on t.
+// A plain file is read with O_DIRECT in whole aligned blocks: buffered reads go through the kernel's read-ahead (128 KB
+// by default) and a page-cache copy, which held them to ~2.5 GB/s where direct reads reach the drive's ~7 GB/s.
 
 static const size_t CHUNK = 64u << 20;   // text per block
+static const size_t HEAD = 4u << 20, AL = 4096;   // room before a block for the carried tail; O_DIRECT alignment
 static const uint64_t GZCHUNK = 16u << 20;   // rapidgzip's compressed chunk per decoding task: 16 MiB kept the peak at ~6 GB
 
-struct pblock { uint64_t id; char* buf; size_t cap, len; std::vector<uint8_t> out; std::vector<uint32_t> size; uint64_t bases, mx; };
+struct pblock { uint64_t id; char* buf; size_t head, cap; char* txt; size_t len; std::vector<uint8_t> out; std::vector<uint32_t> size; uint64_t bases, mx; };
 
 // the text source: rapidgzip for gzip (one or more members), plain reads otherwise
 struct source {
-    FILE* f = nullptr; std::unique_ptr<rapidgzip::ParallelGzipReader<rapidgzip::ChunkData>> gz;
+    int fd = -1; std::unique_ptr<rapidgzip::ParallelGzipReader<rapidgzip::ChunkData>> gz;
     source(const char* path, int t) {
-        f = std::fopen(path, "rb");
-        if (!f) { std::fprintf(stderr, "[pack] cannot open %s\n", path); std::exit(1); }
-        int a = std::fgetc(f), b = std::fgetc(f); std::rewind(f);
-        if (a == 0x1f && b == 0x8b) {
-            std::fclose(f); f = nullptr;
+        fd = open(path, O_RDONLY);
+        unsigned char m[2] = {0, 0};
+        if (fd < 0 || pread(fd, m, 2, 0) < 0) { std::fprintf(stderr, "[pack] cannot open %s\n", path); std::exit(1); }
+        if (m[0] == 0x1f && m[1] == 0x8b) {
+            close(fd); fd = -1;
             gz = std::make_unique<rapidgzip::ParallelGzipReader<rapidgzip::ChunkData>>(
                 std::make_unique<rapidgzip::StandardFileReader>(path), t, GZCHUNK);
             gz->setCRC32Enabled(true);
-        } else std::setvbuf(f, nullptr, _IONBF, 0);
+        } else {
+            int d = open(path, O_RDONLY | O_DIRECT);   // falls back to buffered reads where O_DIRECT is not supported
+            if (d >= 0) { close(fd); fd = d; } else posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+        }
     }
-    ~source() { if (f) std::fclose(f); }
-    size_t read(char* o, size_t n) {   // fills o with up to n bytes; less only at the end
-        size_t got = 0, r;
+    ~source() { if (fd >= 0) close(fd); }
+    size_t read(char* o, size_t n) {   // fills o (AL-aligned, n a multiple of AL) with up to n bytes; less only at the end
+        size_t got = 0; ssize_t r = 0;
         try {
-            while (got < n && (r = gz ? gz->read(o + got, n - got) : std::fread(o + got, 1, n - got, f)) > 0) got += r;
+            while (got < n && (r = gz ? (ssize_t)gz->read(o + got, n - got) : ::read(fd, o + got, n - got)) > 0) got += r;
+            if (!gz && r < 0) throw std::runtime_error("read failed");
         } catch (const std::exception& e) { std::fprintf(stderr, "[pack] corrupt input: %s\n", e.what()); std::exit(1); }
         return got;
     }
@@ -69,7 +78,7 @@ static size_t last_record_end(const char* p, size_t n) {
 static unsigned char ENC[256], BAD[256];
 
 static void encode(pblock* b) {
-    const char *p = b->buf, *e = p + b->len;
+    const char *p = b->txt, *e = p + b->len;
     auto next = [&](const char*& s, size_t& l) {   // one line without its trailing \r / \n
         if (p >= e) return false;
         const char* q = (const char*)std::memchr(p, '\n', e - p); if (!q) q = e;
@@ -110,23 +119,27 @@ int cmd_pack(const char* in, const char* out, int t) {
     std::mutex m; std::condition_variable cv;
     std::deque<pblock*> todo, pool; std::map<uint64_t, pblock*> done; bool fed = false; uint64_t made = 0;
     const size_t MAXQ = (size_t)et + 4;   // blocks in flight: bounds memory at about MAXQ x CHUNK x 1.2
-    for (size_t i = 0; i < MAXQ; i++) pool.push_back(new pblock{0, new char[CHUNK + 1], CHUNK, 0, {}, {}, 0, 0});
+    auto alloc = [](size_t head, size_t cap) { return (char*)std::aligned_alloc(AL, head + cap + AL); };
+    for (size_t i = 0; i < MAXQ; i++) pool.push_back(new pblock{0, alloc(HEAD, CHUNK), HEAD, CHUNK, nullptr, 0, {}, {}, 0, 0});
 
     std::thread reader([&] {
         std::vector<char> carry;
         for (bool eof = false; !eof;) {
             pblock* b;
             { std::unique_lock<std::mutex> l(m); cv.wait(l, [&] { return !pool.empty(); }); b = pool.front(); pool.pop_front(); }
-            if (carry.size() * 2 > b->cap) { delete[] b->buf; b->cap = carry.size() * 4; b->buf = new char[b->cap + 1]; }
-            std::memcpy(b->buf, carry.data(), carry.size());
-            size_t n = carry.size() + src.read(b->buf + carry.size(), b->cap - carry.size());
-            eof = n < b->cap;
+            if (carry.size() > b->head) {   // a record longer than HEAD: give this block more room in front
+                std::free(b->buf); b->head = (carry.size() + AL) / AL * AL * 2; b->buf = alloc(b->head, b->cap);
+            }
+            b->txt = b->buf + b->head - carry.size();
+            std::memcpy(b->txt, carry.data(), carry.size());
+            size_t r = src.read(b->buf + b->head, b->cap), n = carry.size() + r;
+            eof = r < b->cap;
             size_t cut;
             if (eof) {
-                if (n && b->buf[n - 1] != '\n') b->buf[n++] = '\n';   // a last line without its newline still counts
+                if (n && b->txt[n - 1] != '\n') b->txt[n++] = '\n';   // a last line without its newline still counts
                 cut = n;
-            } else cut = last_record_end(b->buf, n);
-            carry.assign(b->buf + cut, b->buf + n);
+            } else cut = last_record_end(b->txt, n);
+            carry.assign(b->txt + cut, b->txt + n);
             b->len = cut;
             std::lock_guard<std::mutex> l(m);
             if (cut) { b->id = made++; todo.push_back(b); } else pool.push_back(b);
@@ -166,7 +179,7 @@ int cmd_pack(const char* in, const char* out, int t) {
         std::lock_guard<std::mutex> l(m); pool.push_back(b); cv.notify_all();
     }
     reader.join(); for (auto& w : ws) w.join();
-    for (pblock* b : pool) { delete[] b->buf; delete b; }
+    for (pblock* b : pool) { std::free(b->buf); delete b; }
     std::fwrite(&pos, 8, 1, fx);
     bin_header ho = header('1', 1, nr, tot), hx = header('I', 1, nr, mx);
     finish(fo, out, &ho);
