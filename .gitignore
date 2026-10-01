@@ -78,6 +78,18 @@ paper/measure/out/
 /bench/verdict/
 /bench/callers/*
 !/bench/callers/*.sh
+!/bench/callers/*.md
+!/bench/callers/*.py
+!/bench/callers/images/
+!/bench/callers/ref/
+/bench/callers/ref/*
+!/bench/callers/ref/fetch.sh
+!/bench/callers/micro/
+/bench/callers/micro/*
+!/bench/callers/micro/*.sh
+!/bench/callers/micro/demo/
+/bench/callers/micro/demo/*
+!/bench/callers/micro/demo/*.sh
 /ref/
 
 # figure scripts cache the tables they computed from the runs; the scripts rebuild them
