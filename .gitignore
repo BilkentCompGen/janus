@@ -13,6 +13,7 @@ build
 # third-party sources built in place (Badread, ...) and generated benchmark data; lcptools (packed) is vendored
 lib/*
 !lib/lcptools/
+!lib/rapidgzip.sh
 lib/lcptools/liblcptools.a
 lib/lcptools/config.h
 simulation
