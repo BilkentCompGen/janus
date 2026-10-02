@@ -11,8 +11,8 @@
 #             cores (0..N-1): how well the pipeline parallelizes -> runs/threads/<pair>_<N>t/ (intermediates to trash)
 #             runs go depth by depth (5x of every pair, then 10x, ...) so early results cover all pairs
 # Per run folder: calls.vcf, run.json (every measurement), steps.tsv, files.tsv, logs/, monitor/ (raw samples and
-# params.json). The intermediates are measured, then moved to ~/trash (full) or deleted (coverage, approved by the user:
-# ~7 TB would not fit). A run with run.json is skipped; a full run waits while less than 400 GB is free.
+# params.json). The intermediates are measured, then deleted (approved by the user, 2026-10-02). A run with run.json is
+# skipped.
 S=/home/yuio/snape; H=$S/bench; X=${1:?experiment: full or coverage}; shift
 G=3100000000                       # bases per 1x: the hg38 length, rounded
 LEVELS="1 3 5 10 15 20 25 30 35 40 45 50 55 60"
@@ -30,12 +30,9 @@ run() {
     local D=$1 p=$2 b=$3 n=$4 th=${5:-16} m="" f=1
     [ -n "$n" ] && { m=$(minreads $n); f=$(beta $n); }
     [ -s $D/run.json ] && { log "[$(basename $D)] done before"; return; }
-    if [ $X = full ] || [ $X = threads ]; then
-        while [ $(df --output=avail -B1G $S | tail -1) -lt 400 ]; do log "[$p] waiting: under 400 GB free (empty ~/trash)"; sleep 600; done
-    fi
     mkdir -p $D/work $D/monitor $D/logs; log "[$(basename $D)] start"
     printf '{"experiment": "%s", "pair": "%s", "coverage_x": %s, "bases_per_x": %s, "bases_limit": %s, "min_reads": %s, "verdict_f_beta": %s, "threads": %s, "intermediates": "%s"}\n' \
-        $X $p "${n:-null}" $G "${b:-null}" "${m:-3}" $f $th $([ $X = coverage ] || [ $X = groups ] && echo deleted || echo trash) > $D/monitor/params.json
+        $X $p "${n:-null}" $G "${b:-null}" "${m:-3}" $f $th deleted > $D/monitor/params.json
     pidstat -h -r -u -d -C 'snape|minimap2' 2 >> $D/monitor/pidstat.txt 2>&1 & m1=$!
     iostat -dxm -t nvme0n1 5 >> $D/monitor/iostat.txt 2>&1 & m2=$!
     vmstat -t 5 >> $D/monitor/vmstat.txt 2>&1 & m3=$!
@@ -47,11 +44,7 @@ run() {
     [ -s $D/work/calls.vcf ] && [ -e $D/work/done.call ] || { log "[$(basename $D)] FAILED: $(tail -1 $D/total.txt)"; return; }
     python3 $H/measure.py $D >> $Q 2>&1 || { log "[$(basename $D)] measure.py failed, intermediates left in place"; return; }
     mv $D/work/calls.vcf $D/; mv $D/work/log.* $D/logs/
-    if [ $X = coverage ] || [ $X = groups ]; then
-        rm -rf $D/work; log "[$(basename $D)] done, intermediates deleted"
-    else
-        local T=/home/yuio/trash/$(date +%Y%m%d)-runs/$p; mkdir -p $(dirname $T); mv $D/work $T; log "[$p] done, intermediates in $T"
-    fi
+    rm -rf $D/work; log "[$(basename $D)] done, intermediates deleted"
 }
 
 # depth of a pair, in whole x, from the full run's pack report (the shallower of its two samples)
