@@ -94,6 +94,13 @@ at `DL` bases, and listed innermost first. The site runs from its innermost left
 (the combination's own cores on a side without anchors); its interval runs from the outermost anchors with a flank of
 `max(PAD, FL * site length)` on each side. Overlapping intervals on one read merge into one piece, which is cut from
 the read.
+Then the site's tumor reads are grouped by length. One pass over the tumor sample's reads finds every read that carries
+a site's combination and measures on it the distance between the site's innermost left and right anchors (the
+combination's own cores on a side without anchors; a read missing one of the anchors is not measured). The distances of a
+site are grouped by single linkage within `DSAME` bases. Each group of at least `MM` reads (the `CL` largest) that does
+not hold the site's own read adds a row of its own, cut from the group's most central read and anchored like the first:
+reads that cross the same combination but disagree on the length between its anchors (two alleles or events sharing one
+route through the graph) each get a piece. Different combinations at the same place are different sites already.
 
 **refidx** cuts the reference into N-free windows of `WIN` bases, parses each with up to `MAR` bases of context on each
 side and keeps the cores whose forward start lies in the window.
@@ -153,6 +160,7 @@ PASS from `F=`.
 | NA | 3 | select.cpp | anchors per side |
 | MULT | 2 | select.cpp | an anchor's count is at most MULT times the sample median |
 | DL | 15000 | select.cpp | distance at which an anchor's weight reaches zero |
+| DSAME, CL | 20, 3 | select.cpp | anchor distances within DSAME bases form one group; at most CL groups per site give pieces |
 | WIN | 40000 | place.cpp | reference bases per refidx window |
 | MAR | 2000 | place.cpp | context around a refidx window; margin around a placement |
 | TOL | 500 | place.cpp | largest diagonal step inside one placement |

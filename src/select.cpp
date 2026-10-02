@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 #include <unordered_map>
 #include "cmd.h"
@@ -163,6 +164,11 @@ static std::vector<site> groups(sctx* c) {
     std::vector<obs> o;
     for (auto& v : c->ob) { o.insert(o.end(), v.begin(), v.end()); v = {}; }
     std::sort(o.begin(), o.end(), by_obs);
+    if (const char* dp = std::getenv("SNAPE_DUMP_D")) {   // diagnostics: site, its read, measured read's score, distance
+        FILE* f = std::fopen(dp, "w");
+        for (const obs& x : o) std::fprintf(f, "%u\t%lu\t%lu\t%u\n", x.site, (unsigned long)c->w[x.site].read, (unsigned long)x.sc, x.d);
+        std::fclose(f);
+    }
     std::vector<site> add;
     for (size_t i = 0, j; i < o.size(); i = j) {
         for (j = i + 1; j < o.size() && o[j].site == o[i].site; j++);
