@@ -75,7 +75,7 @@ tree and the sampled `docker stats` peak.
   normal from the README's full recipe is left out (> 40 GB).
 - **Sniffles2** has no tumor/normal mode. `sniffles2.sh` is how the CASTLE panel ran it (multisample, tumor-only
   SUPP_VEC); `sniffles2_mosaic.sh` and `longcalld.sh` rely on our normal subtraction (`subtract.py`).
-- **Severus**: `severus.sh` (unphased) is what our CASTLE reproduction used (`repro.txt`: 0.97 F1 against the
+- **Severus**: `severus.sh` (unphased) is what our CASTLE reproduction used (`repro.sh`: 0.97 F1 against the
   published Severus calls). `severus_phased.sh` is the README's recommended phased setup.
 
 ## Exact commands (`$T` tumor, `$N` normal, `$O` outdir, `$P` threads, `$REF`, `$VNTR`)
@@ -136,5 +136,6 @@ tree and the sampled `docker stats` peak.
 - `ref/`: `fetch.sh`; `hs1.fa.gz` + `hs1.map-hifi.mmi` (T2T-CHM13v2.0, UCSC); `CHM13-464.gfa.gz` (HPRC minigraph
   graph, zenodo 16728828); `human.hg38.excl.tsv` (Delly); `svision-pro/` (v2.5 repo: model + access bed); `somasv/`
   and `svscope/` (source checkouts used for the images and the demo data).
-- Older files kept as they were: `run.sh`, `sniffles_somatic.sh`, `repro.sh`, `repro.txt`, `times.txt`, and the full
-  CASTLE runs in `severus/` and `sniffles/`.
+- Earlier scripts, not used by `../compete.sh`: `run.sh` (Severus and Sniffles2 timed on five pairs), `sniffles_somatic.sh`,
+  `repro.sh` (our Severus and Sniffles2 runs against the published CASTLE call sets). Their outputs (`times.txt`,
+  `repro.txt`, `severus/`, `sniffles/`) are no longer kept; the competitors' measurements are in `../runs/competitors/`.

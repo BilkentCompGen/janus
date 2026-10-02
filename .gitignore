@@ -47,19 +47,8 @@ paper/*.synctex.gz
 /asm_somatic
 /castle_res
 /castle_delly
-/overnight
 
-# Buyuk ara ciktilar tmp/ altinda toplaniyor. Eski konumlarinda birer symlink var ki
-# overnight/ altindaki betikler yollarini degistirmeden calissin.
 /tmp
-
-# Gece deneylerinin HAM minda ciktilari: dizin basina ~30 MB destek tablosu, toplam ~1.9 GB.
-# Hepsi tmp/night/ altindaki betiklerden yeniden uretilebiliyor. Git'e giren yalniz ozet
-# TSV/JSON'lar, figurler ve deney kayitlari.
-/results/exp5b/
-/results/exp2/
-/results/exp2_hcc1937/
-/results/exp1/
 archive/
 paper/measure/out/
 
@@ -93,5 +82,4 @@ paper/measure/out/
 /ref/
 
 # figure scripts cache the tables they computed from the runs; the scripts rebuild them
-paper/figures/snape/*/cache/
 paper/figures/snape/*/__pycache__/
