@@ -112,7 +112,7 @@ mem = int(next(l.split()[1] for l in open("/proc/meminfo") if l.startswith("MemT
 commit = subprocess.run(["git", "-C", S, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
 note = open(os.path.join(M, "note.txt")).read().strip() if os.path.exists(os.path.join(M, "note.txt")) else ""
 json.dump(dict(pair=pair, run=os.path.basename(D), params=P, commit=commit, note=note, started=datetime.datetime.fromtimestamp(start).isoformat(timespec="seconds"),
-               threads=16, cores="taskset 0-15", machine=dict(cpu=cpu, mem_kib=mem, kernel=platform.release()),
+               threads=P.get("threads", 16), cores="taskset 0-%d" % (P.get("threads", 16) - 1), machine=dict(cpu=cpu, mem_kib=mem, kernel=platform.release()),
                reads=reads, total=total, steps=steps, files=files),
           open(os.path.join(D, "run.json"), "w"), indent=1)
 print(f"{pair}: {total['wall_s']} s wall, {total['cpu_s']} CPU s, peak {total['peak_rss_kib'] / 2**20:.1f} GiB ({total['peak_step']}), "

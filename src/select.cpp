@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <unordered_map>
 #include "cmd.h"
 #include "extract.h"
 #include "io.h"
@@ -12,14 +13,23 @@ static const uint32_t FL = 3; // the flank is at least FL times the site's lengt
 static const uint32_t NA = 3; // anchors kept on each side of a site
 static const uint32_t MULT = 2; // an anchor's count may be at most MULT times its sample's median node count
 static const double DL = 15000; // an anchor's weight falls linearly to zero at DL bases from the combination
+static const uint32_t DSAME = 20; // tumor reads whose anchor distances lie within DSAME bases of each other form one group
+static const uint32_t CL = 3; // most distance groups per site, the largest first; each gives its most central read
 
 struct anc { double sc; uint32_t v, a, b; };
 
-struct site { uint64_t read, key; uint32_t s, lo, hi, a, b, pc; std::string n; std::vector<anc> l, r; };
+// a site row: the read its piece is cut from, the combination key, the tumor sample, the piece interval, the innermost
+// anchors (a, b), the counts; lv / rv: the innermost anchor nodes on the left / right in the read's chain order (NONE
+// where the side has no anchor) - the nodes every other read of the site is measured between
+struct site { uint64_t read, key; uint32_t s, lo, hi, a, b, pc, lv, rv; std::string n; std::vector<anc> l, r; };
+
+// one tumor read carrying a site's combination: the site, the distance between the site's innermost anchors on the read,
+// the read's centrality score (smaller flank << 32 | inverted read index, as prune ranks reads)
+struct obs { uint32_t site, d; uint64_t sc; };
 
 struct piece { uint64_t read; uint32_t lo, hi, k; std::string s; };
 
-struct sctx { keys* x; rpass* p; std::vector<site> w; std::vector<piece> pc; std::vector<uint64_t> rd; std::vector<uint32_t> ro, med, gs; const uint16_t* cn; uint64_t K, lo, hi; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; std::vector<scr> sc; std::vector<int> fs, fx; int t; };
+struct sctx { keys* x; rpass* p; std::vector<site> w; std::vector<piece> pc; std::vector<uint64_t> rd; std::vector<uint32_t> ro, med, gs; const uint16_t* cn; uint64_t K, lo, hi; std::vector<std::vector<hit>> h; std::vector<std::vector<uint32_t>> ids; std::vector<scr> sc; std::vector<int> fs, fx; int t; std::unordered_map<uint64_t, std::vector<uint32_t>> bykey; std::vector<std::vector<obs>> ob; };
 
 static bool by_cost(const anc& p, const anc& q) { return p.sc < q.sc; }
 
@@ -105,6 +115,8 @@ static void anchor(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, ui
             e->r.clear();
             side(c, t, ids, p->f, q.a, -1, -1, e->l);
             side(c, t, ids, p->f, q.b, 1, m, e->r);
+            e->lv = e->l.empty() ? NONE : e->l[0].v;
+            e->rv = e->r.empty() ? NONE : e->r[0].v;
             e->a = e->l.empty() ? d->a[t->ix[q.a]] : e->l[0].a;
             e->b = e->r.empty() ? d->b[t->ix[q.b]] : e->r[0].b;
             uint32_t pd = std::max(PAD, FL * (e->b - e->a)), lo = e->l.empty() ? e->a : e->l.back().a, hi = e->r.empty() ? e->b : e->r.back().b;
@@ -116,6 +128,86 @@ static void anchor(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t rc, ui
             for (anc& x : e->r) flip(d->len, rc, &x.a, &x.b);
             if (rc) e->l.swap(e->r);
         }
+}
+
+// the tumor-read pass: every tumor read carrying a site's combination gives the distance between the site's innermost
+// anchors on it (the combination's own ends on a side without anchors); a read without one of the anchors is skipped
+static void measure(rpass* p, rth* t, const uint8_t*, uint32_t m, uint32_t, uint64_t rid) {
+    sctx* c = (sctx*)p->ctx;
+    uint32_t s = p->f + 1;
+    std::vector<hit>& h = c->h[t - p->t.data()];
+    chain_keys(c->x, t, m, h);
+    const rdcore* d = &t->r;
+    for (const hit& q : h) {
+        auto it = c->bykey.find(q.key);
+        if (it == c->bykey.end()) continue;
+        uint32_t st = d->a[t->ix[q.a]], en = d->b[t->ix[q.b]];
+        uint64_t sc = (uint64_t)std::min(st, d->len - en) << 32 | (0xffffffffu - (uint32_t)rid);
+        for (uint32_t i : it->second) {
+            const site& e = c->w[i];
+            if (e.s != s) continue;
+            int64_t l = q.a, r = q.b;
+            if (e.lv != NONE) for (l = (int64_t)q.a - 1; l >= 0 && t->id[l] != e.lv; l--);
+            if (e.rv != NONE) for (r = q.b + 1; r < m && t->id[r] != e.rv; r++);
+            if (l < 0 || r >= m) continue;
+            c->ob[t - p->t.data()].push_back({i, d->a[t->ix[r]] - d->a[t->ix[l]], sc});
+        }
+    }
+}
+
+static bool by_obs(const obs& p, const obs& q) { return p.site != q.site ? p.site < q.site : p.d < q.d; }
+
+// distance groups per site: single linkage within DSAME bases; groups of at least MM reads, the CL largest, each give a
+// row cut from its most central read (the site's own read keeps its row)
+static std::vector<site> groups(sctx* c) {
+    std::vector<obs> o;
+    for (auto& v : c->ob) { o.insert(o.end(), v.begin(), v.end()); v = {}; }
+    std::sort(o.begin(), o.end(), by_obs);
+    std::vector<site> add;
+    for (size_t i = 0, j; i < o.size(); i = j) {
+        for (j = i + 1; j < o.size() && o[j].site == o[i].site; j++);
+        std::vector<std::pair<uint32_t, uint64_t>> g;   // (reads, best score) per group
+        for (size_t k = i, l; k < j; k = l) {
+            uint64_t b = o[k].sc;
+            for (l = k + 1; l < j && o[l].d - o[l - 1].d <= DSAME; l++) b = std::max(b, o[l].sc);
+            g.push_back({(uint32_t)(l - k), b});
+        }
+        std::sort(g.begin(), g.end(), [](const std::pair<uint32_t, uint64_t>& p, const std::pair<uint32_t, uint64_t>& q) {
+            return p.first != q.first ? p.first > q.first : p.second > q.second; });
+        const site& e = c->w[o[i].site];
+        std::vector<uint64_t> got = {e.read};
+        for (size_t k = 0; k < g.size() && k < CL && g[k].first >= MM; k++) {
+            uint64_t r = (uint64_t)e.s << 40 | (0xffffffffu - (uint32_t)g[k].second);
+            if (std::find(got.begin(), got.end(), r) != got.end()) continue;
+            got.push_back(r);
+            site x = {};
+            x.read = r; x.key = e.key; x.s = e.s; x.n = e.n;
+            add.push_back(x);
+        }
+    }
+    return add;
+}
+
+static void index_reads(sctx* c) {
+    c->rd.clear();
+    c->ro.clear();
+    for (size_t i = 0; i < c->w.size(); i++)
+        if (!i || c->w[i].read != c->w[i - 1].read) { c->rd.push_back(c->w[i].read); c->ro.push_back(i); }
+    c->ro.push_back(c->w.size());
+}
+
+static bool by_row(const site& p, const site& q) { return p.read != q.read ? p.read < q.read : p.key < q.key; }
+
+static void grab(void* a, int i);
+
+static void anchors(sctx* c, rpass* p) {
+    p->f = 0;
+    for (uint64_t k = 0; k < c->rd.size(); p->f++) {
+        c->lo = k;
+        while (k < c->rd.size() && c->rd[k] >> 40 == (uint64_t)p->f) k++;
+        c->hi = k;
+        par(c->t, grab, c);
+    }
 }
 
 static void pieces(sctx* c) {
@@ -200,12 +292,28 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     make_map(&p);
     c.p = &p;
     c.sc.resize(t);
-    for (uint64_t k = 0; k < c.rd.size(); p.f++) {
-        c.lo = k;
-        while (k < c.rd.size() && c.rd[k] >> 40 == (uint64_t)p.f) k++;
-        c.hi = k;
-        par(t, grab, &c);
-    }
+    anchors(&c, &p);
+    // the tumor reads of every site, measured between its anchors, grouped by distance; each further group's most central
+    // read becomes a row of its own, anchored like the first ones
+    size_t n0 = c.w.size();
+    for (uint32_t i = 0; i < c.w.size(); i++) c.bykey[c.w[i].key].push_back(i);
+    c.ob.resize(t);
+    std::vector<std::string> fl = split(rd);
+    std::string tum;
+    for (size_t i = 1; i < fl.size(); i++) tum += (tum.empty() ? "" : ",") + fl[i];
+    rpass q;
+    each_read(&q, g.g, tum.c_str(), t, measure, &c);
+    std::vector<site> add = groups(&c);
+    c.bykey = {};
+    std::vector<site> old;
+    old.swap(c.w);
+    c.w = add;
+    std::sort(c.w.begin(), c.w.end(), by_row);
+    index_reads(&c);
+    anchors(&c, &p);
+    c.w.insert(c.w.end(), old.begin(), old.end());
+    std::stable_sort(c.w.begin(), c.w.end(), by_row);
+    index_reads(&c);
     pieces(&c);
     par(t, cut, &c);
     std::string o(out);
@@ -220,6 +328,6 @@ int cmd_select(const char* in, const char* dr, const char* rd, const char* out, 
     }
     std::fclose(f);
     std::fclose(v);
-    std::fprintf(stderr, "[select] %zu sites on %zu reads; %zu pieces, %lu bp\n", c.w.size(), c.rd.size(), c.pc.size(), nb);
+    std::fprintf(stderr, "[select] %zu sites, %zu more rows from distance groups, on %zu reads; %zu pieces, %lu bp\n", n0, c.w.size() - n0, c.rd.size(), c.pc.size(), nb);
     return 0;
 }
