@@ -1,6 +1,5 @@
 CXX      := g++
 CXXFLAGS := -std=c++17 -DWITH_ISAL -O3 -march=native -flto=auto -Wall -Wextra -Wpedantic -MMD -MP
-# rapidgzip (parallel gzip reading in pack) with ISA-L: lib/rapidgzip.sh fetches and builds it
 RG       := lib/rapidgzip/src
 INC      := -Ilib/lcptools -Isrc -isystem $(RG) -isystem $(RG)/core -isystem $(RG)/external/isa-l/include -isystem $(RG)/external/isa-l/igzip -isystem $(RG)/external/isa-l
 LDFLAGS  := -Llib/lcptools -llcptools -Llib/rapidgzip -lisal -lm -lz
