@@ -1,34 +1,23 @@
 #!/usr/bin/env python3
-# measure.py <run dir>: turns one pair's run (bench/run.sh) into structured measurements, written next to calls.vcf:
-#   steps.tsv  per step (run.json also has each step's own report lines, e.g. reads and bases from pack): start/end (unix s), wall s, peak RSS KiB, user s, sys s, CPU s (user+sys), drive read/written GB,
-#              mean drive utilization %, max drive composite / controller temperature and CPU Tctl (C)
-#   files.tsv  every file the run produced, with its size in bytes and whether it is kept (calls.vcf, logs), moved to
-#              trash or deleted (coverage runs)
-#   run.json   the pair, how it was run (note.txt, if any), machine, code commit, totals (wall, peak RSS, user, sys, CPU s, drive I/O, temperatures), the steps
-#              and the file sizes, all in one file
-# Sources: work/steps.txt (pipeline.sh's /usr/bin/time per step), work/done.<step> modification times (step ends),
-# monitor/start.txt, total.txt (the runner's /usr/bin/time of the whole pipeline), note.txt, iostat, vmstat, temp.
 import sys, os, re, json, glob, datetime, subprocess, platform
 
 D = os.path.abspath(sys.argv[1]); W = os.path.join(D, "work"); M = os.path.join(D, "monitor")
-for f in ("start.txt", "total.txt", "note.txt"):   # the runner's raw files: in the pair folder during a run, in monitor/ after
+for f in ("start.txt", "total.txt", "note.txt"):
     if os.path.exists(os.path.join(D, f)): os.replace(os.path.join(D, f), os.path.join(M, f))
 KEEP = {"calls.vcf"}
 
 def iostat():
-    """[(unix s, read MB/s, write MB/s, util %)] of nvme0n1, one per 5 s report (the first, since-boot report dropped)"""
     out, t, first = [], None, True
     for l in open(os.path.join(M, "iostat.txt")):
         f = l.split()
         if len(f) == 3 and f[2] in ("AM", "PM") and "/" in f[0]:
             t = datetime.datetime.strptime(" ".join(f), "%m/%d/%Y %I:%M:%S %p").timestamp()
-        elif f and f[0] == "nvme0n1" and t is not None:
+        elif f and f[0].startswith("nvme") and t is not None:
             if first: first = False; continue
             out.append((t, float(f[2]), float(f[8]), float(f[-1])))
     return out
 
 def temps():
-    """[(unix s, drive composite C, drive controller C, CPU Tctl C or None)]"""
     out = []
     for l in open(os.path.join(M, "temp.txt")):
         f = l.split()
@@ -48,7 +37,6 @@ def window(a, b):
     return rd, wr, ut, mx(1), mx(2), mx(3)
 
 def report(n):
-    """snape's own lines in the step's log ("[pack] 11337735 reads, 195114129352 bases", "[call] ... records, ... PASS")"""
     for f in (os.path.join(W, "log." + n), os.path.join(D, "logs", "log." + n)):
         if os.path.exists(f):
             return [l.strip() for l in open(f, errors="replace") if l.startswith("[") and not l.startswith("[M::")]
@@ -56,7 +44,7 @@ def report(n):
 
 steps = []
 for l in open(os.path.join(W, "steps.txt")):
-    f = l.split()                                   # <step> <wall> s <KB> KB <user> user <sys> sys
+    f = l.split()
     if len(f) < 8 or f[2] != "s": continue
     n = f[0]; e = os.path.join(W, "done." + n)
     end = os.path.getmtime(e if os.path.exists(e) else os.path.join(W, "log." + n)); a = end - float(f[1])
@@ -70,9 +58,9 @@ prev = steps[-1]["end"]
 
 if os.path.exists(os.path.join(M, "total.txt")):
     start = float(open(os.path.join(M, "start.txt")).read())
-    tot = open(os.path.join(M, "total.txt")).read().split()  # total <wall> s wall <KB> KB peak <user> s user <sys> s sys ...
+    tot = open(os.path.join(M, "total.txt")).read().split()
     total = dict(wall_s=float(tot[1]), peak_rss_kib=int(tot[4]), user_s=float(tot[7]), sys_s=float(tot[10]))
-else:                                                # a run made step by step (paused between steps): totals of the steps
+else:
     start = steps[0]["start"]
     total = dict(wall_s=round(sum(s["wall_s"] for s in steps), 2), peak_rss_kib=max(s["peak_rss_kib"] for s in steps),
                  user_s=round(sum(s["user_s"] for s in steps), 2), sys_s=round(sum(s["sys_s"] for s in steps), 2))
@@ -97,12 +85,11 @@ with open(os.path.join(D, "files.tsv"), "w") as o:
     for f in files: o.write(f"{f['file']}\t{f['bytes']}\t{'yes' if f['kept'] else GONE}\n")
 
 S = "/home/yuio/snape"
-# the run's parameters, written by run.sh into monitor/params.json: experiment, pair, coverage, base limit, what happened to
-# the intermediates (trash or deleted); a run without that file is a full run of the pair named by its folder
 P = json.load(open(os.path.join(M, "params.json"))) if os.path.exists(os.path.join(M, "params.json")) else {}
 pair = P.get("pair", os.path.basename(D))
-reads = {s: dict(file=os.path.realpath(f"{S}/hifi/{pair}/{s}.fastq.gz"), bytes=os.path.getsize(f"{S}/hifi/{pair}/{s}.fastq.gz")) for s in "nt"}
-for st in steps:                                     # read and base counts from pack's report
+src = lambda s: next(f for f in (f"{S}/hifi/{pair}/{s}.bam", f"{S}/hifi/{pair}/{s}.fastq.gz") if os.path.exists(f))
+reads = {s: dict(file=os.path.realpath(src(s)), bytes=os.path.getsize(src(s))) for s in "nt"}
+for st in steps:
     if st["step"] in ("pack_n", "pack_t"):
         for l in st["report"]:
             m = re.match(r"\[pack\] (\d+) reads, (\d+) bases", l)

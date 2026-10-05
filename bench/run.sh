@@ -9,6 +9,7 @@ beta() { [ $1 -le 5 ] && echo 0.5 || { [ $1 -le 10 ] && echo 0.75 || echo 1; }; 
 ALL="hcc1954 h2009 hcc1937 h1437 hg008 hcc1395 colo829 hg009 h209 h2126"
 PAIRS="${*:-$ALL}"
 E=$H/runs/$X; Q=$E/queue.log; mkdir -p $E
+src() { [ -s $S/hifi/$1/$2.bam ] && echo $S/hifi/$1/$2.bam || echo $S/hifi/$1/$2.fastq.gz; }
 log() { echo "$(date '+%F %T') $*" >> $Q; }
 
 run() {
@@ -16,7 +17,7 @@ run() {
     [ -n "$n" ] && { m=$(minreads $n); f=$(beta $n); }
     [ -s $D/run.json ] && { log "[$(basename $D)] done before"; return; }
     mkdir -p $D/work $D/monitor $D/logs; log "[$(basename $D)] start"
-    for c in $S/hifi/$p/n.fastq.gz $S/hifi/$p/t.fastq.gz $D/work/n.svb $D/work/t.svb; do [ -e $c ] && dd if=$c iflag=nocache count=0 status=none; done
+    for c in $(src $p n) $(src $p t) $D/work/n.svb $D/work/t.svb; do [ -e $c ] && dd if=$c iflag=nocache count=0 status=none; done
     sync; sleep 30
     printf '{"experiment": "%s", "pair": "%s", "coverage_x": %s, "bases_per_x": %s, "bases_limit": %s, "min_reads": %s, "verdict_f_beta": %s, "threads": %s, "intermediates": "%s"}\n' \
         $X $p "${n:-null}" $G "${b:-null}" "${m:-\"n3 t3\"}" $f $th deleted > $D/monitor/params.json
@@ -26,7 +27,7 @@ run() {
     ( while :; do echo "$(date +%s) $(cat $HW/temp1_input) $(cat $HW/temp3_input) $(sensors 2>/dev/null | awk '/Tctl/{print $2}')"; sleep 5; done ) >> $D/monitor/temp.txt & m4=$!
     [ -s $D/start.txt ] || [ -s $D/monitor/start.txt ] || date +%s.%N > $D/start.txt
     BASES=$b /usr/bin/time -f "total %e s wall %M KB peak %U s user %S s sys %I fs-in-blocks %O fs-out-blocks %x exit" \
-        taskset -c 0-$((th - 1)) bash $S/pipeline.sh $D/work $S/hifi/$p/n.fastq.gz $S/hifi/$p/t.fastq.gz $th 2> $D/total.txt
+        taskset -c 0-$((th - 1)) bash $S/pipeline.sh $D/work $(src $p n) $(src $p t) $th 2> $D/total.txt
     kill $m1 $m2 $m3 $m4 2>/dev/null; wait $m1 $m2 $m3 $m4 2>/dev/null
     [ -s $D/work/calls.vcf ] && [ -e $D/work/done.call ] || { log "[$(basename $D)] FAILED: $(tail -1 $D/total.txt)"; return; }
     python3 $H/measure.py $D >> $Q 2>&1 || { log "[$(basename $D)] measure.py failed, intermediates left in place"; return; }
@@ -51,7 +52,7 @@ elif [ $X = coverage ]; then
 elif [ $X = purity ]; then
     for p in ${*:-hcc1954 hcc1395}; do
         M=$E/mix/$p; mkdir -p $M
-        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $S/hifi/$p/$s.fastq.gz -o $M/$s.svb -t 16 > $M/pack_$s.log 2>&1; done
+        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $(src $p $s) -o $M/$s.svb -t 16 > $M/pack_$s.log 2>&1; done
         nb=$(python3 -c "import struct; print(struct.unpack_from('<Q', open('$M/n.svb', 'rb').read(32), 16)[0])")
         nm=$((nb - 24 * G - G / 10)); [ $nm -gt $((30 * G)) ] && nm=$((30 * G))
         [ -s $M/nm.svb.idx ] || python3 $H/svb_mix.py $M/nm.svb $M/n.svb:0:$nm >> $Q 2>&1 || { log "[$p] matched normal mix FAILED"; continue; }

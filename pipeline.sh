@@ -4,7 +4,7 @@ mkdir -p $D; cd $D
 step() { n=$1; shift; [ -e done.$n ] && return; /usr/bin/time -f "$n %e s %M KB %U user %S sys" "$@" > log.$n 2>&1 || exit 1; tail -1 log.$n >> steps.txt; touch done.$n; }
 for s in n t; do f=$N; [ $s = t ] && f=$T; step pack_$s $B pack -i $f -o $s.svb -t $P ${BASES:+-b $BASES}; done
 for s in n t; do step extract_$s $B extract -i $s.svb -o $s.svb.exc -t $P; done
-X=$(( $(awk '/^\[pack\]/{print $(NF-1)}' log.pack_t) / 3100000000 ))
+X=$(( $(python3 -c "import struct; print(struct.unpack_from('<Q', open('t.svb', 'rb').read(32), 16)[0])") / 3100000000 ))
 MN=3; MT=3; [ $X -lt 25 ] && MT=2; [ $X -lt 13 ] && MN=2
 [ -n "$MINREADS" ] && MN=$MINREADS && MT=$MINREADS
 step count_n $B count -i n.svb -o n.cnt -t $P -m $MN
