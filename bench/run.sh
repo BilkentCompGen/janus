@@ -44,10 +44,18 @@ elif [ $X = groups ]; then
 elif [ $X = threads ]; then
     for p in ${*:-hcc1954}; do for th in 1 2 4 8 12 16; do run $E/${p}_${th}t $p "" "" $th; done; done
 elif [ $X = coverage ]; then
-    for n in $LEVELS; do
-        for p in ${*:-$CASTLE}; do
-            [ $n -le $(depth $p) ] && run $E/${p}_${n}x $p $((n * G)) $n
+    for p in ${*:-$CASTLE}; do
+        M=$E/mix/$p; mkdir -p $M
+        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $(src $p $s) -o $M/$s.svb -t 16 > $M/pack_$s.log 2>&1; done
+        for n in $LEVELS; do
+            [ $n -le $(depth $p) ] || continue
+            D=$E/${p}_${n}x; [ -s $D/run.json ] && continue
+            mkdir -p $D/work
+            for s in n t; do python3 $H/svb_mix.py $D/work/$s.svb $M/$s.svb:0:$((n * G)) >> $Q 2>&1 || { log "[${p}_${n}x] subset FAILED"; continue 2; }; done
+            touch $D/work/done.pack_n $D/work/done.pack_t
+            run $D $p "" $n
         done
+        rm -rf $M; log "[$p] full packed reads deleted"
     done
 elif [ $X = purity ]; then
     for p in ${*:-hcc1954 hcc1395}; do
