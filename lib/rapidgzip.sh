@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# rapidgzip.sh: fetches rapidgzip 0.16.0 (parallel gzip decompression, used by snape pack) and builds its bundled ISA-L
-# as lib/rapidgzip/libisal.a. Needs nasm. Run once from the repository root before make.
 set -euo pipefail
 cd "$(dirname "$0")"; mkdir -p rapidgzip; cd rapidgzip
 [ -d src ] || { curl -sSL https://files.pythonhosted.org/packages/source/r/rapidgzip/rapidgzip-0.16.0.tar.gz | tar xz; mv rapidgzip-0.16.0/src .; }

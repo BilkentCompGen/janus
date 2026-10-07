@@ -1,16 +1,4 @@
 #!/usr/bin/env bash
-# fetch.sh [pair...]: the original HiFi reads of every tumor/normal pair as hifi/<pair>/{n,t}.fastq.gz, and the
-# pairs' truth/call sets into hifi/truth/. No argument: all pairs and all truth sets. Run it in tmux; rerun to resume.
-#
-# Sources (measured 2026-09-30: ENA gave 0 MB/s, NCBI's AWS copy and GIAB ~85 MB/s, PacBio's server ~105 MB/s):
-#   sra   <pair> <n|t> <run>                     SRA/DDBJ run from NCBI's AWS copy; NCBI's md5
-#   giab  <pair> <n|t> <dir> <sums> <movie...>   GIAB unaligned BAMs; md5 from the folder's checksum file
-#   pacb  <pair> <n|t> <url...>                  PacBio release unaligned BAMs; S3 ETag
-# Each source goes to raw/<pair>/ (aria2c, resumable only through its .aria2 control file, never from the length
-# alone), is converted (fastq-dump --stdout or samtools fastq, | pigz), and is deleted once the fastq.gz holds the
-# source's read count and passes gzip -t (deletion of verified sources approved by the user, 2026-10-01). Sequence and
-# per-base qualities are kept; the BAMs' extra tags are not. At most DL downloads and CV conversions run at once, each
-# waiting for disk first. Progress: hifi/fetch.log; per transfer: raw/tmp/<file>.dl.log.
 set -uo pipefail
 H=/home/yuio/snape/hifi; RAW=$H/raw; T=$H/truth; TK=$H/tools/sratoolkit/bin; cd "$H"; mkdir -p "$RAW/tmp" "$T"
 SDL="https://www.ncbi.nlm.nih.gov/Traces/sdl/2/retrieve?location=s3.us-east-1&type=src&acc="
@@ -39,17 +27,19 @@ sra h209 t DRR1078565
 sra h209 n DRR1078566
 sra h2126 t DRR1078567
 sra h2126 n DRR1078568
+sras hs578t t SRR31537482 SRR40571718
+sras hs578t n SRR31537479 SRR40571717
 "
 
 free() { df --output=avail -B1 "$H" | tail -1; }
 log() { echo "$(date '+%F %T') $*"; }
-slot() {   # $1 dl|cv, $2 count: hold one slot of the kind (fd 8 or 7) until unslot
+slot() {
     local k=$1 n=$2 i fd; [ $k = dl ] && fd=8 || fd=7
     while :; do for i in $(seq 0 $((n - 1))); do eval "exec $fd> $RAW/tmp/$k.$i.lock"; flock -n $fd && return 0; done; sleep 20; done
 }
 unslot() { [ $1 = dl ] && { flock -u 8; exec 8>&-; } || { flock -u 7; exec 7>&-; }; }
 
-etag_ok() {   # $1 file, $2 S3 ETag "md5-parts": md5 of the concatenated part md5s (part size a whole number of MiB)
+etag_ok() {
     python3 - "$1" "$2" <<'EOF'
 import hashlib, math, os, sys
 f, tag = sys.argv[1], sys.argv[2].strip('"'); want, n = tag.split('-'); n = int(n); size = os.path.getsize(f)
@@ -67,7 +57,7 @@ sys.exit(2)
 EOF
 }
 
-get() {   # $1 file, $2 url, $3 bytes, $4 md5 or "": resumable aria2c download
+get() {
     local f=$1 url=$2 bytes=$3 md5=$4 tries=0 ck=()
     [ -s "$f" ] && [ ! -e "$f.aria2" ] && return 0
     [ -n "$md5" ] && ck=(--checksum=md5="$md5")
@@ -80,7 +70,7 @@ get() {   # $1 file, $2 url, $3 bytes, $4 md5 or "": resumable aria2c download
     done
 }
 
-bams_to_fastq() {   # $1 pair, $2 n|t, $3.. unaligned BAMs: one fastq.gz, read counts compared, BAMs deleted
+bams_to_fastq() {
     local p=$1 s=$2 g=$H/$1/$2.fastq.gz n=0 got b; shift 2
     slot cv $CV
     while [ "$(free)" -lt $(( $(du -cB1 "$@" | tail -1 | cut -f1) * 12 / 10 + RESERVE / 3 )) ]; do log "[$p $s] waiting for disk to convert"; sleep 600; done
@@ -94,7 +84,7 @@ bams_to_fastq() {   # $1 pair, $2 n|t, $3.. unaligned BAMs: one fastq.gz, read c
     else log "[FATAL] $p $s: $n reads in the BAMs, $got in the fastq.gz; BAMs kept"; return 1; fi
 }
 
-pacb() {   # $1 pair, $2 n|t, $3.. urls
+pacb() {
     local p=$1 s=$2 u f tag bytes files=(); shift 2
     [ -s "$H/$p/$s.fastq.gz" ] && { log "[$p $s] present"; return 0; }
     mkdir -p "$H/$p" "$RAW/$p"
@@ -108,7 +98,7 @@ pacb() {   # $1 pair, $2 n|t, $3.. urls
     bams_to_fastq "$p" "$s" "${files[@]}"
 }
 
-giab() {   # $1 pair, $2 n|t, $3 folder url, $4 checksum file url, $5.. BAM names
+giab() {
     local p=$1 s=$2 dir=$3 sums m f md5 bytes files=(); sums=$(curl -sS --retry 5 "$4"); shift 4
     [ -s "$H/$p/$s.fastq.gz" ] && { log "[$p $s] present"; return 0; }
     mkdir -p "$H/$p" "$RAW/$p"
@@ -123,7 +113,7 @@ giab() {   # $1 pair, $2 n|t, $3 folder url, $4 checksum file url, $5.. BAM name
     bams_to_fastq "$p" "$s" "${files[@]}"
 }
 
-sra() {   # $1 pair, $2 n|t, $3 run accession
+sra() {
     local p=$1 s=$2 acc=$3 f g=$H/$1/$2.fastq.gz meta url md5 bytes r w
     [ -s "$g" ] && { log "[$p $s] present"; return 0; }
     mkdir -p "$H/$p" "$RAW/$p"; f=$RAW/$p/$s.$acc.sra
@@ -146,7 +136,14 @@ sra() {   # $1 pair, $2 n|t, $3 run accession
     else log "[FATAL] $p $s: conversion check failed (read $r, written $w); $f kept"; return 1; fi
 }
 
-zen() {   # $1 Zenodo record, $2 folder: every file, md5 checked (Zenodo serves ~80 KB/s per connection: 16 connections)
+sras() {
+    local p=$1 s=$2 i=0 a parts=(); shift 2
+    [ -s "$H/$p/$s.fastq.gz" ] && { log "[$p $s] present"; return 0; }
+    for a in "$@"; do i=$((i + 1)); sra "$p" "${s}_part$i" "$a" || return 1; parts+=("$H/$p/${s}_part$i.fastq.gz"); done
+    cat "${parts[@]}" > "$H/$p/$s.fastq.gz.tmp" && pigz -t "$H/$p/$s.fastq.gz.tmp" && mv "$H/$p/$s.fastq.gz.tmp" "$H/$p/$s.fastq.gz" || { log "[FATAL] $p $s: joining failed"; return 1; }
+    mkdir -p /home/yuio/trash/fetch-parts && mv "${parts[@]}" /home/yuio/trash/fetch-parts/ && log "[$p $s] done: ${#parts[@]} runs joined, parts in ~/trash/fetch-parts"
+}
+zen() {
     mkdir -p "$T/$2"
     curl -s "https://zenodo.org/api/records/$1" | python3 -c "
 import json,sys
@@ -158,13 +155,13 @@ for f in json.load(sys.stdin)['files']: print(f['key'], f['checksum'].split(':')
         [ "$(md5sum "$T/$2/$k" | cut -d' ' -f1)" = "$md5" ] && log "[truth $2] $k md5 ok" || log "[FATAL] truth $2 $k md5 mismatch"
     done
 }
-web() {   # $1 folder, $2.. urls: plain files
+web() {
     local d=$1 u; shift; mkdir -p "$T/$d"
     for u in "$@"; do [ -s "$T/$d/$(basename "$u")" ] || curl -sSfL --retry 5 -o "$T/$d/$(basename "$u")" "$u" || log "[FATAL] truth $d $u"; done
 }
-truth() {   # the truth and call sets (CASTLE consensus and NIST HG008 were fetched earlier and are kept as they are)
-    zen 5019338 colo829        # COLO829 somatic SV truth set, Valle-Inclan et al., Cell Genomics 2022
-    zen 21231495 prcgap        # PRCGAP calls for NCI-H209, NCI-H2126, HCC1954
+truth() {
+    zen 5019338 colo829
+    zen 21231495 prcgap
     web hcc1395 $(for n in 3 4 5 15; do echo "https://static-content.springer.com/esm/art%3A10.1186%2Fs13059-022-02816-6/MediaObjects/13059_2022_2816_MOESM${n}_ESM.xlsx"; done)
     web hg009 $(for f in HG009T-p16.severus.somatic.vcf.gz HG009T-p16.severus.somatic.vcf.gz.tbi HG009T-p16.breakpoint_clusters.tsv; do
         echo "$GIAB/HG009/NIST/HG009-T_bulk/20250715p16/analysis/GRCh38/BCM_Revio_HG009T-p16_20260313/HG009-T_vs_HG009-N-WT-p4/structural_variants/$f"; done)

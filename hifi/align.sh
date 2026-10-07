@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
-# align.sh <pair> [threads]: hifi/<pair>/{n,t}.fastq.gz -> hifi/<pair>/{n,t}.bam (+ .bai), the BAMs the other callers
-# need. minimap2 -ax map-hifi -Y --secondary=no against ref/hg38_parmask.mmi, samtools sort + index; normal and tumor run
-# side by side with <threads> each (default 16). The BAM must hold every read of its fastq.gz (primary records), or it is
-# left as <s>.bam.bad. Per-sample wall time, CPU time and peak memory go to hifi/<pair>/align.steps.txt. Run it in tmux.
 set -uo pipefail
 p=$1; T=${2:-16}; H=/home/yuio/snape/hifi; D=$H/$p; IDX=/home/yuio/snape/ref/hg38_parmask.mmi
 [ -s $D/n.fastq.gz ] && [ -s $D/t.fastq.gz ] || { echo "$p: fastq.gz missing"; exit 1; }
-one() {   # $1 n|t
+one() {
     local s=$1 want got
     [ -s $D/$s.bam.bai ] && return 0
     /usr/bin/time -f "align_$s %e s %M KB %U user %S sys" bash -c "minimap2 -ax map-hifi -t $T -Y --secondary=no $IDX $D/$s.fastq.gz 2> $D/$s.minimap2.log \
