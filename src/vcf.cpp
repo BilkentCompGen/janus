@@ -29,6 +29,29 @@ static void cluster(std::vector<Event>& o, const Align& s, uint32_t gt, uint32_t
     }
 }
 
+static void runs(std::vector<Event>& o, const Align& s) {
+    uint32_t t = s.ts, q = s.st == '+' ? s.qs : s.qe, gt = 0, gq = 0, gl = 0, gap = ISL;
+    char gop = 0;
+    for (const char* p = s.cg.c_str(); *p;) {
+        uint32_t l = std::strtoul(p, (char**)&p, 10);
+        char op = *p++;
+        if ((op == 'I' || op == 'D') && l >= MS) {
+            if (op == gop && gap < ISL) gl += l + (op == 'D' ? gap : 0);
+            else {
+                if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s);
+                gop = op;
+                gt = t;
+                gq = op == 'I' && s.st != '+' ? q - l : q;
+                gl = l;
+            }
+            gap = 0;
+        } else if (op != 'I' && op != 'D') gap += l;
+        if (op != 'I') t += l;
+        if (op != 'D') q = s.st == '+' ? q + l : q - l;
+    }
+    if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s);
+}
+
 static void gaps(std::vector<Event>& o, const Align& s) {
     uint32_t t = s.ts, q = s.st == '+' ? s.qs : s.qe, gt = 0, gq = 0, ni = 0, nd = 0, gap = ISL;
     bool open = false;
@@ -53,11 +76,11 @@ static void gaps(std::vector<Event>& o, const Align& s) {
     if (open) cluster(o, s, gt, gq, ni, nd);
 }
 
-std::vector<Event> events(std::vector<Align>& sg) {
+std::vector<Event> events(std::vector<Align>& sg, bool germ) {
     std::vector<Event> o;
     std::sort(sg.begin(), sg.end(), by_start);
     for (const Align& s : sg)
-        if (s.mq >= MQ) gaps(o, s);
+        if (s.mq >= MQ) germ ? gaps(o, s) : runs(o, s);
     for (size_t i = 0; i + 1 < sg.size(); i++) {
         const Align &x = sg[i], &y = sg[i + 1];
         if (x.mq < MQ || y.mq < MQ) continue;
@@ -328,7 +351,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         const Record& v = res[i];
         float rv = repeats(fai.range(fa, v.e.c1, v.e.p1 > WIN ? v.e.p1 - WIN : 0, std::min<uint64_t>(v.e.p1 + WIN, fai.m[v.e.c1].len)));
         pv[i] = prob(v, v.e.pb ? &pbs[v.e.pb - 1] : nullptr, rv, bed.near(v.e.c1, v.e.p1) || bed.near(v.e.c2, v.e.p2), med, fv[i].data());
-        if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1 && sq.count(v.nm) && v.e.q + v.e.p2 - v.e.p1 <= sq.at(v.nm).size()) tandem(res[i].e, sq.at(v.nm), fai, fa);
+        if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1 && sq.count(v.nm)) tandem(res[i].e, sq.at(v.nm), fai, fa);
         ix[i] = {&res[i].e, i};
     }
     std::sort(ix.begin(), ix.end(), by_place);
@@ -337,7 +360,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         for (size_t y = x + 1; y < ix.size() && ix[y].e->c1 == p.c1 && ix[y].e->c2 == p.c2 && ix[y].e->p1 <= p.p1 + DUPT; y++) {
             const Event& q = *ix[y].e;
             uint32_t lp = p.p2 - p.p1, lq = q.p2 - q.p1;
-            bool sized = (p.ty == q.ty && (p.ty == "INS" || p.ty == "DEL") && 10 * std::min(lp, lq) < 7 * std::max(lp, lq)) || ((p.ty == "DEL") != (q.ty == "DEL") && (p.ty == "INS" || q.ty == "INS" || p.ty == "DUP" || q.ty == "DUP"));
+            bool sized = a.germline && ((p.ty == q.ty && (p.ty == "INS" || p.ty == "DEL") && 10 * std::min(lp, lq) < 7 * std::max(lp, lq)) || ((p.ty == "DEL") != (q.ty == "DEL") && (p.ty == "INS" || q.ty == "INS" || p.ty == "DUP" || q.ty == "DUP")));
             if (q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o) && !sized) dup[pv[ix[x].i] < pv[ix[y].i] ? ix[x].i : ix[y].i] = 1;
         }
     }
@@ -349,7 +372,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         float pr = pv[i];
         np += pr >= PCUT && !dup[i];
         std::string j = (v.e.o & 1 ? "]" : "[") + v.e.c2 + ":" + std::to_string(v.e.p2) + (v.e.o & 1 ? "]" : "["), alt = v.e.ty != "BND" ? "<" + v.e.ty + ">" : v.e.o & 2 ? "N" + j : j + "N", fs, dls;
-        for (uint32_t k = 0; k < NF; k++) { std::snprintf(num, sizeof num, "%s%.4g", k ? "," : "", fv[i][k]); fs += num; }
+        for (uint32_t k = 0; k < NF - !a.germline; k++) { std::snprintf(num, sizeof num, "%s%.4g", k ? "," : "", fv[i][k]); fs += num; }
         for (uint64_t k = 0; k < S; k++) dls += ";D" + std::to_string(k) + "=" + deltas(e.dl[k]);
         std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s;SPAN=%s;SAME=%s%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), dup[i] ? "DUPL" : pr >= PCUT ? "PASS" : "LOW", v.e.ty.c_str(),
                      v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), 1 - pr, fs.c_str(), list(e.m, S, SPAN).c_str(), list(e.m, S, SAME).c_str(), dls.c_str());

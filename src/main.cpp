@@ -4,7 +4,7 @@
 #include "cmd.h"
 #include "encoding.h"
 
-Args::Args(int argc, char** argv) : command(argc > 1 ? argv[1] : ""), in(nullptr), out(nullptr), reads(nullptr), data(nullptr), graph(nullptr), vntr(nullptr), threads(16), bases(0), support(3), shuffle(false) {
+Args::Args(int argc, char** argv) : command(argc > 1 ? argv[1] : ""), in(nullptr), out(nullptr), reads(nullptr), data(nullptr), graph(nullptr), vntr(nullptr), threads(16), bases(0), support(3), shuffle(false), germline(false) {
     for (int i = 2; i + 1 < argc; i += 2)
         if (!std::strcmp(argv[i], "-i")) in = argv[i + 1];
         else if (!std::strcmp(argv[i], "-o")) out = argv[i + 1];
@@ -16,6 +16,7 @@ Args::Args(int argc, char** argv) : command(argc > 1 ? argv[1] : ""), in(nullptr
         else if (!std::strcmp(argv[i], "-b")) bases = std::strtoull(argv[i + 1], nullptr, 10);
         else if (!std::strcmp(argv[i], "-m")) support = std::atoi(argv[i + 1]);
         else if (!std::strcmp(argv[i], "-s")) shuffle = std::atoi(argv[i + 1]) != 0;
+        else if (!std::strcmp(argv[i], "-G")) germline = std::atoi(argv[i + 1]) != 0;
 }
 
 int main(int argc, char** argv) {

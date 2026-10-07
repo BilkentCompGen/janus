@@ -40,7 +40,7 @@ struct Probe {
     uint8_t lk, set;
 };
 
-std::vector<Event> events(std::vector<Align>& sg);
+std::vector<Event> events(std::vector<Align>& sg, bool germ);
 
 static const uint32_t NF = 57;
 static const uint32_t NEAR = 500;

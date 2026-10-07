@@ -294,7 +294,7 @@ void CallPass::run(const ReadFiles& files) {
         for (std::vector<int32_t>& d : e.dl) std::sort(d.begin(), d.end());
 }
 
-static const uint32_t ROW = 3000;
+static const uint32_t ROW = 200, GROW = 3000;
 static const uint32_t TOL = 50;
 
 void Call::sites() {
@@ -320,12 +320,13 @@ void Call::sites() {
 }
 
 void Call::probes(uint64_t S) {
+    const uint32_t reach = a.germline ? GROW : ROW;
     for (std::pair<const std::string, std::vector<uint32_t>>& pc : bypc) {
         if (!al.count(pc.first)) continue;
-        for (Event& e : evs[pc.first] = events(al[pc.first])) {
+        for (Event& e : evs[pc.first] = events(al[pc.first], a.germline)) {
             uint32_t u = NONE;
             for (uint32_t i : pc.second)
-                if (e.q + ROW >= w[i].a && e.q <= w[i].b + ROW && (u == NONE || w[i].t > w[u].t)) u = i;
+                if (e.q + reach >= w[i].a && e.q <= w[i].b + reach && (u == NONE || w[i].t > w[u].t)) u = i;
             e.pb = 0;
             if (u == NONE) continue;
             bool ins = e.ty == "INS", del = e.ty == "DEL", dup = e.ty == "DUP";
@@ -388,13 +389,14 @@ static bool by_event(const Record& x, const Record& y) {
     return x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.o != y.e.o ? x.e.o < y.e.o : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
 }
 
-static bool near(const Record& x, const Record& y) {
+static bool near(const Record& x, const Record& y, bool germ) {
     uint32_t lx = x.e.p2 - x.e.p1, ly = y.e.p2 - y.e.p1;
-    if ((x.e.ty == "INS" || x.e.ty == "DEL") && x.e.c1 == x.e.c2 && std::max(lx, ly) - std::min(lx, ly) > std::max<uint32_t>(10, std::max(lx, ly) / 10)) return false;
+    if (germ && (x.e.ty == "INS" || x.e.ty == "DEL") && x.e.c1 == x.e.c2 && std::max(lx, ly) - std::min(lx, ly) > std::max<uint32_t>(10, std::max(lx, ly) / 10)) return false;
     return x.e.ty == y.e.ty && x.e.o == y.e.o && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
 }
 
 std::vector<Record> Call::attach(size_t* found) {
+    const uint32_t reach = a.germline ? GROW : ROW;
     std::vector<Record> som, res;
     for (std::pair<const std::string, std::vector<uint32_t>>& pc : bypc) {
         if (!al.count(pc.first)) continue;
@@ -402,7 +404,7 @@ std::vector<Record> Call::attach(size_t* found) {
             const Spot* r = nullptr;
             uint32_t u = 0;
             for (uint32_t i : pc.second)
-                if (e.q + ROW >= w[i].a && e.q <= w[i].b + ROW && (!r || w[i].t > r->t)) { r = &w[i]; u = i; }
+                if (e.q + reach >= w[i].a && e.q <= w[i].b + reach && (!r || w[i].t > r->t)) { r = &w[i]; u = i; }
             if (!r || !primary(e.c1) || !primary(e.c2) || r->t < a.support) continue;
             Row row(*r, u);
             som.push_back({e, pc.first, 1, row, misfit(row, e), row.nsame, row.nspan, e.q < r->a ? r->a - e.q : e.q > r->b ? e.q - r->b : 0});
@@ -410,7 +412,7 @@ std::vector<Record> Call::attach(size_t* found) {
     }
     std::sort(som.begin(), som.end(), by_event);
     for (const Record& v : som) {
-        if (res.empty() || !near(res.back(), v)) { res.push_back(v); continue; }
+        if (res.empty() || !near(res.back(), v, a.germline)) { res.push_back(v); continue; }
         Record& q = res.back();
         bool more = top(v.r.n) > top(q.r.n);
         Row m = more ? v.r : q.r;

@@ -1,29 +1,21 @@
-# verdict.py [first seed]: the verdict, a learned component (boosted trees), always applied held out.
-# Labeled pairs (CASTLE x4, HG008, COLO829): for each one, trees (5 seeds averaged) are fitted on the records of the other
-# labeled pairs (all records pooled), the cut on the probability is the one with the best F1 over those records, and the
-# held-out pair is scored. Pairs without a truth set (HG009, NCI-H209, NCI-H2126) are scored by trees fitted on all six.
-# HCC1395 is left out: its truth set (SEQC2) disagrees with every long-read caller (Feng et al. 2025), see bench/README.md.
-# Labels: a record is true when it matches a truth event (score.py). bench/verdict/folds.json keeps, per scored pair, the
-# training pairs, the cut, the training and inference times, and every record's probability and label.
-# Duplicates within 500 bp are marked by the probability. Reads bench/runs/full/<pair>/calls.vcf, writes
-# bench/verdict/<pair>.vcf (FILTER PASS / LOW / DUPL, INFO VP = the held-out probability) and bench/verdict/log.txt.
 import sys, time, numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 exec(open("/home/yuio/snape/bench/score.py").read().split("T, C = recs")[0])
 H = "/home/yuio/snape/bench"; TR = "/home/yuio/snape/hifi/truth"; S0 = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-TRUTH = {p: f"{TR}/castle_without_snape/{p}/None_minda_ensemble.vcf" for p in ["hcc1954", "h2009", "hcc1937", "h1437"]}
+TRUTH = {p: f"{TR}/castle_without_snape/{p}/None_minda_ensemble.vcf" for p in ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]}
 TRUTH.update(hg008=f"{TR}/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar_PASS.draftbenchmark.vcf.gz",
              colo829=f"{TR}/colo829/truth.vcf")
-TRAIN = ["hcc1954", "h2009", "hcc1937", "h1437", "hg008", "colo829"]
+RUNS = __import__("os").environ.get("RUNS", f"{H}/runs/full"); OUTV = __import__("os").environ.get("OUTV", f"{H}/verdict")
+TRAIN = [p for p in ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395", "hg008", "colo829"] if __import__("os").path.exists(f"{RUNS}/{p}/calls.vcf")]
 EVAL = []
-UNLABELED = ["hg009", "h209", "h2126"]
+UNLABELED = [p for p in ["hg009", "h209", "h2126", "hs578t"] if __import__("os").path.exists(f"{RUNS}/{p}/calls.vcf")]
 LABELED = TRAIN + EVAL
 HGB = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=40, l2_regularization=1.0)
 CUTS = np.arange(0.2, 0.81, 0.05)
 
 def records(p):
     L, X, K, R = [], [], [], []
-    for l in open(f"{H}/runs/full/{p}/calls.vcf"):
+    for l in open(f"{RUNS}/{p}/calls.vcf"):
         if l[0] == "#": continue
         f = l.split("\t"); info = dict(kv.split("=", 1) for kv in f[7].split(";") if "=" in kv); m = ALT.search(f[4])
         K.append((f[0], m.group(1) if m else f[0], int(f[1]), int(m.group(2)) if m else int(f[1]) + int(info["SVLEN"]), info["SVTYPE"], info["O"]))
@@ -51,7 +43,6 @@ def f1(p, y, c):
     return 2 * ((p >= c) & (y > 0)).sum() / max((p >= c).sum() + (y > 0).sum(), 1)
 
 def fit(train):
-    """trees fitted on the records of the pairs in train (pooled) and the cut with the best F1 over those records"""
     X = np.vstack([D[q][1][D[q][4]] for q in train]); y = np.concatenate([D[q][3][D[q][4]] for q in train])
     t = time.time()
     ms = [HistGradientBoostingClassifier(**HGB, random_state=s).fit(X, y) for s in range(S0, S0 + 5)]
@@ -62,7 +53,7 @@ def fit(train):
 
 t0 = time.time()
 D = {p: records(p) for p in LABELED + UNLABELED}
-log = open(f"{H}/verdict/log.txt", "w"); folds = {}
+log = open(f"{OUTV}/log.txt", "w"); folds = {}
 for p in LABELED + UNLABELED:
     tr = [q for q in TRAIN if q != p]
     ms, cut, ts, nt = fit(tr)
@@ -72,12 +63,12 @@ for p in LABELED + UNLABELED:
                     cut=round(float(cut), 2), train_s=round(ts, 3), train_records=nt, infer_s=round(ti, 4), records=len(L),
                     prob=[round(float(v), 4) for v in pr], label=None if D[p][3] is None else [int(v) for v in D[p][3]],
                     dupl=[int(v) for v in d], features=len(X[0]))
-    with open(f"{H}/verdict/{p}.vcf", "w") as o:
-        o.write("".join(l for l in open(f"{H}/runs/full/{p}/calls.vcf") if l[0] == "#"))
+    with open(f"{OUTV}/{p}.vcf", "w") as o:
+        o.write("".join(l for l in open(f"{RUNS}/{p}/calls.vcf") if l[0] == "#"))
         for l, q, u in zip(L, pr, d):
             f = l.split("\t"); f[6] = "DUPL" if u else "PASS" if q >= cut else "LOW"; f[7] += ";VP=%.4f" % q; o.write("\t".join(f))
     s = f"{p} {'held-out' if p in TRAIN else 'no truth'} PASS {int(((pr >= cut) & ~d).sum())} cut {cut:.2f} DUPL {int(d.sum())} records {len(L)}"
     print(s); log.write(s + "\n")
 s = f"verdict ({len(TRAIN)} labeled pairs held out, {len(UNLABELED)} without truth, 5 seeds) {time.time() - t0:.1f} s"
 print(s); log.write(s + "\n")
-import json; json.dump(folds, open(f"{H}/verdict/folds.json", "w"))
+import json; json.dump(folds, open(f"{OUTV}/folds.json", "w"))

@@ -6,6 +6,7 @@ RD, PS = int(sys.argv[6]), float(sys.argv[7])
 ODD = {str(i) for i in range(1, 23, 2)}
 HGB = dict(max_iter=400, learning_rate=0.05, max_leaf_nodes=31, min_samples_leaf=40, l2_regularization=1.0)
 CUTS = np.arange(0.1, 0.9, 0.05)
+SEEDS = int(__import__("os").environ.get("SEEDS", "3"))
 GRID = [(k, w, r) for k in (1, 2) for w in (300, 500, 1000) for r in (0.5, 0.7)]
 
 
@@ -87,7 +88,7 @@ odd = np.array([c[3:] in ODD for c in C])
 
 
 def fit(m):
-    return [HistGradientBoostingClassifier(**HGB, random_state=s).fit(X[m], Y[m]) for s in range(3)]
+    return [HistGradientBoostingClassifier(**HGB, random_state=s).fit(X[m], Y[m]) for s in range(SEEDS)]
 
 
 def predict(ms, m):
