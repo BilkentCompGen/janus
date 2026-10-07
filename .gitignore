@@ -83,3 +83,7 @@ paper/measure/out/
 
 # figure scripts cache the tables they computed from the runs; the scripts rebuild them
 paper/figures/snape/*/__pycache__/
+
+# paper and benchmark material are kept out of the repository
+/paper/
+/bench/
