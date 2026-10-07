@@ -20,7 +20,16 @@ static bool by_start(const Align& x, const Align& y) {
     return x.qs < y.qs;
 }
 
-static void gaps(std::vector<Event>& o, const Align& s) {
+static void cluster(std::vector<Event>& o, const Align& s, uint32_t gt, uint32_t gq, uint32_t ni, uint32_t nd) {
+    if (ni >= nd + MS) add(o, gq, "INS", s.t, gt, s.t, gt + ni - nd, s, s);
+    else if (nd >= ni + MS) add(o, gq, "DEL", s.t, gt, s.t, gt + nd - ni, s, s);
+    else if (ni >= MS && nd >= MS) {
+        add(o, gq, "INS", s.t, gt, s.t, gt + ni, s, s);
+        add(o, gq, "DEL", s.t, gt, s.t, gt + nd, s, s);
+    }
+}
+
+static void runs(std::vector<Event>& o, const Align& s) {
     uint32_t t = s.ts, q = s.st == '+' ? s.qs : s.qe, gt = 0, gq = 0, gl = 0, gap = ISL;
     char gop = 0;
     for (const char* p = s.cg.c_str(); *p;) {
@@ -43,11 +52,35 @@ static void gaps(std::vector<Event>& o, const Align& s) {
     if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s);
 }
 
-std::vector<Event> events(std::vector<Align>& sg) {
+static void gaps(std::vector<Event>& o, const Align& s) {
+    uint32_t t = s.ts, q = s.st == '+' ? s.qs : s.qe, gt = 0, gq = 0, ni = 0, nd = 0, gap = ISL;
+    bool open = false;
+    for (const char* p = s.cg.c_str(); *p;) {
+        uint32_t l = std::strtoul(p, (char**)&p, 10);
+        char op = *p++;
+        if ((op == 'I' || op == 'D') && l >= MS) {
+            if (!open || gap >= ISL) {
+                if (open) cluster(o, s, gt, gq, ni, nd);
+                open = true;
+                gt = t;
+                gq = q;
+                ni = nd = 0;
+            }
+            (op == 'I' ? ni : nd) += l;
+            if (op == 'I' && s.st != '+') gq = q - l;
+            gap = 0;
+        } else if (op != 'I' && op != 'D') gap += l;
+        if (op != 'I') t += l;
+        if (op != 'D') q = s.st == '+' ? q + l : q - l;
+    }
+    if (open) cluster(o, s, gt, gq, ni, nd);
+}
+
+std::vector<Event> events(std::vector<Align>& sg, bool germ) {
     std::vector<Event> o;
     std::sort(sg.begin(), sg.end(), by_start);
     for (const Align& s : sg)
-        if (s.mq >= MQ) gaps(o, s);
+        if (s.mq >= MQ) germ ? gaps(o, s) : runs(o, s);
     for (size_t i = 0; i + 1 < sg.size(); i++) {
         const Align &x = sg[i], &y = sg[i + 1];
         if (x.mq < MQ || y.mq < MQ) continue;
@@ -116,9 +149,7 @@ static float lg(float x) {
     return std::log2(x + 1);
 }
 
-static void measured(const Probe* b, uint32_t s, float L, float* f) {
-    for (uint32_t i = 0; i < 20; i++) f[i] = 0;
-    if (!b || !b->set) return;
+static uint32_t pick(const Probe* b, uint32_t s) {
     const uint32_t P = NA * NA;
     size_t top[2] = {0, 0}, got = P, best = 0;
     for (uint32_t x = 0; x < P; x++) {
@@ -129,7 +160,13 @@ static void measured(const Probe* b, uint32_t s, float L, float* f) {
     for (uint32_t t = 0; t < 2 * NA - 1 && got == P; t++)
         for (uint32_t x = 0; x <= t && x < NA && got == P; x++)
             if (t - x < NA && 5 * b->dl[x * NA + t - x].size() >= 4 * top[0] && 5 * b->dl[s * P + x * NA + t - x].size() >= 4 * top[1]) got = x * NA + t - x;
-    if (got == P) got = best;
+    return got == P ? best : got;
+}
+
+static void measured(const Probe* b, uint32_t s, float L, float* f) {
+    for (uint32_t i = 0; i < 20; i++) f[i] = 0;
+    if (!b || !b->set) return;
+    const uint32_t P = NA * NA, got = pick(b, s);
     const std::vector<std::pair<int32_t, int32_t>> &dn = b->dl[got], &dt = b->dl[s * P + got];
     float n = dn.size(), t = dt.size(), c[2][3] = {{0, 0, 0}, {0, 0, 0}};
     int32_t near = INT32_MAX, path = 30;
@@ -208,6 +245,7 @@ float prob(const Record& s, const Probe* b, float rp, bool vn, float med, float*
     f[34] = std::log2(r.nspc + 1.f);
     f[35] = std::min(1.f, (float)r.tspc / std::max(r.tspan, 1u));
     measured(b, r.s, ind ? L : 0, f + 36);
+    f[56] = lg(s.far);
     float z = 0;
     for (uint32_t i = 0; i < 36; i++) z += W0[i] * f[i];
     return 1 / (1 + std::exp(-z));
@@ -296,6 +334,7 @@ static bool by_place(const Placed& a, const Placed& b) {
     return x.c1 != y.c1 ? x.c1 < y.c1 : x.c2 != y.c2 ? x.c2 < y.c2 : x.p1 != y.p1 ? x.p1 < y.p1 : x.p2 != y.p2 ? x.p2 < y.p2 : a.i < b.i;
 }
 
+
 void Call::write(std::vector<Record>& res, size_t found) {
     Fai fai(a.data);
     FILE* fa = std::fopen(a.data, "r");
@@ -312,7 +351,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         const Record& v = res[i];
         float rv = repeats(fai.range(fa, v.e.c1, v.e.p1 > WIN ? v.e.p1 - WIN : 0, std::min<uint64_t>(v.e.p1 + WIN, fai.m[v.e.c1].len)));
         pv[i] = prob(v, v.e.pb ? &pbs[v.e.pb - 1] : nullptr, rv, bed.near(v.e.c1, v.e.p1) || bed.near(v.e.c2, v.e.p2), med, fv[i].data());
-        if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1) tandem(res[i].e, sq[v.nm], fai, fa);
+        if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1 && sq.count(v.nm)) tandem(res[i].e, sq.at(v.nm), fai, fa);
         ix[i] = {&res[i].e, i};
     }
     std::sort(ix.begin(), ix.end(), by_place);
@@ -320,7 +359,9 @@ void Call::write(std::vector<Record>& res, size_t found) {
         const Event& p = *ix[x].e;
         for (size_t y = x + 1; y < ix.size() && ix[y].e->c1 == p.c1 && ix[y].e->c2 == p.c2 && ix[y].e->p1 <= p.p1 + DUPT; y++) {
             const Event& q = *ix[y].e;
-            if (q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o)) dup[pv[ix[x].i] < pv[ix[y].i] ? ix[x].i : ix[y].i] = 1;
+            uint32_t lp = p.p2 - p.p1, lq = q.p2 - q.p1;
+            bool sized = a.germline && ((p.ty == q.ty && (p.ty == "INS" || p.ty == "DEL") && 10 * std::min(lp, lq) < 7 * std::max(lp, lq)) || ((p.ty == "DEL") != (q.ty == "DEL") && (p.ty == "INS" || q.ty == "INS" || p.ty == "DUP" || q.ty == "DUP")));
+            if (q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o) && !sized) dup[pv[ix[x].i] < pv[ix[y].i] ? ix[x].i : ix[y].i] = 1;
         }
     }
     uint64_t np = 0;
@@ -331,7 +372,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         float pr = pv[i];
         np += pr >= PCUT && !dup[i];
         std::string j = (v.e.o & 1 ? "]" : "[") + v.e.c2 + ":" + std::to_string(v.e.p2) + (v.e.o & 1 ? "]" : "["), alt = v.e.ty != "BND" ? "<" + v.e.ty + ">" : v.e.o & 2 ? "N" + j : j + "N", fs, dls;
-        for (uint32_t k = 0; k < NF; k++) { std::snprintf(num, sizeof num, "%s%.4g", k ? "," : "", fv[i][k]); fs += num; }
+        for (uint32_t k = 0; k < NF - !a.germline; k++) { std::snprintf(num, sizeof num, "%s%.4g", k ? "," : "", fv[i][k]); fs += num; }
         for (uint64_t k = 0; k < S; k++) dls += ";D" + std::to_string(k) + "=" + deltas(e.dl[k]);
         std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s;SPAN=%s;SAME=%s%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), dup[i] ? "DUPL" : pr >= PCUT ? "PASS" : "LOW", v.e.ty.c_str(),
                      v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), 1 - pr, fs.c_str(), list(e.m, S, SPAN).c_str(), list(e.m, S, SAME).c_str(), dls.c_str());

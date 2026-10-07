@@ -414,7 +414,7 @@ int Pack::run() {
         so.finish(Header('1', 1, reads, total));
         xo.finish(Header('I', 1, reads, longest));
     }
-    if (bam) shuffle();
+    if (bam && (a.bases || a.shuffle)) shuffle();
     std::fprintf(stderr, "[pack] %lu reads, %lu bases\n", reads, total);
     return 0;
 }

@@ -89,3 +89,6 @@ paper/figures/snape/*/__pycache__/
 /bench/runs/
 /bench/verdict/
 /bench/eval/
+/bench/callers/images/*.log
+/bench/callers/images/*/*.log
+/bench/callers/images/cue2/cue2/

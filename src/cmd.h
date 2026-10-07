@@ -10,6 +10,7 @@ struct Args {
     int threads;
     unsigned long long bases;
     uint32_t support;
+    bool shuffle, germline;
     Args(int argc, char** argv);
 };
 

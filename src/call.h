@@ -40,9 +40,9 @@ struct Probe {
     uint8_t lk, set;
 };
 
-std::vector<Event> events(std::vector<Align>& sg);
+std::vector<Event> events(std::vector<Align>& sg, bool germ);
 
-static const uint32_t NF = 56;
+static const uint32_t NF = 57;
 static const uint32_t NEAR = 500;
 
 struct Row {
@@ -58,7 +58,7 @@ struct Record {
     std::string nm;
     uint32_t pc;
     Row r;
-    uint32_t nf, ms, mn;
+    uint32_t nf, ms, mn, far;
 };
 
 uint32_t top(const std::vector<uint32_t>& n);
