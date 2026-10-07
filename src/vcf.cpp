@@ -20,27 +20,37 @@ static bool by_start(const Align& x, const Align& y) {
     return x.qs < y.qs;
 }
 
+static void cluster(std::vector<Event>& o, const Align& s, uint32_t gt, uint32_t gq, uint32_t ni, uint32_t nd) {
+    if (ni >= nd + MS) add(o, gq, "INS", s.t, gt, s.t, gt + ni - nd, s, s);
+    else if (nd >= ni + MS) add(o, gq, "DEL", s.t, gt, s.t, gt + nd - ni, s, s);
+    else if (ni >= MS && nd >= MS) {
+        add(o, gq, "INS", s.t, gt, s.t, gt + ni, s, s);
+        add(o, gq, "DEL", s.t, gt, s.t, gt + nd, s, s);
+    }
+}
+
 static void gaps(std::vector<Event>& o, const Align& s) {
-    uint32_t t = s.ts, q = s.st == '+' ? s.qs : s.qe, gt = 0, gq = 0, gl = 0, gap = ISL;
-    char gop = 0;
+    uint32_t t = s.ts, q = s.st == '+' ? s.qs : s.qe, gt = 0, gq = 0, ni = 0, nd = 0, gap = ISL;
+    bool open = false;
     for (const char* p = s.cg.c_str(); *p;) {
         uint32_t l = std::strtoul(p, (char**)&p, 10);
         char op = *p++;
         if ((op == 'I' || op == 'D') && l >= MS) {
-            if (op == gop && gap < ISL) gl += l + (op == 'D' ? gap : 0);
-            else {
-                if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s);
-                gop = op;
+            if (!open || gap >= ISL) {
+                if (open) cluster(o, s, gt, gq, ni, nd);
+                open = true;
                 gt = t;
-                gq = op == 'I' && s.st != '+' ? q - l : q;
-                gl = l;
+                gq = q;
+                ni = nd = 0;
             }
+            (op == 'I' ? ni : nd) += l;
+            if (op == 'I' && s.st != '+') gq = q - l;
             gap = 0;
         } else if (op != 'I' && op != 'D') gap += l;
         if (op != 'I') t += l;
         if (op != 'D') q = s.st == '+' ? q + l : q - l;
     }
-    if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s);
+    if (open) cluster(o, s, gt, gq, ni, nd);
 }
 
 std::vector<Event> events(std::vector<Align>& sg) {
@@ -212,6 +222,7 @@ float prob(const Record& s, const Probe* b, float rp, bool vn, float med, float*
     f[34] = std::log2(r.nspc + 1.f);
     f[35] = std::min(1.f, (float)r.tspc / std::max(r.tspan, 1u));
     measured(b, r.s, ind ? L : 0, f + 36);
+    f[56] = lg(s.far);
     float z = 0;
     for (uint32_t i = 0; i < 36; i++) z += W0[i] * f[i];
     return 1 / (1 + std::exp(-z));

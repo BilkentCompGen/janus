@@ -294,7 +294,7 @@ void CallPass::run(const ReadFiles& files) {
         for (std::vector<int32_t>& d : e.dl) std::sort(d.begin(), d.end());
 }
 
-static const uint32_t ROW = 200;
+static const uint32_t ROW = 3000;
 static const uint32_t TOL = 50;
 
 void Call::sites() {
@@ -405,7 +405,7 @@ std::vector<Record> Call::attach(size_t* found) {
                 if (e.q + ROW >= w[i].a && e.q <= w[i].b + ROW && (!r || w[i].t > r->t)) { r = &w[i]; u = i; }
             if (!r || !primary(e.c1) || !primary(e.c2) || r->t < a.support) continue;
             Row row(*r, u);
-            som.push_back({e, pc.first, 1, row, misfit(row, e), row.nsame, row.nspan});
+            som.push_back({e, pc.first, 1, row, misfit(row, e), row.nsame, row.nspan, e.q < r->a ? r->a - e.q : e.q > r->b ? e.q - r->b : 0});
         }
     }
     std::sort(som.begin(), som.end(), by_event);
