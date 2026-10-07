@@ -46,7 +46,7 @@ elif [ $X = threads ]; then
 elif [ $X = coverage ]; then
     for p in ${*:-$CASTLE}; do
         M=$E/mix/$p; mkdir -p $M
-        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $(src $p $s) -o $M/$s.svb -t 16 > $M/pack_$s.log 2>&1; done
+        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $(src $p $s) -o $M/$s.svb -t 16 -s 1 > $M/pack_$s.log 2>&1; done
         for n in $LEVELS; do
             [ $n -le $(depth $p) ] || continue
             D=$E/${p}_${n}x; [ -s $D/run.json ] && continue
@@ -60,7 +60,7 @@ elif [ $X = coverage ]; then
 elif [ $X = purity ]; then
     for p in ${*:-hcc1954 hcc1395}; do
         M=$E/mix/$p; mkdir -p $M
-        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $(src $p $s) -o $M/$s.svb -t 16 > $M/pack_$s.log 2>&1; done
+        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $(src $p $s) -o $M/$s.svb -t 16 -s 1 > $M/pack_$s.log 2>&1; done
         nb=$(python3 -c "import struct; print(struct.unpack_from('<Q', open('$M/n.svb', 'rb').read(32), 16)[0])")
         nm=$((nb - 24 * G - G / 10)); [ $nm -gt $((30 * G)) ] && nm=$((30 * G))
         [ -s $M/nm.svb.idx ] || python3 $H/svb_mix.py $M/nm.svb $M/n.svb:0:$nm >> $Q 2>&1 || { log "[$p] matched normal mix FAILED"; continue; }
