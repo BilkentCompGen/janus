@@ -116,9 +116,7 @@ static float lg(float x) {
     return std::log2(x + 1);
 }
 
-static void measured(const Probe* b, uint32_t s, float L, float* f) {
-    for (uint32_t i = 0; i < 20; i++) f[i] = 0;
-    if (!b || !b->set) return;
+static uint32_t pick(const Probe* b, uint32_t s) {
     const uint32_t P = NA * NA;
     size_t top[2] = {0, 0}, got = P, best = 0;
     for (uint32_t x = 0; x < P; x++) {
@@ -129,7 +127,13 @@ static void measured(const Probe* b, uint32_t s, float L, float* f) {
     for (uint32_t t = 0; t < 2 * NA - 1 && got == P; t++)
         for (uint32_t x = 0; x <= t && x < NA && got == P; x++)
             if (t - x < NA && 5 * b->dl[x * NA + t - x].size() >= 4 * top[0] && 5 * b->dl[s * P + x * NA + t - x].size() >= 4 * top[1]) got = x * NA + t - x;
-    if (got == P) got = best;
+    return got == P ? best : got;
+}
+
+static void measured(const Probe* b, uint32_t s, float L, float* f) {
+    for (uint32_t i = 0; i < 20; i++) f[i] = 0;
+    if (!b || !b->set) return;
+    const uint32_t P = NA * NA, got = pick(b, s);
     const std::vector<std::pair<int32_t, int32_t>> &dn = b->dl[got], &dt = b->dl[s * P + got];
     float n = dn.size(), t = dt.size(), c[2][3] = {{0, 0, 0}, {0, 0, 0}};
     int32_t near = INT32_MAX, path = 30;
@@ -296,6 +300,7 @@ static bool by_place(const Placed& a, const Placed& b) {
     return x.c1 != y.c1 ? x.c1 < y.c1 : x.c2 != y.c2 ? x.c2 < y.c2 : x.p1 != y.p1 ? x.p1 < y.p1 : x.p2 != y.p2 ? x.p2 < y.p2 : a.i < b.i;
 }
 
+
 void Call::write(std::vector<Record>& res, size_t found) {
     Fai fai(a.data);
     FILE* fa = std::fopen(a.data, "r");
@@ -312,7 +317,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         const Record& v = res[i];
         float rv = repeats(fai.range(fa, v.e.c1, v.e.p1 > WIN ? v.e.p1 - WIN : 0, std::min<uint64_t>(v.e.p1 + WIN, fai.m[v.e.c1].len)));
         pv[i] = prob(v, v.e.pb ? &pbs[v.e.pb - 1] : nullptr, rv, bed.near(v.e.c1, v.e.p1) || bed.near(v.e.c2, v.e.p2), med, fv[i].data());
-        if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1) tandem(res[i].e, sq[v.nm], fai, fa);
+        if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1 && sq.count(v.nm) && v.e.q + v.e.p2 - v.e.p1 <= sq.at(v.nm).size()) tandem(res[i].e, sq.at(v.nm), fai, fa);
         ix[i] = {&res[i].e, i};
     }
     std::sort(ix.begin(), ix.end(), by_place);
@@ -320,7 +325,9 @@ void Call::write(std::vector<Record>& res, size_t found) {
         const Event& p = *ix[x].e;
         for (size_t y = x + 1; y < ix.size() && ix[y].e->c1 == p.c1 && ix[y].e->c2 == p.c2 && ix[y].e->p1 <= p.p1 + DUPT; y++) {
             const Event& q = *ix[y].e;
-            if (q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o)) dup[pv[ix[x].i] < pv[ix[y].i] ? ix[x].i : ix[y].i] = 1;
+            uint32_t lp = p.p2 - p.p1, lq = q.p2 - q.p1;
+            bool sized = (p.ty == q.ty && (p.ty == "INS" || p.ty == "DEL") && 10 * std::min(lp, lq) < 7 * std::max(lp, lq)) || ((p.ty == "DEL") != (q.ty == "DEL") && (p.ty == "INS" || q.ty == "INS" || p.ty == "DUP" || q.ty == "DUP"));
+            if (q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o) && !sized) dup[pv[ix[x].i] < pv[ix[y].i] ? ix[x].i : ix[y].i] = 1;
         }
     }
     uint64_t np = 0;

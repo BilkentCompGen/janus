@@ -389,6 +389,8 @@ static bool by_event(const Record& x, const Record& y) {
 }
 
 static bool near(const Record& x, const Record& y) {
+    uint32_t lx = x.e.p2 - x.e.p1, ly = y.e.p2 - y.e.p1;
+    if ((x.e.ty == "INS" || x.e.ty == "DEL") && x.e.c1 == x.e.c2 && std::max(lx, ly) - std::min(lx, ly) > std::max<uint32_t>(10, std::max(lx, ly) / 10)) return false;
     return x.e.ty == y.e.ty && x.e.o == y.e.o && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
 }
 
