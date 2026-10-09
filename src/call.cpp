@@ -84,7 +84,9 @@ CallPass::CallPass(std::vector<Spot>& w, std::vector<Probe>& pr, const Graph& g,
     }
     for (uint64_t v = 0; v < g.K; v++) {
         gd[v] = g.reads(0, v) > 0 && g.reads(0, v) <= 2 * med;
-        for (uint64_t s = 1; s < g.S; s++) gd[v] &= g.reads(s, v) > 0;
+        uint64_t nt = 0;
+        for (uint64_t s = 1; s < g.S; s++) nt += g.reads(s, v) > 0;
+        gd[v] = gd[v] && 2 * nt >= g.S - 1;
     }
     std::vector<uint8_t> in(g.K, 0), on(g.K, 0);
     for (uint64_t e : g.edges) {

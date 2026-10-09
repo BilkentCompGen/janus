@@ -376,7 +376,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         for (uint64_t k = 0; k < S; k++) dls += ";D" + std::to_string(k) + "=" + deltas(e.dl[k]);
         std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s;SPAN=%s;SAME=%s%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), dup[i] ? "DUPL" : pr >= PCUT ? "PASS" : "LOW", v.e.ty.c_str(),
                      v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), 1 - pr, fs.c_str(), list(e.m, S, SPAN).c_str(), list(e.m, S, SAME).c_str(), dls.c_str());
-        for (uint32_t n : v.r.n) std::fprintf(o, "\t%s:%u", n >= a.support ? "0/1" : "0/0", n);
+        for (uint64_t k = 0; k < v.r.n.size(); k++) std::fprintf(o, "\t%s:%u", v.r.n[k] >= (k ? 1 : a.support) ? "0/1" : "0/0", v.r.n[k]);
         std::fprintf(o, "\n");
     }
     std::fclose(o);

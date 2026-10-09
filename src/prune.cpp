@@ -267,8 +267,10 @@ void Prune::gather(std::vector<uint64_t>& rows) const {
         if (!k || !odd(i) || !combos.kept(k)) continue;
         uint64_t ei = g.edges[Combos::in(k)], eo = g.edges[Combos::out(k)];
         if (drop[Graph::from(ei)] || drop[Graph::to(ei)] || drop[Graph::from(eo)] || drop[Graph::to(eo)]) continue;
-        for (uint64_t s = 1; s < S; s++)
-            if (combos.n[i * (S - 1) + s - 1] >= a.support) w.push_back({Combos::central_read(s, combos.best[i * (S - 1) + s - 1]), k, i});
+        uint64_t bs = 1;
+        for (uint64_t s = 2; s < S; s++)
+            if (combos.n[i * (S - 1) + s - 1] >= combos.n[i * (S - 1) + bs - 1]) bs = s;
+        w.push_back({Combos::central_read(bs, combos.best[i * (S - 1) + bs - 1]), k, i});
     }
     std::sort(w.begin(), w.end());
     for (const std::array<uint64_t, 3>& e : w) {
