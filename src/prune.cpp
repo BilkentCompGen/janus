@@ -232,7 +232,7 @@ private:
     Combos combos;
     void visit(Chain& c, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t rid) override;
     bool odd(uint64_t i) const;
-    void gather(std::vector<uint64_t>& rows) const;
+    uint64_t gather(Output& o) const;
     std::vector<uint8_t> seeds(const std::vector<uint8_t>& drop) const;
 };
 
@@ -258,7 +258,7 @@ bool Prune::odd(uint64_t i) const {
     return on;
 }
 
-void Prune::gather(std::vector<uint64_t>& rows) const {
+uint64_t Prune::gather(Output& o) const {
     const std::vector<uint8_t>& drop = bubbles.drop;
     const uint64_t S = combos.S;
     std::vector<std::array<uint64_t, 3>> w;
@@ -271,12 +271,14 @@ void Prune::gather(std::vector<uint64_t>& rows) const {
             if (combos.n[i * (S - 1) + s - 1] >= a.support) w.push_back({Combos::central_read(s, combos.best[i * (S - 1) + s - 1]), k, i});
     }
     std::sort(w.begin(), w.end());
+    std::vector<uint64_t> row(2 + S, 0);
     for (const std::array<uint64_t, 3>& e : w) {
-        rows.push_back(e[0]);
-        rows.push_back(e[1]);
-        rows.push_back(0);
-        rows.insert(rows.end(), combos.n.begin() + e[2] * (S - 1), combos.n.begin() + (e[2] + 1) * (S - 1));
+        row[0] = e[0];
+        row[1] = e[1];
+        for (uint64_t s = 1; s < S; s++) row[2 + s] = combos.n[e[2] * (S - 1) + s - 1];
+        std::fwrite(row.data(), 8, row.size(), o.f);
     }
+    return w.size();
 }
 
 int Prune::run() {
@@ -292,16 +294,16 @@ int Prune::run() {
         combos.grow();
     }
     bubbles.judge();
-    std::vector<uint64_t> d, rows;
+    std::vector<uint64_t> d;
     for (uint64_t v = 0; v < g.K; v++)
         if (bubbles.drop[v]) d.push_back(g.hashes[v]);
     std::sort(d.begin(), d.end());
     std::string o(a.out);
     Output::save((o + ".drp").c_str(), Header('P', 1, d.size(), bubbles.arms.size() / 2), d.data(), d.size() * 8);
     combos.keep(seeds(bubbles.drop));
-    gather(rows);
-    Header h('S', 1, rows.size() / (2 + g.S), g.S);
-    Output::save((o + ".sites").c_str(), h, rows.data(), rows.size() * 8);
+    Output sites((o + ".sites").c_str());
+    Header h('S', 1, gather(sites), g.S);
+    sites.finish(h);
     std::fprintf(stderr, "[prune] %zu dropped nodes, %lu sites\n", d.size(), (unsigned long)h.n);
     return 0;
 }

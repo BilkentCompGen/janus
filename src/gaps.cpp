@@ -28,7 +28,6 @@ int cmd_lift(const Args& a) {
 }
 
 int cmd_clip(const Args& a) {
-    Fasta f((std::string(a.in) + ".fa").c_str());
     std::map<std::string, std::vector<std::pair<uint32_t, uint32_t>>> cov;
     {
         Lines in(a.reads);
@@ -37,29 +36,38 @@ int cmd_clip(const Args& a) {
             if (p.parse(in.s) >= 4) cov[p.q].push_back({p.qs, p.qe});
     }
     FILE* fo = std::fopen(a.out, "w");
-    for (size_t i = 0; i < f.name.size(); i++) {
-        std::map<std::string, std::vector<std::pair<uint32_t, uint32_t>>>::iterator it = cov.find(f.name[i]);
+    Lines f((std::string(a.in) + ".fa").c_str());
+    std::string nm;
+    while (f.next()) {
+        if (f.s[0] == '>') { nm.assign(f.s + 1, std::strcspn(f.s + 1, " \t\n")); continue; }
+        std::map<std::string, std::vector<std::pair<uint32_t, uint32_t>>>::iterator it = cov.find(nm);
         if (it == cov.end()) continue;
         std::vector<std::pair<uint32_t, uint32_t>>& c = it->second;
         std::sort(c.begin(), c.end());
         std::vector<std::pair<uint32_t, uint32_t>> g;
-        uint32_t at = 0, L = f.seq[i].size();
+        uint32_t at = 0, L = std::strcspn(f.s, "\r\n");
+        for (uint32_t i = 0; i < L; i++) f.s[i] &= 0xdf;
         for (std::pair<uint32_t, uint32_t>& p : c) {
             if (p.first >= at + MING) g.push_back({at, p.first});
             at = std::max(at, p.second);
         }
         if (L >= at + MING) g.push_back({at, L});
         for (std::pair<uint32_t, uint32_t>& p : g)
-            if (p.second - p.first <= MAXG) std::fprintf(fo, ">%s|%u|%u\n%s\n", f.name[i].c_str(), p.first, p.second, f.seq[i].substr(p.first, p.second - p.first).c_str());
+            if (p.second - p.first <= MAXG) std::fprintf(fo, ">%s|%u|%u\n%.*s\n", nm.c_str(), p.first, p.second, (int)(p.second - p.first), f.s + p.first);
     }
     std::fclose(fo);
     return 0;
 }
 
 int cmd_patch(const Args& a) {
-    Fasta f((std::string(a.in) + ".fa").c_str());
     std::map<std::string, uint32_t> len;
-    for (size_t i = 0; i < f.name.size(); i++) len[f.name[i]] = f.seq[i].size();
+    {
+        Lines f((std::string(a.in) + ".fa").c_str());
+        std::string nm;
+        while (f.next())
+            if (f.s[0] == '>') nm.assign(f.s + 1, std::strcspn(f.s + 1, " \t\n"));
+            else len[nm] = std::strcspn(f.s, "\r\n");
+    }
     FILE* fo = std::fopen(a.out, "w");
     {
         Lines own(a.data);

@@ -299,34 +299,58 @@ static const uint32_t ROW = 200, GROW = 3000;
 static const uint32_t TOL = 50;
 
 void Call::sites() {
+    const uint32_t reach = a.germline ? GROW : ROW;
     Graph g(a.graph);
+    alignments();
+    std::vector<Lite> lt;
+    std::unordered_map<std::string, std::vector<uint32_t>> all;
+    std::vector<std::vector<uint32_t>> dep(g.S);
     {
         Lines in((pre + ".tsv").c_str());
         while (in.next()) {
+            Spot r;
+            r.parse(in.s, g);
+            all[r.nm].push_back(lt.size());
+            lt.push_back({r.a, r.b, r.t});
+            dep[r.s].push_back(r.dep[r.s]);
+        }
+    }
+    for (std::vector<uint32_t>& d : dep) {
+        std::sort(d.begin(), d.end());
+        med.push_back(d.empty() ? 0 : d[d.size() / 2]);
+    }
+    std::vector<uint8_t> keep(lt.size(), 0);
+    for (std::pair<const std::string, std::vector<uint32_t>>& pc : all) {
+        if (!al.count(pc.first)) continue;
+        for (const Event& e : evs[pc.first] = events(al[pc.first], a.germline)) {
+            uint32_t u = NONE;
+            for (uint32_t i : pc.second)
+                if (e.q + reach >= lt[i].a && e.q <= lt[i].b + reach && (u == NONE || lt[i].t > lt[u].t)) u = i;
+            if (u != NONE) keep[u] = 1;
+        }
+    }
+    {
+        Lines in((pre + ".tsv").c_str());
+        for (uint32_t i = 0; in.next(); i++) {
+            if (!keep[i]) continue;
             Spot r;
             r.parse(in.s, g);
             bypc[r.nm].push_back(w.size());
             w.push_back(r);
         }
     }
-    alignments();
+    std::fprintf(stderr, "[call] %zu of %zu sites carry an event\n", w.size(), lt.size());
     probes(g.S);
     CallPass pass(w, pbs, g, a.threads);
     g = Graph();
     pass.run(ReadFiles(a.reads));
-    std::vector<std::vector<uint32_t>> dep(w.empty() ? 0 : w[0].dep.size());
-    for (const Spot& e : w) dep[e.s].push_back(e.dep[e.s]);
-    for (std::vector<uint32_t>& d : dep) {
-        std::sort(d.begin(), d.end());
-        med.push_back(d.empty() ? 0 : d[d.size() / 2]);
-    }
 }
 
 void Call::probes(uint64_t S) {
     const uint32_t reach = a.germline ? GROW : ROW;
     for (std::pair<const std::string, std::vector<uint32_t>>& pc : bypc) {
         if (!al.count(pc.first)) continue;
-        for (Event& e : evs[pc.first] = events(al[pc.first], a.germline)) {
+        for (Event& e : evs[pc.first]) {
             uint32_t u = NONE;
             for (uint32_t i : pc.second)
                 if (e.q + reach >= w[i].a && e.q <= w[i].b + reach && (u == NONE || w[i].t > w[u].t)) u = i;

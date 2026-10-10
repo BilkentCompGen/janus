@@ -191,17 +191,21 @@ struct Piece { uint64_t read; uint32_t lo, hi, k; std::string s; };
 class Pieces : public Job {
 public:
     std::vector<Piece> list;
-    Pieces(const ReadFiles& files, int t) : files(files), t(t) {}
+    uint64_t nb;
+    Pieces(const ReadFiles& files, int t) : nb(0), files(files), t(t) {}
     void build(std::vector<Site>& w, const std::vector<uint64_t>& rd, const std::vector<uint32_t>& ro);
-    void cut() { par(t); }
+    void cut(FILE* f);
     static std::string name(const Piece& q);
 
 private:
     const ReadFiles& files;
     int t;
+    size_t lo, hi;
     std::vector<uint32_t> gs;
     void task(int i) override;
 };
+
+static const size_t BATCH = 1 << 14;
 
 void Pieces::build(std::vector<Site>& w, const std::vector<uint64_t>& rd, const std::vector<uint32_t>& ro) {
     for (uint32_t k = 0; k + 1 < ro.size(); k++) {
@@ -224,10 +228,22 @@ void Pieces::build(std::vector<Site>& w, const std::vector<uint64_t>& rd, const 
 void Pieces::task(int i) {
     Read r;
     std::vector<uint8_t> rec;
-    for (size_t k = i; k + 1 < gs.size(); k += t) {
+    for (size_t k = lo + i; k < hi; k += t) {
         files.get(list[gs[k]].read, rec);
         r.squeeze(rec.data());
         for (uint32_t j = gs[k]; j < gs[k + 1]; j++) list[j].s = r.bases(rec.data(), list[j].lo, list[j].hi, 0);
+    }
+}
+
+void Pieces::cut(FILE* f) {
+    for (lo = 0; lo + 1 < gs.size(); lo = hi) {
+        hi = std::min(lo + BATCH, gs.size() - 1);
+        par(t);
+        for (uint32_t j = gs[lo]; j < gs[hi]; j++) {
+            Fasta::put(f, name(list[j]), list[j].s);
+            nb += list[j].s.size();
+            std::string().swap(list[j].s);
+        }
     }
 }
 
@@ -256,7 +272,7 @@ private:
     void index_reads();
     void visit(Chain& c, const uint8_t* rec, uint32_t m, uint32_t rc, uint64_t rid) override;
     void anchor(Chain& c, uint32_t m, uint32_t rc, uint64_t rid);
-    void write(const Pieces& p, size_t n0) const;
+    void write(Pieces& p, size_t n0) const;
 };
 
 Select::Select(const Args& a) : Walker(a.threads), a(a), g(a.in), adj(g), combos(g, adj), anchors(g), files(a.reads), ids(a.threads), groups(nullptr) {
@@ -314,11 +330,10 @@ static std::string list(const std::vector<Anchor>& v, uint32_t lo) {
     return s.empty() ? "-" : s;
 }
 
-void Select::write(const Pieces& p, size_t n0) const {
+void Select::write(Pieces& p, size_t n0) const {
     std::string o(a.out);
     FILE *f = std::fopen((o + ".fa").c_str(), "w"), *v = std::fopen((o + ".tsv").c_str(), "w");
-    uint64_t nb = 0;
-    for (const Piece& q : p.list) { Fasta::put(f, Pieces::name(q), q.s); nb += q.s.size(); }
+    p.cut(f);
     for (uint32_t i = 0; i < w.size(); i++) {
         const Site& e = w[i];
         if (e.hi <= e.lo) continue;
@@ -327,7 +342,7 @@ void Select::write(const Pieces& p, size_t n0) const {
     }
     std::fclose(f);
     std::fclose(v);
-    std::fprintf(stderr, "[select] %zu sites, %zu more rows from distance groups, on %zu reads; %zu pieces, %lu bp\n", n0, w.size() - n0, rd.size(), p.list.size(), (unsigned long)nb);
+    std::fprintf(stderr, "[select] %zu sites, %zu more rows from distance groups, on %zu reads; %zu pieces, %lu bp\n", n0, w.size() - n0, rd.size(), p.list.size(), (unsigned long)p.nb);
 }
 
 int Select::run() {
@@ -354,7 +369,6 @@ int Select::run() {
     index_reads();
     Pieces p(files, a.threads);
     p.build(w, rd, ro);
-    p.cut();
     write(p, n0);
     return 0;
 }

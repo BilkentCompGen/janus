@@ -21,6 +21,8 @@ struct Spot {
     void parse(const char* line, const Graph& g);
 };
 
+struct Lite { uint32_t a, b, t; };
+
 struct Align { uint32_t qs, qe, ts, te, mq; char st; std::string t, cg; float de; };
 
 struct Event {
