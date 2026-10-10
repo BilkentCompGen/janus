@@ -20,6 +20,20 @@ uint64_t Combos::keep(const std::vector<uint8_t>& sd) {
     for (uint8_t k : keeps) np += k;
     on.assign(K, 0);
     for (uint64_t v = 0; v < K; v++) on[v] = branch[v] || keeps[seg[v]];
+    if (fork.empty()) {
+        std::vector<uint32_t> has(K, 0), in(K, 0), out(K, 0);
+        for (uint64_t v = 0; v < K; v++)
+            for (uint64_t s = 1; s < S; s++) has[v] |= g.reads(0, v) ? ~0u : (uint32_t)(g.reads(s, v) > 0) << s;
+        fork.assign(K, 0);
+        for (uint64_t e : g.edges) {
+            uint64_t u = Graph::from(e), v = Graph::to(e);
+            uint32_t m = has[u] & has[v];
+            fork[u] |= out[u] & m;
+            out[u] |= m;
+            fork[v] |= in[v] & m;
+            in[v] |= m;
+        }
+    }
     return np;
 }
 
@@ -109,5 +123,6 @@ void Combos::tally(Chain& c, uint32_t m, uint64_t s, uint64_t rid) {
     for (const Hit& h : c.hits) __builtin_prefetch(&seen[home(h.key, Z)]);
     for (const Hit& h : c.hits)
         if (!s) remember(h.key);
+        else if (h.b - h.a == 2 && branch[c.id[h.a + 1]] && !keeps[seg[c.id[h.a + 1]]] && !(fork[c.id[h.a + 1]] >> s & 1)) continue;
         else if (!known(h.key)) add(h.key, s, centrality(c, h, rid));
 }

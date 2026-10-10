@@ -126,10 +126,6 @@ Row::Row(const Spot& e, uint32_t u) : a(e.a), b(e.b), u(u), s(e.s), n(e.n), d(e.
     tspc = mt[CONSISTENT];
 }
 
-uint32_t top(const std::vector<uint32_t>& n) {
-    return *std::max_element(n.begin() + 1, n.end());
-}
-
 uint32_t misfit(const Row& r, const Event& e) {
     uint32_t o = e.q < r.a || e.q > r.b, L = e.p2 - e.p1;
     return e.ty == "BND" || e.ty == "INV" ? o : o ? 2 * L : r.nspan ? std::abs(std::abs(r.lest) - (int32_t)L) : L;
@@ -205,7 +201,7 @@ static void measured(const Probe* b, uint32_t s, float L, float* f) {
 
 float prob(const Record& s, const Probe* b, float rp, bool vn, float med, float* f) {
     const Row& r = s.r;
-    uint32_t t = top(r.n), dt = r.d[r.s], L = s.e.p2 - s.e.p1;
+    uint32_t t = r.n[r.s], dt = r.d[r.s], L = s.e.p2 - s.e.p1;
     int32_t al = std::abs(r.lest);
     bool sp = r.nspan > 0, ind = s.e.ty != "BND" && s.e.ty != "INV";
     f[0] = 1;
@@ -350,7 +346,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
     for (size_t i = 0; i < res.size(); i++) {
         const Record& v = res[i];
         float rv = repeats(fai.range(fa, v.e.c1, v.e.p1 > WIN ? v.e.p1 - WIN : 0, std::min<uint64_t>(v.e.p1 + WIN, fai.m[v.e.c1].len)));
-        pv[i] = prob(v, v.e.pb ? &pbs[v.e.pb - 1] : nullptr, rv, bed.near(v.e.c1, v.e.p1) || bed.near(v.e.c2, v.e.p2), med, fv[i].data());
+        pv[i] = prob(v, v.e.pb ? &pbs[v.e.pb - 1] : nullptr, rv, bed.near(v.e.c1, v.e.p1) || bed.near(v.e.c2, v.e.p2), med[v.r.s], fv[i].data());
         if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1 && sq.count(v.nm)) tandem(res[i].e, sq.at(v.nm), fai, fa);
         ix[i] = {&res[i].e, i};
     }
@@ -361,7 +357,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
             const Event& q = *ix[y].e;
             uint32_t lp = p.p2 - p.p1, lq = q.p2 - q.p1;
             bool sized = a.germline && ((p.ty == q.ty && (p.ty == "INS" || p.ty == "DEL") && 10 * std::min(lp, lq) < 7 * std::max(lp, lq)) || ((p.ty == "DEL") != (q.ty == "DEL") && (p.ty == "INS" || q.ty == "INS" || p.ty == "DUP" || q.ty == "DUP")));
-            if (q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o) && !sized) dup[pv[ix[x].i] < pv[ix[y].i] ? ix[x].i : ix[y].i] = 1;
+            if (res[ix[x].i].r.s == res[ix[y].i].r.s && q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o) && !sized) dup[pv[ix[x].i] < pv[ix[y].i] ? ix[x].i : ix[y].i] = 1;
         }
     }
     uint64_t np = 0;
@@ -376,7 +372,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         for (uint64_t k = 0; k < S; k++) dls += ";D" + std::to_string(k) + "=" + deltas(e.dl[k]);
         std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s;SPAN=%s;SAME=%s%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), dup[i] ? "DUPL" : pr >= PCUT ? "PASS" : "LOW", v.e.ty.c_str(),
                      v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), 1 - pr, fs.c_str(), list(e.m, S, SPAN).c_str(), list(e.m, S, SAME).c_str(), dls.c_str());
-        for (uint64_t k = 0; k < v.r.n.size(); k++) std::fprintf(o, "\t%s:%u", v.r.n[k] >= (k ? 1 : a.support) ? "0/1" : "0/0", v.r.n[k]);
+        for (uint64_t k = 0; k < v.r.n.size(); k++) std::fprintf(o, "\t%s:%u", (k ? k == v.r.s : v.r.n[k] >= a.support) ? "0/1" : "0/0", v.r.n[k]);
         std::fprintf(o, "\n");
     }
     std::fclose(o);

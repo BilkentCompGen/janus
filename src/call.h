@@ -61,7 +61,6 @@ struct Record {
     uint32_t nf, ms, mn, far;
 };
 
-uint32_t top(const std::vector<uint32_t>& n);
 uint32_t misfit(const Row& r, const Event& e);
 float repeats(const std::string& s);
 float prob(const Record& s, const Probe* b, float rp, bool vn, float med, float* f);
@@ -78,7 +77,7 @@ private:
 
 class Call {
 public:
-    explicit Call(const Args& a) : a(a), pre(a.in), bed(a.vntr), med(0) {}
+    explicit Call(const Args& a) : a(a), pre(a.in), bed(a.vntr) {}
     int run();
 
 private:
@@ -91,7 +90,7 @@ private:
     std::unordered_map<std::string, std::vector<Align>> al;
     std::unordered_map<std::string, std::vector<Event>> evs;
     std::unordered_map<std::string, std::string> sq;
-    float med;
+    std::vector<float> med;
     void sites();
     void probes(uint64_t S);
     void alignments();

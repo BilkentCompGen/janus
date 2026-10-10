@@ -56,7 +56,8 @@ private:
     std::vector<Probe>& pr;
     std::vector<uint32_t> av, ai, pv, pi;
     std::vector<std::pair<uint64_t, uint32_t>> byread;
-    std::vector<uint8_t> isa, nz, br, gd, isp;
+    std::vector<uint8_t> isa, nz, gd, isp;
+    std::vector<uint32_t> br, has;
     std::vector<std::vector<uint32_t>> sb;
     std::vector<uint64_t> rs;
     std::vector<std::vector<uint64_t>> hb;
@@ -69,13 +70,12 @@ private:
     void probe(Chain& c, uint32_t m);
 };
 
-CallPass::CallPass(std::vector<Spot>& w, std::vector<Probe>& pr, const Graph& g, int t) : Walker(t), w(w), pr(pr), isa(g.K, 0), nz(g.K, 0), br(g.K, 0), gd(g.K, 0), isp(g.K, 0), sb(t), hb(t), measuring(false) {
+CallPass::CallPass(std::vector<Spot>& w, std::vector<Probe>& pr, const Graph& g, int t) : Walker(t), w(w), pr(pr), isa(g.K, 0), nz(g.K, 0), gd(g.K, 0), isp(g.K, 0), br(g.K, 0), has(g.K, 0), sb(t), hb(t), measuring(false) {
     for (uint64_t v = 0; v < g.K; v++) nz[v] = g.reads(0, v) == 0;
     std::vector<uint32_t> full;
     for (uint64_t v = 0; v < g.K; v++) {
-        bool all = true;
-        for (uint64_t s = 0; s < g.S; s++) all &= g.reads(s, v) > 0;
-        if (all) full.push_back(g.reads(0, v));
+        for (uint64_t s = 1; s < g.S; s++) has[v] |= (uint32_t)(g.reads(s, v) > 0) << s;
+        if (has[v] && g.reads(0, v)) full.push_back(g.reads(0, v));
     }
     uint32_t med = 0;
     if (!full.empty()) {
@@ -84,17 +84,16 @@ CallPass::CallPass(std::vector<Spot>& w, std::vector<Probe>& pr, const Graph& g,
     }
     for (uint64_t v = 0; v < g.K; v++) {
         gd[v] = g.reads(0, v) > 0 && g.reads(0, v) <= 2 * med;
-        uint64_t nt = 0;
-        for (uint64_t s = 1; s < g.S; s++) nt += g.reads(s, v) > 0;
-        gd[v] = gd[v] && 2 * nt >= g.S - 1;
     }
-    std::vector<uint8_t> in(g.K, 0), on(g.K, 0);
+    std::vector<uint32_t> in(g.K, 0), on(g.K, 0);
     for (uint64_t e : g.edges) {
         uint64_t u = Graph::from(e), v = Graph::to(e);
-        if (on[u] < 2) on[u]++;
-        if (in[v] < 2) in[v]++;
+        uint32_t m = (nz[u] ? has[u] : ~0u) & (nz[v] ? has[v] : ~0u);
+        br[u] |= on[u] & m;
+        on[u] |= m;
+        br[v] |= in[v] & m;
+        in[v] |= m;
     }
-    for (uint64_t v = 0; v < g.K; v++) br[v] = in[v] > 1 || on[v] > 1;
     std::vector<std::pair<uint32_t, uint32_t>> an;
     for (uint32_t i = 0; i < w.size(); i++) {
         for (uint32_t k = 0; k < w[i].l.size() && k < NA; k++) an.push_back({w[i].l[k], i << 3 | k});
@@ -131,7 +130,7 @@ void CallPass::place(Chain& c, uint32_t m, Spot& e) {
                 if (ca - (int64_t)c.start(i) > (int64_t)PLIM) break;
                 uint32_t v = c.id[i];
                 b.absent += nz[v];
-                if (!gd[v] || std::upper_bound(ids.begin(), ids.end(), v) - std::lower_bound(ids.begin(), ids.end(), v) != 1) continue;
+                if (!gd[v] || !(has[v] >> e.s & 1) || std::upper_bound(ids.begin(), ids.end(), v) - std::lower_bound(ids.begin(), ids.end(), v) != 1) continue;
                 b.v[0][nl] = v;
                 b.at[0][nl++] = i;
             }
@@ -140,7 +139,7 @@ void CallPass::place(Chain& c, uint32_t m, Spot& e) {
                 if ((int64_t)c.start(i) - cb > (int64_t)PLIM) break;
                 uint32_t v = c.id[i];
                 b.absent += nz[v];
-                if (!gd[v] || std::upper_bound(ids.begin(), ids.end(), v) - std::lower_bound(ids.begin(), ids.end(), v) != 1) continue;
+                if (!gd[v] || !(has[v] >> e.s & 1) || std::upper_bound(ids.begin(), ids.end(), v) - std::lower_bound(ids.begin(), ids.end(), v) != 1) continue;
                 b.v[1][nr] = v;
                 b.at[1][nr++] = i;
             }
@@ -230,7 +229,7 @@ void CallPass::own(Chain& c, uint32_t m, uint32_t rc, uint64_t rid) {
                 e->d[li][ri] = al < ar ? ar - al : al - ar;
                 if (li || ri) continue;
                 e->tonly = e->nbr = 0;
-                for (uint32_t k = std::min(pa, pb); k <= std::max(pa, pb); k++) { e->tonly += nz[c.id[k]]; e->nbr += br[c.id[k]]; }
+                for (uint32_t k = std::min(pa, pb); k <= std::max(pa, pb); k++) { e->tonly += nz[c.id[k]]; e->nbr += br[c.id[k]] >> e->s & 1; }
             }
     }
 }
@@ -315,10 +314,12 @@ void Call::sites() {
     CallPass pass(w, pbs, g, a.threads);
     g = Graph();
     pass.run(ReadFiles(a.reads));
-    std::vector<uint32_t> dep;
-    for (const Spot& e : w) dep.push_back(e.dep[e.s]);
-    std::sort(dep.begin(), dep.end());
-    med = dep.empty() ? 0 : dep[dep.size() / 2];
+    std::vector<std::vector<uint32_t>> dep(w.empty() ? 0 : w[0].dep.size());
+    for (const Spot& e : w) dep[e.s].push_back(e.dep[e.s]);
+    for (std::vector<uint32_t>& d : dep) {
+        std::sort(d.begin(), d.end());
+        med.push_back(d.empty() ? 0 : d[d.size() / 2]);
+    }
 }
 
 void Call::probes(uint64_t S) {
@@ -388,13 +389,13 @@ static bool primary(const std::string& c) {
 }
 
 static bool by_event(const Record& x, const Record& y) {
-    return x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.o != y.e.o ? x.e.o < y.e.o : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
+    return x.r.s != y.r.s ? x.r.s < y.r.s : x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.o != y.e.o ? x.e.o < y.e.o : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm < y.nm;
 }
 
 static bool near(const Record& x, const Record& y, bool germ) {
     uint32_t lx = x.e.p2 - x.e.p1, ly = y.e.p2 - y.e.p1;
     if (germ && (x.e.ty == "INS" || x.e.ty == "DEL") && x.e.c1 == x.e.c2 && std::max(lx, ly) - std::min(lx, ly) > std::max<uint32_t>(10, std::max(lx, ly) / 10)) return false;
-    return x.e.ty == y.e.ty && x.e.o == y.e.o && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
+    return x.r.s == y.r.s && x.e.ty == y.e.ty && x.e.o == y.e.o && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
 }
 
 std::vector<Record> Call::attach(size_t* found) {
@@ -416,7 +417,7 @@ std::vector<Record> Call::attach(size_t* found) {
     for (const Record& v : som) {
         if (res.empty() || !near(res.back(), v, a.germline)) { res.push_back(v); continue; }
         Record& q = res.back();
-        bool more = top(v.r.n) > top(q.r.n);
+        bool more = v.r.n[v.r.s] > q.r.n[q.r.s];
         Row m = more ? v.r : q.r;
         if (more) { q.e = v.e; q.nm = v.nm; }
         if (v.nf < q.nf || (v.nf == q.nf && v.ms > q.ms)) { q.nf = v.nf; q.ms = v.ms; q.mn = v.mn; }

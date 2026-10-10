@@ -38,15 +38,14 @@ static const uint32_t MULT = 2;
 static const double DL = 15000;
 
 Anchors::Anchors(const Graph& g) : g(g) {
-    std::vector<uint32_t> fv, smp;
-    for (uint64_t v = 0; v < g.K; v++) {
-        bool full = true;
-        for (uint64_t s = 0; s < g.S; s++) full &= g.reads(s, v) > 0;
-        if (full) fv.push_back(v);
-    }
+    std::vector<uint32_t> smp;
     for (uint64_t s = 0; s < g.S; s++) {
         smp.clear();
-        for (uint32_t v : fv) smp.push_back(g.reads(s, v));
+        for (uint64_t v = 0; v < g.K; v++) {
+            bool with = s && g.reads(s, v) > 0;
+            for (uint64_t x = 1; x < g.S && !s && !with; x++) with = g.reads(x, v) > 0;
+            if (with && g.reads(0, v)) smp.push_back(g.reads(s, v));
+        }
         std::nth_element(smp.begin(), smp.begin() + smp.size() / 2, smp.end());
         med.push_back(smp[smp.size() / 2]);
     }

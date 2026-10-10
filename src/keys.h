@@ -12,7 +12,7 @@ public:
     std::vector<uint64_t> seen, key, best;
     std::vector<uint32_t> n;
     std::vector<uint8_t> branch, keeps, on;
-    std::vector<uint32_t> seg;
+    std::vector<uint32_t> seg, fork;
     Combos(const Graph& g, const Adjacency& a);
     uint64_t keep(const std::vector<uint8_t>& sd);
     void table(uint64_t sites);
