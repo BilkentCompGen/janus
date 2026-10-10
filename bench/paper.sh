@@ -491,7 +491,7 @@ mp.BaseProcess.join = reap
 sys.exit(main())
 '''
 SCRIPTS["simtruth"] = r'''import sys, json, re, bisect, os
-G = "/home/samples/davp-samples/simulation/phylo/genomes"
+G = "/home/yuio/snape/simulation/phylo/genomes"
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/home/yuio/snape/bench/runs/sim/truth"
 plan = json.load(open(f"{G}/tumor/plan.json"))
 PAR = plan["parent"]
@@ -1506,7 +1506,7 @@ competitors)
 table)
     ( cd $H && py table > $R/competitors_table.tsv ); column -t $R/competitors_table.tsv ;;
 sim)
-    SP=/home/samples/davp-samples/simulation/phylo; O=$R/sim; FQ=$O/fq; mkdir -p $FQ
+    SP=/home/yuio/snape/simulation/phylo; O=$R/sim; FQ=$O/fq; mkdir -p $FQ
     [ -x $O/svb2fq ] || { echo "$SVB2FQ" > $O/svb2fq.c; gcc -O2 -o $O/svb2fq $O/svb2fq.c; }
     tofq() { [ -s $FQ/$1.fastq.gz ] || { $O/svb2fq $SP/reads/$1/$1.svb $1 2> $FQ/$1.log | pigz -p 16 -3 > $FQ/$1.fastq.gz.part && mv $FQ/$1.fastq.gz.part $FQ/$1.fastq.gz; }; }
     [ -s $O/truth/tree.json ] || py simtruth $O/truth
@@ -1521,7 +1521,7 @@ sim)
     ( cd $H && $V -c "$PY" simverdict > $O/verdict.txt 2>&1 )
     for t in $(seq -f "T%02g" 1 20); do echo -e "$t\t$(py simscore $O/truth/$t.tsv $O/pair/$t/verdict.vcf)"; done > $O/scores.tsv; cat $O/scores.tsv ;;
 simjoint)
-    SP=/home/samples/davp-samples/simulation/phylo; O=$R/sim; FQ=$O/fq; J=$O/joint; B=${SNAPE:-$S/build/snape}; RF=$S/ref/chm13v2; mkdir -p $J/work $FQ
+    SP=/home/yuio/snape/simulation/phylo; O=$R/sim; FQ=$O/fq; J=$O/joint; B=${SNAPE:-$S/build/snape}; RF=$S/ref/chm13v2; mkdir -p $J/work $FQ
     [ -x $O/svb2fq ] || { echo "$SVB2FQ" > $O/svb2fq.c; gcc -O2 -o $O/svb2fq $O/svb2fq.c; }
     SM="germline $(seq -f 'T%02g' 1 20 | tr '\n' ' ')"
     for s in $SM; do [ -s $FQ/$s.fastq.gz ] || { $O/svb2fq $SP/reads/$s/$s.svb $s 2> $FQ/$s.log | pigz -p 16 -3 > $FQ/$s.fastq.gz.part && mv $FQ/$s.fastq.gz.part $FQ/$s.fastq.gz; }; done
