@@ -13,7 +13,6 @@ build
 # third-party sources built in place (Badread, ...) and generated benchmark data; lcptools (packed) is vendored
 lib/*
 !lib/lcptools/
-!lib/rapidgzip.sh
 lib/lcptools/liblcptools.a
 lib/lcptools/config.h
 simulation
@@ -55,7 +54,7 @@ paper/measure/out/
 # side builds (make BUILD=build4 ...) used to keep a variant binary next to the main one
 /build*/
 
-# benchmark outputs (bench/README.md): the scripts are tracked, and of the runs only the structured measurements
+# benchmark outputs: the scripts are tracked, and of the runs only the structured measurements
 # (run.json, steps.tsv, files.tsv); calls, logs, monitors, verdict and evaluation outputs stay local.
 # Also the reference data (hg38 fasta, minimap2 index, core index, VNTR bed).
 /bench/runs/*/*/*
@@ -92,3 +91,8 @@ paper/figures/snape/*/__pycache__/
 /bench/callers/images/*.log
 /bench/callers/images/*/*.log
 /bench/callers/images/cue2/cue2/
+/bench/runs_clean/
+/bench/eval_sets/
+/bench/eval_loo/
+/bench/supp/
+/bench/out/

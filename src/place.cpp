@@ -166,7 +166,6 @@ int Place::run() {
     }
     std::fclose(fo);
     write((o + ".on.fa").c_str(), 1);
-    write((o + ".off.fa").c_str(), 0);
     uint64_t n = 0;
     for (uint8_t v : on) n += v;
     std::fprintf(stderr, "[place] %zu pieces, %lu placed by cores\n", f.seq.size(), (unsigned long)n);

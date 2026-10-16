@@ -65,7 +65,7 @@ struct Record {
 
 uint32_t misfit(const Row& r, const Event& e);
 float repeats(const std::string& s);
-float prob(const Record& s, const Probe* b, float rp, bool vn, float med, float* f);
+void features(const Record& s, const Probe* b, float rp, bool vn, float med, float* f);
 
 class Bed {
 public:

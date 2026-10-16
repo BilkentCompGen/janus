@@ -154,11 +154,6 @@ std::vector<Site> Groups::rows(uint32_t support) {
     std::vector<Seen> o;
     for (std::vector<Seen>& v : seen) { o.insert(o.end(), v.begin(), v.end()); v = {}; }
     std::sort(o.begin(), o.end(), by_seen);
-    if (const char* dp = std::getenv("SNAPE_DUMP_D")) {
-        FILE* f = std::fopen(dp, "w");
-        for (const Seen& x : o) std::fprintf(f, "%u\t%lu\t%lu\t%u\n", x.site, (unsigned long)w[x.site].read, (unsigned long)x.sc, x.d);
-        std::fclose(f);
-    }
     std::vector<Site> add;
     for (size_t i = 0, j; i < o.size(); i = j) {
         for (j = i + 1; j < o.size() && o[j].site == o[i].site; j++);

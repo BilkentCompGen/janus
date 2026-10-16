@@ -96,7 +96,6 @@ std::vector<Event> events(std::vector<Align>& sg, bool germ) {
 }
 
 static const int32_t SAMEMIN = 20;
-static const float W0[36] = {-6, 1.5f, 1, 0.5f, -0.3f, 1, 0.5f, -4, -3, -1.5f, -1.5f, -1, -0.05f, -0.05f, 3, -0.5f, -1.5f, -1, 0, 0, 0, 0, 0, -0.2f, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const int32_t NEARD = 10;
 static const int32_t NEARP = 3;
 
@@ -199,7 +198,7 @@ static void measured(const Probe* b, uint32_t s, float L, float* f) {
     f[19] = lg(b->mid.size());
 }
 
-float prob(const Record& s, const Probe* b, float rp, bool vn, float med, float* f) {
+void features(const Record& s, const Probe* b, float rp, bool vn, float med, float* f) {
     const Row& r = s.r;
     uint32_t t = r.n[r.s], dt = r.d[r.s], L = s.e.p2 - s.e.p1;
     int32_t al = std::abs(r.lest);
@@ -242,9 +241,6 @@ float prob(const Record& s, const Probe* b, float rp, bool vn, float med, float*
     f[35] = std::min(1.f, (float)r.tspc / std::max(r.tspan, 1u));
     measured(b, r.s, ind ? L : 0, f + 36);
     f[56] = lg(s.far);
-    float z = 0;
-    for (uint32_t i = 0; i < 36; i++) z += W0[i] * f[i];
-    return 1 / (1 + std::exp(-z));
 }
 
 Bed::Bed(const char* path) {
@@ -285,7 +281,6 @@ bool Bed::span(const std::string& c, uint32_t p, uint32_t* s, uint32_t* e) const
 static const uint32_t WIN = 150;
 static const uint32_t DUPT = 500;
 static const uint32_t KM = 15;
-static const float PCUT = 0.5f;
 static const float ROT = 0.8f;
 static const float UNQ = 1.25f;
 
@@ -339,14 +334,13 @@ void Call::write(std::vector<Record>& res, size_t found) {
     std::fprintf(o, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
     for (uint64_t i = 0; i < S; i++) std::fprintf(o, "\tS%lu", (unsigned long)i);
     std::fprintf(o, "\n");
-    std::vector<float> pv(res.size());
     std::vector<std::vector<float>> fv(res.size(), std::vector<float>(NF));
     std::vector<uint8_t> dup(res.size(), 0);
     std::vector<Placed> ix(res.size());
     for (size_t i = 0; i < res.size(); i++) {
         const Record& v = res[i];
         float rv = repeats(fai.range(fa, v.e.c1, v.e.p1 > WIN ? v.e.p1 - WIN : 0, std::min<uint64_t>(v.e.p1 + WIN, fai.m[v.e.c1].len)));
-        pv[i] = prob(v, v.e.pb ? &pbs[v.e.pb - 1] : nullptr, rv, bed.near(v.e.c1, v.e.p1) || bed.near(v.e.c2, v.e.p2), med[v.r.s], fv[i].data());
+        features(v,v.e.pb ? &pbs[v.e.pb - 1] : nullptr, rv, bed.near(v.e.c1, v.e.p1) || bed.near(v.e.c2, v.e.p2), med[v.r.s], fv[i].data());
         if (v.e.ty == "INS" && v.e.p2 - v.e.p1 >= NEAR && v.e.p1 > v.e.p2 - v.e.p1 && sq.count(v.nm)) tandem(res[i].e, sq.at(v.nm), fai, fa);
         ix[i] = {&res[i].e, i};
     }
@@ -357,25 +351,24 @@ void Call::write(std::vector<Record>& res, size_t found) {
             const Event& q = *ix[y].e;
             uint32_t lp = p.p2 - p.p1, lq = q.p2 - q.p1;
             bool sized = a.germline && ((p.ty == q.ty && (p.ty == "INS" || p.ty == "DEL") && 10 * std::min(lp, lq) < 7 * std::max(lp, lq)) || ((p.ty == "DEL") != (q.ty == "DEL") && (p.ty == "INS" || q.ty == "INS" || p.ty == "DUP" || q.ty == "DUP")));
-            if (res[ix[x].i].r.s == res[ix[y].i].r.s && q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o) && !sized) dup[pv[ix[x].i] < pv[ix[y].i] ? ix[x].i : ix[y].i] = 1;
+            if (res[ix[x].i].r.s == res[ix[y].i].r.s && q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o) && !sized) dup[res[ix[x].i].r.n[res[ix[x].i].r.s] < res[ix[y].i].r.n[res[ix[y].i].r.s] ? ix[x].i : ix[y].i] = 1;
         }
     }
-    uint64_t np = 0;
+    uint64_t nd = 0;
     char num[64];
     for (size_t i = 0; i < res.size(); i++) {
         const Record& v = res[i];
         const Spot& e = w[v.r.u];
-        float pr = pv[i];
-        np += pr >= PCUT && !dup[i];
+        nd += dup[i];
         std::string j = (v.e.o & 1 ? "]" : "[") + v.e.c2 + ":" + std::to_string(v.e.p2) + (v.e.o & 1 ? "]" : "["), alt = v.e.ty != "BND" ? "<" + v.e.ty + ">" : v.e.o & 2 ? "N" + j : j + "N", fs, dls;
         for (uint32_t k = 0; k < NF - !a.germline; k++) { std::snprintf(num, sizeof num, "%s%.4g", k ? "," : "", fv[i][k]); fs += num; }
         for (uint64_t k = 0; k < S; k++) dls += ";D" + std::to_string(k) + "=" + deltas(e.dl[k]);
-        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;ERR=%.4f;F=%s;SPAN=%s;SAME=%s%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), dup[i] ? "DUPL" : pr >= PCUT ? "PASS" : "LOW", v.e.ty.c_str(),
-                     v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), 1 - pr, fs.c_str(), list(e.m, S, SPAN).c_str(), list(e.m, S, SAME).c_str(), dls.c_str());
+        std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;F=%s;SPAN=%s;SAME=%s%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), dup[i] ? "DUPL" : ".", v.e.ty.c_str(),
+                     v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), fs.c_str(), list(e.m, S, SPAN).c_str(), list(e.m, S, SAME).c_str(), dls.c_str());
         for (uint64_t k = 0; k < v.r.n.size(); k++) std::fprintf(o, "\t%s:%u", (k ? k == v.r.s : v.r.n[k] >= a.support) ? "0/1" : "0/0", v.r.n[k]);
         std::fprintf(o, "\n");
     }
     std::fclose(o);
     std::fclose(fa);
-    std::fprintf(stderr, "[call] %zu tumor events at sites, %zu records, %lu PASS\n", found, res.size(), (unsigned long)np);
+    std::fprintf(stderr, "[call] %zu tumor events at sites, %zu records, %lu duplicates\n", found, res.size(), (unsigned long)nd);
 }

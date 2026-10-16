@@ -294,17 +294,12 @@ int Prune::run() {
         combos.grow();
     }
     bubbles.judge();
-    std::vector<uint64_t> d;
-    for (uint64_t v = 0; v < g.K; v++)
-        if (bubbles.drop[v]) d.push_back(g.hashes[v]);
-    std::sort(d.begin(), d.end());
     std::string o(a.out);
-    Output::save((o + ".drp").c_str(), Header('P', 1, d.size(), bubbles.arms.size() / 2), d.data(), d.size() * 8);
     combos.keep(seeds(bubbles.drop));
     Output sites((o + ".sites").c_str());
     Header h('S', 1, gather(sites), g.S);
     sites.finish(h);
-    std::fprintf(stderr, "[prune] %zu dropped nodes, %lu sites\n", d.size(), (unsigned long)h.n);
+    std::fprintf(stderr, "[prune] %zu dropped nodes, %lu sites\n", (size_t)std::count(bubbles.drop.begin(), bubbles.drop.end(), 1),(unsigned long)h.n);
     return 0;
 }
 

@@ -8,7 +8,6 @@ static const uint32_t CL = 3;
 struct Args {
     const char *command, *in, *out, *reads, *data, *graph, *vntr;
     int threads;
-    unsigned long long bases;
     uint32_t support;
     bool shuffle, germline;
     Args(int argc, char** argv);

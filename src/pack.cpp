@@ -89,7 +89,6 @@ public:
     ~Chunk();
     bool fill(Source& src, std::vector<char>& carry);
     void encode();
-    size_t keep(uint64_t room, size_t* bytes, uint64_t* kept, uint64_t* top) const;
 
 private:
     char *buf, *txt;
@@ -238,21 +237,6 @@ void Chunk::encode() {
     else fastq();
 }
 
-size_t Chunk::keep(uint64_t room, size_t* bytes, uint64_t* kept, uint64_t* top) const {
-    size_t k = 0, at = 0;
-    *kept = *top = 0;
-    while (k < size.size() && *kept < room) {
-        uint32_t tag;
-        std::memcpy(&tag, &out[at], 4);
-        uint64_t n = tag & 0x7fffffffu;
-        *kept += n;
-        *top = std::max(*top, n);
-        at += size[k++];
-    }
-    *bytes = at;
-    return k;
-}
-
 class Pack : public Job {
 public:
     explicit Pack(const Args& a);
@@ -267,8 +251,8 @@ private:
     std::condition_variable cv;
     std::deque<Chunk*> todo, pool;
     std::map<uint64_t, Chunk*> done;
-    bool fed, stop;
-    uint64_t made, reads, total, longest, pos, limit;
+    bool fed;
+    uint64_t made, reads, total, longest, pos;
     FILE *svb, *idx;
     bool bam;
     void task(int i) override;
@@ -278,10 +262,9 @@ private:
     void shuffle();
 };
 
-Pack::Pack(const Args& a) : a(a), t(std::max(1, a.threads)), encoders(std::max(2, t / 5)), src(a.in, t), chunks(encoders + 4), fed(false), stop(false), made(0), reads(0), total(0), longest(0), pos(sizeof(Header)) {
+Pack::Pack(const Args& a) : a(a), t(std::max(1, a.threads)), encoders(std::max(2, t / 5)), src(a.in, t), chunks(encoders + 4), fed(false), made(0), reads(0), total(0), longest(0), pos(sizeof(Header)) {
     std::string in(a.in);
     bam = in.size() > 4 && in.compare(in.size() - 4, 4, ".bam") == 0;
-    limit = bam ? 0 : a.bases;
     for (Chunk& c : chunks) { c.bam = bam; pool.push_back(&c); }
 }
 
@@ -298,8 +281,7 @@ void Pack::read() {
         Chunk* b;
         {
             std::unique_lock<std::mutex> l(m);
-            while (pool.empty() && !stop) cv.wait(l);
-            if (stop) break;
+            while (pool.empty()) cv.wait(l);
             b = pool.front();
             pool.pop_front();
         }
@@ -342,22 +324,16 @@ void Pack::write() {
             b = done[id];
             done.erase(id);
         }
-        size_t k = b->size.size(), bytes = b->out.size();
-        uint64_t kept = b->bases, top = b->longest;
-        bool last = limit && total + b->bases >= limit;
-        if (last) k = b->keep(limit - total, &bytes, &kept, &top);
         off.clear();
-        for (size_t i = 0; i < k; i++) { off.push_back(pos); pos += b->size[i]; }
+        for (size_t i = 0; i < b->size.size(); i++) { off.push_back(pos); pos += b->size[i]; }
         std::fwrite(off.data(), 8, off.size(), idx);
-        std::fwrite(b->out.data(), 1, bytes, svb);
-        reads += k;
-        total += kept;
-        longest = std::max(longest, top);
+        std::fwrite(b->out.data(), 1, b->out.size(), svb);
+        reads += b->size.size();
+        total += b->bases;
+        longest = std::max(longest, b->longest);
         std::lock_guard<std::mutex> l(m);
         pool.push_back(b);
-        if (last) stop = true;
         cv.notify_all();
-        if (last) break;
     }
 }
 
@@ -381,7 +357,7 @@ void Pack::shuffle() {
     Output so(a.out), xo(x.c_str());
     std::vector<char> rec;
     uint64_t at = sizeof(Header), n = 0, kept = 0, top = 0;
-    for (uint64_t i = 0; i < reads && !(a.bases && kept >= a.bases); i++) {
+    for (uint64_t i = 0; i < reads; i++) {
         uint64_t o = off[order[i]], len = off[order[i] + 1] - o;
         uint32_t tag;
         rec.resize(len);
@@ -414,7 +390,7 @@ int Pack::run() {
         so.finish(Header('1', 1, reads, total));
         xo.finish(Header('I', 1, reads, longest));
     }
-    if (bam && (a.bases || a.shuffle)) shuffle();
+    if (bam && a.shuffle) shuffle();
     std::fprintf(stderr, "[pack] %lu reads, %lu bases\n", reads, total);
     return 0;
 }

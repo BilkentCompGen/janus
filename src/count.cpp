@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <unistd.h>
 #include <vector>
 #include "cmd.h"
@@ -10,6 +12,7 @@
 class CoreTable : public Job {
 public:
     uint64_t z, K;
+    uint32_t support;
     uint8_t full;
     CoreTable(int t, uint32_t support);
     ~CoreTable();
@@ -31,6 +34,8 @@ public:
         }
     }
     bool filled() const { return __atomic_load_n(&full, __ATOMIC_RELAXED); }
+    void choose(const std::vector<uint64_t>& nh, const std::vector<uint16_t>& nc, const std::string& path);
+    void automin();
     void rank(int fd);
     uint64_t first(int i) const { return shard(i) * z; }
     uint64_t id(uint64_t slot) const { return tab[slot]; }
@@ -38,11 +43,15 @@ public:
 private:
     uint64_t* tab;
     std::vector<uint32_t> sc;
-    int t, fd;
-    uint32_t support;
-    bool counted;
+    std::vector<std::vector<uint64_t>> hist;
+    std::vector<uint8_t> seen;
+    const std::vector<uint64_t>* nh;
+    const std::vector<uint16_t>* nc;
+    int t, fd, stage;
     uint64_t shard(int i) const;
     void task(int i) override;
+    void spectrum(int i);
+    void tally(int i);
     void count(int i);
     void emit(int i);
 };
@@ -51,8 +60,11 @@ static const uint32_t NS = 65536;
 static const uint64_t ZDIV = 24;
 static const uint64_t ZADD = 120000000;
 static const uint64_t ZPAD = 64;
+static const uint32_t HB = 256;
+static const uint32_t CLONAL = 40;
+static const uint32_t SHALLOW = 13;
 
-CoreTable::CoreTable(int t, uint32_t support) : z(0), K(0), full(0), tab(nullptr), sc(NS + 1), t(t), fd(-1), support(support), counted(false) {}
+CoreTable::CoreTable(int t, uint32_t support) : z(0), K(0), support(support), full(0), tab(nullptr), sc(NS + 1), nh(nullptr), nc(nullptr), t(t), fd(-1), stage(0) {}
 
 CoreTable::~CoreTable() {
     release();
@@ -78,6 +90,71 @@ void CoreTable::release() {
 
 uint64_t CoreTable::shard(int i) const {
     return share(NS, i, t);
+}
+
+void CoreTable::spectrum(int i) {
+    std::vector<uint64_t>& h = hist[i];
+    for (uint64_t s = shard(i); s < shard(i + 1); s++) {
+        size_t lo = std::lower_bound(nh->begin(), nh->end(), s << 48) - nh->begin();
+        size_t hi = s + 1 == NS ? nh->size() : std::lower_bound(nh->begin() + lo, nh->end(), (s + 1) << 48) - nh->begin();
+        for (uint64_t k = s * z; k < (s + 1) * z; k++) {
+            uint64_t n = tab[k] & 0xffff, key = s << 48 | tab[k] >> 16;
+            if (n < 2) continue;
+            size_t j = std::lower_bound(nh->begin() + lo, nh->begin() + hi, key) - nh->begin();
+            if (j < hi && (*nh)[j] == key) {
+                h[HB + std::min<uint64_t>(n, HB - 1)]++;
+                h[2 * HB + std::min<uint32_t>((*nc)[j], HB - 1)]++;
+                seen[j] = 1;
+            } else h[std::min<uint64_t>(n, HB - 1)]++;
+        }
+        for (size_t j = lo; j < hi; j++)
+            if (!seen[j]) h[3 * HB + std::min<uint32_t>((*nc)[j], HB - 1)]++;
+    }
+}
+
+void CoreTable::choose(const std::vector<uint64_t>& hashes, const std::vector<uint16_t>& counts, const std::string& path) {
+    nh = &hashes;
+    nc = &counts;
+    seen.assign(hashes.size(), 0);
+    hist.assign(t, std::vector<uint64_t>(4 * HB));
+    stage = 1;
+    par(t);
+    stage = 0;
+    std::vector<uint64_t> all(4 * HB);
+    for (const std::vector<uint64_t>& h : hist)
+        for (uint32_t c = 0; c < 4 * HB; c++) all[c] += h[c];
+    static const char* name[4] = {"tumor_only", "shared_tumor", "shared_normal", "normal_only"};
+    FILE* f = std::fopen(path.c_str(), "w");
+    for (uint32_t g = 0; g < 4; g++) {
+        std::fprintf(f, "%s", name[g]);
+        for (uint32_t c = 0; c < HB; c++) std::fprintf(f, " %lu", (unsigned long)all[g * HB + c]);
+        std::fprintf(f, "\n");
+    }
+    std::fclose(f);
+    uint64_t total = 0, run = 0;
+    for (uint32_t c = 4; c < HB; c++) total += all[c];
+    uint32_t p95 = 4;
+    while (p95 + 1 < HB && 20 * (run + all[p95]) < 19 * total) run += all[p95++];
+    support = p95 < CLONAL ? 2 : 3;
+}
+
+void CoreTable::tally(int i) {
+    std::vector<uint64_t>& h = hist[i];
+    for (uint64_t k = shard(i) * z; k < shard(i + 1) * z; k++) h[std::min<uint64_t>(tab[k] & 0xffff, HB - 1)]++;
+}
+
+void CoreTable::automin() {
+    hist.assign(t, std::vector<uint64_t>(HB));
+    stage = 3;
+    par(t);
+    stage = 0;
+    std::vector<uint64_t> all(HB);
+    uint64_t total = 0, run = 0;
+    for (const std::vector<uint64_t>& h : hist)
+        for (uint32_t c = 3; c < HB; c++) { all[c] += h[c]; total += h[c]; }
+    uint32_t median = 3;
+    while (median + 1 < HB && 2 * (run + all[median]) < total) run += all[median++];
+    support = median < SHALLOW ? 2 : 3;
 }
 
 void CoreTable::count(int i) {
@@ -107,7 +184,9 @@ void CoreTable::emit(int i) {
 }
 
 void CoreTable::task(int i) {
-    if (counted) emit(i);
+    if (stage == 1) spectrum(i);
+    else if (stage == 2) emit(i);
+    else if (stage == 3) tally(i);
     else count(i);
 }
 
@@ -116,7 +195,7 @@ void CoreTable::rank(int out) {
     par(t);
     for (uint32_t s = 0; s < NS; s++) sc[s + 1] += sc[s];
     K = sc[NS];
-    counted = true;
+    stage = 2;
     par(t);
 }
 
@@ -274,7 +353,7 @@ void Count::write(Output& out) {
     Header h('C', 1, cores.K, E);
     h.resv[0] = rb;
     h.resv[1] = db;
-    h.resv[2] = a.support;
+    h.resv[2] = cores.support;
     h.resv[3] = MARGIN;
     out.finish(h);
 }
@@ -296,6 +375,14 @@ int Count::run() {
         svb = Input(a.in);
         exc = Input(ex);
     }
+    if (a.data) {
+        Input nc(a.data);
+        std::vector<uint64_t> nh(nc.h.n);
+        std::vector<uint16_t> nn(nc.h.n);
+        if (std::fread(nh.data(), 8, nh.size(), nc.f) != nh.size() || std::fread(nn.data(), 2, nn.size(), nc.f) != nn.size()) return 1;
+        std::fclose(nc.f);
+        cores.choose(nh, nn, std::string(a.out) + ".hist");
+    } else if (!a.support) cores.automin();
     cores.rank(fileno(out.f));
     pairs.pick();
     cores.release();
