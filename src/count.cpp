@@ -132,8 +132,8 @@ void CoreTable::choose(const std::vector<uint64_t>& hashes, const std::vector<ui
     }
     std::fclose(f);
     uint64_t total = 0, run = 0;
-    for (uint32_t c = 4; c < HB; c++) total += all[c];
-    uint32_t p95 = 4;
+    for (uint32_t c = 3; c < HB; c++) total += all[c];
+    uint32_t p95 = 3;
     while (p95 + 1 < HB && 20 * (run + all[p95]) < 19 * total) run += all[p95++];
     support = p95 < CLONAL ? 2 : 3;
 }
