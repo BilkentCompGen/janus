@@ -9,7 +9,7 @@ BUILD := build
 SRC := $(wildcard src/*.cpp)
 OBJ := $(SRC:src/%.cpp=$(BUILD)/%.o)
 
-$(BUILD)/snape: $(OBJ) | $(BUILD)
+$(BUILD)/janus: $(OBJ) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(INC) -o $@ $(OBJ) $(LDFLAGS) -lpthread
 
 $(BUILD)/%.o: src/%.cpp | $(BUILD)

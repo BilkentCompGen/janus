@@ -4,4 +4,4 @@
 
 - Anchor uniqueness on the reference: during the alignment step, check whether the anchors of a site are also unique on the reference, and use this as an additional signal. Not tested yet.
 
-- ONT reads with homopolymer compression: LCP cores on ONT reads were tried once without homopolymer compression and failed. Try again with the compression that snape applies, on recent ONT data, and at lower LCP levels than 5, since the share of error-free cores falls quickly with core length. No ONT reads are on this machine yet (only the ONT call sets of the CASTLE panel). Not tested yet.
+- ONT reads with homopolymer compression: LCP cores on ONT reads were tried once without homopolymer compression and failed. Try again with the compression that janus applies, on recent ONT data, and at lower LCP levels than 5, since the share of error-free cores falls quickly with core length. No ONT reads are on this machine yet (only the ONT call sets of the CASTLE panel). Not tested yet.

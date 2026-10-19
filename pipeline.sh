@@ -1,13 +1,13 @@
 #!/bin/bash
-D=$1; N=$(realpath $2); T=$(realpath $3); P=${4:-16}; B=/home/yuio/snape/build/snape; R=/home/yuio/snape/ref
+D=$1; N=$(realpath $2); T=$(realpath $3); P=${4:-16}; B=/home/yuio/janus/build/janus; R=/home/yuio/janus/ref
 mkdir -p $D; cd $D
 step() { n=$1; shift; [ -e done.$n ] && return; /usr/bin/time -f "$n %e s %M KB %U user %S sys" "$@" > log.$n 2>&1 || exit 1; tail -1 log.$n >> steps.txt; touch done.$n; }
 for s in n t; do f=$N; [ $s = t ] && f=$T; step pack_$s $B pack -i $f -o $s.svb -t $P; done
 for s in n t; do step extract_$s $B extract -i $s.svb -o $s.svb.exc -t $P; done
 X=$(( $(python3 -c "import struct; print(struct.unpack_from('<Q', open('t.svb', 'rb').read(32), 16)[0])") / 3100000000 ))
 MN=3; MT=3; [ $X -lt 25 ] && MT=2; [ $X -lt 13 ] && MN=2
-step count_n $B count -i n.svb -o n.cnt -t $P -m $([ -n "$GERMLINE" ] && echo $MN || echo 0)
-step count_t $B count -i t.svb -o t.cnt -t $P $([ -n "$GERMLINE" ] && echo -m $MT || echo -d n.cnt)
+step count_n $B count -i n.svb -o n.cnt -t $P -m $([ -n "$GERMLINE" ] && echo $MN || echo 0) ${SHALLOW:+-N $SHALLOW}
+step count_t $B count -i t.svb -o t.cnt -t $P $([ -n "$GERMLINE" ] && echo -m $MT || echo -d n.cnt) ${CLONAL:+-T $CLONAL}
 MT=$(python3 -c "print(open('t.cnt', 'rb').read(27)[26])")
 step graph $B graph -i n.cnt,t.cnt -o graph.gph -m $MT
 step prune $B prune -i graph.gph -r n.svb,t.svb -o prune -t $P -m $MT

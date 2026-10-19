@@ -8,7 +8,7 @@ static const uint32_t CL = 3;
 struct Args {
     const char *command, *in, *out, *reads, *data, *graph, *vntr;
     int threads;
-    uint32_t support;
+    uint32_t support, shallow, clonal;
     bool shuffle, germline;
     Args(int argc, char** argv);
 };

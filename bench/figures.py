@@ -40,13 +40,13 @@ from matplotlib.colors import LinearSegmentedColormap
 PAIRNAME = {"hcc1954": "HCC1954", "h2009": "NCI-H2009", "hcc1937": "HCC1937", "h1437": "NCI-H1437", "hg008": "HG008",
             "colo829": "COLO829", "hcc1395": "HCC1395", "hg009": "HG009", "h209": "NCI-H209", "h2126": "NCI-H2126"}
 
-SNAPE = C["tumor"]
+JANUS = C["tumor"]
 GROUP = [("Packing", ["pack_n", "pack_t"]), ("Core extraction", ["extract_n", "extract_t"]), ("Counting", ["count_n", "count_t"]),
          ("Graph and pruning", ["graph", "prune"]), ("Selection", ["select"]), ("Placement", ["place", "lift", "clip", "patch"]),
          ("minimap2", ["local", "gaps"]), ("Calling", ["call"])]
 STAGE = dict(zip([g for g, _ in GROUP], ["#d8cfc0", "#b7c9dd", "#86a8cc", "#4f7cae", "#f0b9a8", "#d9735f", "#8c8c8c", "#5fa37a"]))
 STEPCOL = {s: STAGE[g] for g, ss in GROUP for s in ss}
-CALLERCOL = {"snape": SNAPE, "Severus": "#3f6ea5", "SAVANA": "#4bb3b3", "nanomonsv": "#5fa37a", "Sniffles2": "#8c8c8c", "dysgu": "#7e6bb0",
+CALLERCOL = {"janus": JANUS, "Severus": "#3f6ea5", "SAVANA": "#4bb3b3", "nanomonsv": "#5fa37a", "Sniffles2": "#8c8c8c", "dysgu": "#7e6bb0",
              "SVision-pro": "#e0a030", "cuteSV": "#b98b5e", "DeBreak": "#c9a0c4", "kled": "#b0b0b0", "SVDSS": "#d0d0d0"}
 P5 = ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]
 
@@ -60,12 +60,12 @@ NEUTRAL = "#8c8c8c"
 LIGHT = "#c9c9c9"
 TECHCOL = {"HiFi": "#2f5d8a", "ONT": "#c98a1a", "Illumina": "#7a7a7a"}
 PAIRCOL = dict(zip(P5 + ["hg008", "colo829"], ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860", "#da8bc3"]))
-MARK = {"snape": "o", "Severus": "s", "SAVANA": "^", "nanomonsv": "D", "dysgu": "P", "Sniffles2": "v", "SVision-pro": "X", "cuteSV": "<", "DeBreak": ">", "kled": "h", "SVDSS": "d"}
+MARK = {"janus": "o", "Severus": "s", "SAVANA": "^", "nanomonsv": "D", "dysgu": "P", "Sniffles2": "v", "SVision-pro": "X", "cuteSV": "<", "DeBreak": ">", "kled": "h", "SVDSS": "d"}
 SVTYPE = {"DEL": "#3f6ea5", "INS": "#e0a030", "DUP": "#5fa37a", "INV": "#7e6bb0", "BND": NEUTRAL}
-FILTER = {"PASS": SNAPE, "LOW": NEUTRAL, "DUPL": LIGHT}
+FILTER = {"PASS": JANUS, "LOW": NEUTRAL, "DUPL": LIGHT}
 MATCH, NOMATCH = "#3f6ea5", LIGHT
 HEAT = LinearSegmentedColormap.from_list("f", ["#f7f7f7", "#a9c8e2", "#2f5d8a"])
-DIV = LinearSegmentedColormap.from_list("d", ["#2f5d8a", "#f7f7f7", SNAPE])
+DIV = LinearSegmentedColormap.from_list("d", ["#2f5d8a", "#f7f7f7", JANUS])
 
 
 def tag(ax, s, x=-0.12, y=1.03):
@@ -86,19 +86,19 @@ from matplotlib.legend_handler import HandlerTuple
 
 ONT = ["Severus ONT", "SAVANA ONT", "nanomonsv ONT", "Sniffles2 ONT"]
 ILL = ["SvABA", "GRIPSS", "Manta"]
-EXT = {"snape": "snape", "severus_phased": "Severus", "savana_phased": "SAVANA", "nanomonsv": "nanomonsv", "dysgu": "dysgu", "svision-pro": "SVision-pro",
+EXT = {"snape": "janus", "severus_phased": "Severus", "savana_phased": "SAVANA", "nanomonsv": "nanomonsv", "dysgu": "dysgu", "svision-pro": "SVision-pro",
        "sniffles2": "Sniffles2", "cutesv": "cuteSV", "debreak": "DeBreak", "kled": "kled", "svdss": "SVDSS"}
 COV = ["Severus", "SAVANA", "nanomonsv"]
-TOOLKEY = {"snape": "snape", "Severus": "severus", "SAVANA": "savana", "nanomonsv": "nanomonsv"}
+TOOLKEY = {"janus": "snape", "Severus": "severus", "SAVANA": "savana", "nanomonsv": "nanomonsv"}
 DEP, DL = ["full", "30x", "20x", "15x", "10x", "5x"], ["full", "30×", "20×", "15×", "10×", "5×"]
 PUR, PL = ["100p", "80p", "60p", "40p", "20p"], ["100%", "80%", "60%", "40%", "20%"]
 TYPES = ["BND", "DEL", "DUP", "INS", "INV"]
 SIZES = [("BND", "no length"), ("50-100", "50–100 bp"), ("100-1k", "0.1–1 kb"), ("1k-10k", "1–10 kb"), ("10k-100k", "10–100 kb"), (">100k", ">100 kb")]
-CAL5 = ["snape", "Severus", "SAVANA", "nanomonsv", "Sniffles2"]
-LBL = {"colo829": {"snape": (0.86, 0.97, "center"), "SAVANA": (0.56, 0.97, "right"), "Severus": (0.50, 0.87, "right"), "nanomonsv": (0.80, 0.75, "left"),
+CAL5 = ["janus", "Severus", "SAVANA", "nanomonsv", "Sniffles2"]
+LBL = {"colo829": {"janus": (0.86, 0.97, "center"), "SAVANA": (0.56, 0.97, "right"), "Severus": (0.50, 0.87, "right"), "nanomonsv": (0.80, 0.75, "left"),
                    "dysgu": (0.80, 0.64, "left"), "SVision-pro": (0.33, 0.53, "left"), "DeBreak": (0.33, 0.44, "left"), "Sniffles2": (0.33, 0.35, "left"),
                    "kled": (0.33, 0.26, "left"), "cuteSV": (0.33, 0.17, "left"), "SVDSS": (0.33, 0.08, "left")},
-       "hg008": {"snape": (1.0, 0.97, "right"), "Severus": (0.70, 0.97, "right"), "nanomonsv": (0.70, 0.86, "right"), "SAVANA": (1.0, 0.57, "right"),
+       "hg008": {"janus": (1.0, 0.97, "right"), "Severus": (0.70, 0.97, "right"), "nanomonsv": (0.70, 0.86, "right"), "SAVANA": (1.0, 0.57, "right"),
                  "dysgu": (0.76, 0.68, "right"), "kled": (0.36, 0.53, "left"), "Sniffles2": (0.36, 0.44, "left"), "DeBreak": (0.36, 0.35, "left"),
                  "SVision-pro": (0.36, 0.26, "left"), "cuteSV": (0.36, 0.17, "left"), "SVDSS": (0.36, 0.08, "left")}}
 ROWS = P5 + ["hg008", "colo829"]
@@ -112,7 +112,7 @@ def save(fig, key):
 E = f"{H}/eval_sets"
 OURS = ["Severus", "SAVANA", "nanomonsv", "Sniffles2", "dysgu", "SVision-pro", "cuteSV", "DeBreak", "kled", "SVDSS"]
 REST = ["Severus ONT", "SAVANA ONT", "nanomonsv ONT", "Sniffles2 ONT", "SvABA", "GRIPSS", "Manta"]
-SETNAMES = {"all_with": OURS + ["snape"] + REST, "all_without": OURS + REST}
+SETNAMES = {"all_with": OURS + ["janus"] + REST, "all_without": OURS + REST}
 SIZEKEYS = ["BND", "50-100", "100-1k", "1k-10k", "10k-100k", ">100k"]
 
 
@@ -169,7 +169,7 @@ def accuracy():
             assert len(rows) == len(names), (s, p, len(rows))
             out[s][p] = {n: record(r, d, i) for i, (n, r) in enumerate(zip(names, rows))}
             if s == "all_without":
-                out[s][p]["snape"] = record(overall(f"{d}_snape")[0], f"{d}_snape", 1, "MindaV0.0.2")
+                out[s][p]["janus"] = record(overall(f"{d}_snape")[0], f"{d}_snape", 1, "MindaV0.0.2")
     for s in SETNAMES:
         extra[s] = {}
         for p in P5:
@@ -271,12 +271,16 @@ def steps(d, p):
     return {x["step"]: x for x in json.load(open(f"{d}/full/{p}/run.json"))["steps"]}
 
 
+FASTQPACK = {"hcc1954": 235, "h2009": 284, "hcc1937": 246, "h1437": 236, "hcc1395": 140}
+
+
 def cost():
     out = {"time": {}, "mem": {}}
     for p in P5:
         s = {k: v for k, v in steps(R, p).items() if k.startswith("pack")}
         s.update({k: v for k, v in steps(RC, p).items() if not k.startswith("pack")})
         out["time"][p] = {g: sum(s[k]["wall_s"] for k in ks) for g, ks in GROUP}
+        out["time"][p]["Packing"] = FASTQPACK[p]
         out["mem"][p] = {g: max(s[k]["peak_rss_kib"] for k in ks) / 2**20 for g, ks in GROUP}
     return out
 
@@ -418,7 +422,7 @@ def simtrees():
             for s, n in sorted(cnt.items(), key=lambda x: sorted(x[0])):
                 o.write("".join("1" if i in s else "0" for i in range(20)) + f"\t{n}\n")
     subprocess.run(["docker", "run", "--rm", "--log-driver", "none", "-v", f"{W}:/w", "-u", f"{os.getuid()}:{os.getgid()}", "--entrypoint", "/usr/local/bin/_entrypoint.sh",
-                    "snape-bench/phangorn", "Rscript", "-e", NJR] + [f"/w/{n}.tsv" for n in SIMSETS], check=True, stdout=subprocess.DEVNULL)
+                    "janus-bench/phangorn", "Rscript", "-e", NJR] + [f"/w/{n}.tsv" for n in SIMSETS], check=True, stdout=subprocess.DEVNULL)
     nj = {}
     for name in SIMSETS:
         sp = nwksplits(open(f"{W}/{name}.nj.nwk").read()); cl = rooted(sp)
@@ -439,7 +443,7 @@ def tech(n):
 
 
 def color(n):
-    return SNAPE if n == "snape" else CALLERCOL.get(base(n), TECHCOL[tech(n)])
+    return JANUS if n == "janus" else CALLERCOL.get(base(n), TECHCOL[tech(n)])
 
 
 def label(n):
@@ -486,7 +490,7 @@ def f1_dots(ax, s, order, ttl, show_y):
     if show_y:
         ax.set_yticklabels([label(n) for n in order], fontsize=FS)
         mixed = any(tech(n) != "HiFi" for n in order)
-        for t, n in zip(ax.get_yticklabels(), order): t.set_color(SNAPE if n == "snape" else TECHCOL[tech(n)] if mixed else "#333333"); t.set_fontweight("bold" if n == "snape" else "normal")
+        for t, n in zip(ax.get_yticklabels(), order): t.set_color(JANUS if n == "janus" else TECHCOL[tech(n)] if mixed else "#333333"); t.set_fontweight("bold" if n == "janus" else "normal")
     else:
         ax.set_yticklabels([])
     ax.set_xlim(0, 1); ax.set_xticks([0, 0.25, 0.5, 0.75, 1]); ax.set_xticklabels(["0", ".25", ".5", ".75", "1"])
@@ -500,15 +504,15 @@ def ext_scatter(ax, E, sample, ttl):
         ax.plot(x[m], y[m], color="#d8d8d8", lw=0.5, zorder=0)
         if f < 0.7: ax.text(0.995, f / (2 - f) - 0.012, f"F1 {f:.1f}", fontsize=FS - 1.4, color="#9a9a9a", ha="right", va="top")
     for n, (p, r, f1) in sorted(E.items(), key=lambda x: x[1][2]):
-        c = color(n); top = n == "snape"
+        c = color(n); top = n == "janus"
         ax.scatter([p], [r], s=46 if top else 24, marker=MARK.get(n, "o"), facecolor=c, edgecolor="#333333" if c in ("#d0d0d0", "#b0b0b0") else c, lw=0.5, zorder=5 if top else 4)
         lx, ly, ha = LBL[sample][n]
-        ax.annotate(f"{n} {f1:.2f}", (p, r), xytext=(lx, ly), fontsize=FS - 0.5, ha=ha, va="center", color=SNAPE if top else "#333333", fontweight="bold" if top else "normal",
+        ax.annotate(f"{n} {f1:.2f}", (p, r), xytext=(lx, ly), fontsize=FS - 0.5, ha=ha, va="center", color=JANUS if top else "#333333", fontweight="bold" if top else "normal",
                     arrowprops=dict(arrowstyle="-", color="#9a9a9a", lw=0.4, shrinkA=0, shrinkB=2.5), zorder=6)
     ax.set_xlim(0, 1.0); ax.set_ylim(0, 1.02); ax.set_xticks([0, 0.25, 0.5, 0.75, 1]); ax.set_yticks([0, 0.25, 0.5, 0.75, 1])
     ax.set_xticklabels(["0", ".25", ".5", ".75", "1"]); ax.set_yticklabels(["0", ".25", ".5", ".75", "1"]); ax.set_xlabel("Precision"); ax.set_ylabel("Recall")
     g = SIG["external"][sample]; best = [k for k, v in TOOLKEY.items() if v == g["best"]][0]
-    ax.text(0, 1.03, f"snape − {best}, F1: {g['diff']:+.3f} [{g['lo']:+.3f}, {g['hi']:+.3f}]", fontsize=FS - 0.8, color="#555555", va="bottom", transform=ax.transAxes)
+    ax.text(0, 1.03, f"janus − {best}, F1: {g['diff']:+.3f} [{g['lo']:+.3f}, {g['hi']:+.3f}]", fontsize=FS - 0.8, color="#555555", va="bottom", transform=ax.transAxes)
     title(ax, ttl, 1.11)
 
 
@@ -519,9 +523,9 @@ def heat(ax, s, kind, cls, labs, cal, ttl):
         for j, c in enumerate(cls):
             best = M[i, j] >= M[:, j].max() - 1e-9
             ax.text(j, i, f"{M[i, j]:.3f}", ha="center", va="center", fontsize=FS - 0.2, color="white" if M[i, j] > 0.8 else "#222222", fontweight="bold" if best else "normal")
-    ax.set_xticks(range(len(cls))); ax.set_xticklabels([f"{l}\n({pooled(s, 'snape', kind, c)[1]:,})" for l, c in zip(labs, cls)], fontsize=FS - 1)
+    ax.set_xticks(range(len(cls))); ax.set_xticklabels([f"{l}\n({pooled(s, 'janus', kind, c)[1]:,})" for l, c in zip(labs, cls)], fontsize=FS - 1)
     ax.set_yticks(range(len(cal))); ax.set_yticklabels(cal, fontsize=FS)
-    for t, n in zip(ax.get_yticklabels(), cal): t.set_color(SNAPE if n == "snape" else "#333333"); t.set_fontweight("bold" if n == "snape" else "normal")
+    for t, n in zip(ax.get_yticklabels(), cal): t.set_color(JANUS if n == "janus" else "#333333"); t.set_fontweight("bold" if n == "janus" else "normal")
     ax.tick_params(length=0)
     for sp in ax.spines.values(): sp.set_visible(False)
     title(ax, ttl, 1.04)
@@ -532,7 +536,7 @@ def fbars(ax, s, kind, cls, labs, ttl):
     for k, nm in enumerate(CAL5):
         v = [pooled(s, nm, kind, c)[0] for c in cls]
         ax.bar(np.arange(len(cls)) + (k - (n - 1) / 2) * w, v, w * 0.9, color=color(nm), lw=0, zorder=2)
-    ax.set_xticks(range(len(cls))); ax.set_xticklabels([f"{l}\n({pooled(s, 'snape', kind, c)[1]:,})" for l, c in zip(labs, cls)], fontsize=FS - 1)
+    ax.set_xticks(range(len(cls))); ax.set_xticklabels([f"{l}\n({pooled(s, 'janus', kind, c)[1]:,})" for l, c in zip(labs, cls)], fontsize=FS - 1)
     ax.set_ylim(0, 1); ax.set_yticks([0, 0.25, 0.5, 0.75, 1]); ax.set_yticklabels(["0", ".25", ".5", ".75", "1"]); ax.set_ylabel("F1 score")
     ax.set_xlim(-0.55, len(cls) - 0.45); ax.grid(axis="y", **GRID); ax.tick_params(axis="x", length=0); title(ax, ttl, 1.03)
 
@@ -552,11 +556,11 @@ def series(S, n, keys, pairs, j):
 
 def f1_lines(ax, S, keys, labs, pairs, ttl, five=False):
     x = range(len(keys)); sg = SIG["settings"]
-    ax.fill_between(x, [sg[k]["snape_lo"] for k in keys], [sg[k]["snape_hi"] for k in keys], color=SNAPE, alpha=0.18, lw=0, zorder=1)
-    for n in ["snape"] + COV:
-        ax.plot(x, series(S, n, keys, pairs, 2), color=color(n), lw=1.7 if n == "snape" else 1.0, marker=MARK[n], ms=3.6 if n == "snape" else 3.0, mfc=color(n), mec="white", mew=0.4, zorder=3 if n == "snape" else 2, label=n)
+    ax.fill_between(x, [sg[k]["snape_lo"] for k in keys], [sg[k]["snape_hi"] for k in keys], color=JANUS, alpha=0.18, lw=0, zorder=1)
+    for n in ["janus"] + COV:
+        ax.plot(x, series(S, n, keys, pairs, 2), color=color(n), lw=1.7 if n == "janus" else 1.0, marker=MARK[n], ms=3.6 if n == "janus" else 3.0, mfc=color(n), mec="white", mew=0.4, zorder=3 if n == "janus" else 2, label=n)
     for i, k in enumerate(keys):
-        pv = sg[k]["p"]; ax.text(i, 1.07, pfmt(pv), ha="center", va="bottom", fontsize=FS - 1.6, color=SNAPE if pv < 0.05 else "#777777", transform=ax.get_xaxis_transform())
+        pv = sg[k]["p"]; ax.text(i, 1.07, pfmt(pv), ha="center", va="bottom", fontsize=FS - 1.6, color=JANUS if pv < 0.05 else "#777777", transform=ax.get_xaxis_transform())
     ax.text(-0.04, 1.07, "p", ha="right", va="bottom", fontsize=FS - 1.4, style="italic", color="#555555", transform=ax.transAxes)
     ax.set_xticks(list(x)); ax.set_xticklabels(labs); ax.set_ylim(0, 1.0); ax.set_yticks([0, 0.25, 0.5, 0.75, 1]); ax.set_yticklabels(["0", ".25", ".5", ".75", "1"])
     ax.set_ylabel("F1 score, mean"); title(ax, ttl, 1.19, 0.2); ax.grid(axis="y", **GRID)
@@ -564,9 +568,9 @@ def f1_lines(ax, S, keys, labs, pairs, ttl, five=False):
 
 def pr_lines(axp, axr, S, keys, labs, pairs):
     x = range(len(keys))
-    for n in ["snape"] + COV:
+    for n in ["janus"] + COV:
         for a, j in ((axp, 0), (axr, 1)):
-            a.plot(x, series(S, n, keys, pairs, j), color=color(n), lw=1.5 if n == "snape" else 0.9, marker=MARK[n], ms=2.8 if n == "snape" else 2.3, mfc=color(n), mec="white", mew=0.3, zorder=3 if n == "snape" else 2)
+            a.plot(x, series(S, n, keys, pairs, j), color=color(n), lw=1.5 if n == "janus" else 0.9, marker=MARK[n], ms=2.8 if n == "janus" else 2.3, mfc=color(n), mec="white", mew=0.3, zorder=3 if n == "janus" else 2)
     for a, lab in ((axp, "Precision"), (axr, "Recall")):
         a.set_ylim(0, 1.05); a.set_yticks([0, 0.5, 1]); a.set_yticklabels(["0", ".5", "1"]); a.set_ylabel(lab); a.set_xticks(list(x)); a.grid(axis="y", **GRID)
     axp.set_xticklabels([]); axr.set_xticklabels(labs, fontsize=FS - 1)
@@ -577,7 +581,7 @@ def fig2():
     fig, ax = page(160, 196)
     order = [n for n in sorted(D["all_with"]["hcc1954"], key=lambda n: -mean("all_with", n, "F1")) if tech(n) == "HiFi"]
     a1 = ax(29, 150, 38, 34); f1_dots(a1, "all_with", order, "Consensus of all 18 call sets", True); tag(a1, "a", -0.74, 1.1)
-    a2 = ax(95, 150, 38, 34); f1_dots(a2, "all_without", order, "Consensus of 17, snape excluded", False)
+    a2 = ax(95, 150, 38, 34); f1_dots(a2, "all_without", order, "Consensus of 17, janus excluded", False)
     ph = [Line2D([], [], ls="", marker="o", color=PAIRCOL[p], ms=3.4, label=PAIRNAME[p]) for p in P5] + [Line2D([], [], ls="", marker="|", color="black", ms=6, mew=1.6, label="mean of five pairs")]
     fig.legend(handles=ph, loc="upper left", bbox_to_anchor=(0.12, 1.0), ncol=6, fontsize=FS - 0.5, handletextpad=0.3, columnspacing=0.9, handlelength=1.0)
     b = ax(13, 99, 60, 32); ext_scatter(b, E["colo829"], "colo829", "COLO829, 62 truth SVs"); tag(b, "b", -0.16, 1.11)
@@ -591,8 +595,8 @@ def fig2():
     h = ax(92, 9, 35, 22); f1_lines(h, S, PUR, PL, ["hcc1954", "hcc1395"], "Purity at 30×, two pairs"); tag(h, "h", -0.32, 1.19)
     ip = ax(138, 21, 20, 10); ir = ax(138, 9, 20, 10); pr_lines(ip, ir, S, PUR, PS, ["hcc1954", "hcc1395"]); tag(ip, "i", -0.45, 1.5)
     ir.set_xlabel("Purity (%)"); h.set_xlabel("Tumor purity")
-    lh = [Line2D([], [], color=color(n), marker=MARK[n], ms=3.4, mec="white", lw=1.7 if n == "snape" else 1.0, label=n) for n in ["snape"] + COV]
-    lh += [Patch(color=color("Sniffles2"), label="Sniffles2 (d, e)"), Rectangle((0, 0), 1, 1, color=SNAPE, alpha=0.18, lw=0, label="snape, bootstrap 95% interval (f, h)")]
+    lh = [Line2D([], [], color=color(n), marker=MARK[n], ms=3.4, mec="white", lw=1.7 if n == "janus" else 1.0, label=n) for n in ["janus"] + COV]
+    lh += [Patch(color=color("Sniffles2"), label="Sniffles2 (d, e)"), Rectangle((0, 0), 1, 1, color=JANUS, alpha=0.18, lw=0, label="janus, bootstrap 95% interval (f, h)")]
     fig.legend(handles=lh, loc="upper left", bbox_to_anchor=(0.02, 49 / 196), ncol=6, fontsize=FS - 0.7, handletextpad=0.4, columnspacing=1.0)
     fig.savefig(f"{OUT}/fig_accuracy.pdf", facecolor="white"); plt.close(fig)
 
@@ -612,7 +616,7 @@ def supp_allsets():
     fig, ax = page(160, 118)
     order = sorted(D["all_with"]["hcc1954"], key=lambda n: -mean("all_with", n, "F1"))
     a1 = ax(29, 57, 38, 54); f1_dots(a1, "all_with", order, "Consensus of all 18 call sets", True); tag(a1, "a", -0.74, 1.04)
-    a2 = ax(95, 57, 38, 54); f1_dots(a2, "all_without", order, "Consensus of 17, snape excluded", False); tag(a2, "b", -0.12, 1.04)
+    a2 = ax(95, 57, 38, 54); f1_dots(a2, "all_without", order, "Consensus of 17, janus excluded", False); tag(a2, "b", -0.12, 1.04)
     a3 = ax(29, 9, 38, 34); f1_dots(a3, "loo", [n for n in order if tech(n) == "HiFi"], "Each call set against the consensus of the other 17", True); tag(a3, "c", -0.74, 1.06)
     ph = [Line2D([], [], ls="", marker="o", color=PAIRCOL[p], ms=3.4, label=PAIRNAME[p]) for p in P5] + [Line2D([], [], ls="", marker="|", color="black", ms=6, mew=1.6, label="mean")]
     ph += [Patch(color=TECHCOL[t], label=l) for t, l in (("HiFi", "PacBio HiFi"), ("ONT", "ONT"), ("Illumina", "Illumina"))]
@@ -622,8 +626,8 @@ def supp_allsets():
 
 def supp_without():
     fig, ax = page(160, 42)
-    a = ax(18, 10, 50, 24); heat(a, "all_without", "type", TYPES, TYPES, CAL5, "F1 by SV type, consensus without snape"); tag(a, "a", -0.32, 1.1)
-    b = ax(88, 10, 70, 24); heat(b, "all_without", "size", [k for k, _ in SIZES], [l for _, l in SIZES], CAL5, "F1 by SV size, consensus without snape"); tag(b, "b", -0.14, 1.1)
+    a = ax(18, 10, 50, 24); heat(a, "all_without", "type", TYPES, TYPES, CAL5, "F1 by SV type, consensus without janus"); tag(a, "a", -0.32, 1.1)
+    b = ax(88, 10, 70, 24); heat(b, "all_without", "size", [k for k, _ in SIZES], [l for _, l in SIZES], CAL5, "F1 by SV size, consensus without janus"); tag(b, "b", -0.14, 1.1)
     fig.savefig(f"{OUT}/fig_accuracy_without.pdf", facecolor="white"); plt.close(fig)
 
 
@@ -633,14 +637,14 @@ def supp_depth():
     ax = [ax(14 + 38.5 * i, 11, 28, 38) for i in range(4)]
     for p in P5 + ["hg008", "colo829"]:
         ax[0].plot(xs, [S[(p, f"{x}x", "snape")][2] for x in xs], "-o", ms=2.2, lw=0.9, color=PAIRCOL[p], label=PAIRNAME[p])
-    ax[0].set_xticks(xs); ax[0].set_xlabel("Depth of both samples (×)"); ax[0].set_ylabel("F1 score"); title(ax[0], "snape, depth", fs=0.0)
+    ax[0].set_xticks(xs); ax[0].set_xlabel("Depth of both samples (×)"); ax[0].set_ylabel("F1 score"); title(ax[0], "janus, depth", fs=0.0)
     for i, p in enumerate(("hcc1954", "hcc1395")):
-        for n in ["snape"] + COV:
-            ax[1 + i].plot(qs, [S[(p, f"{q}p", TOOLKEY[n])][2] for q in qs], "-", marker=MARK[n], ms=2.4, lw=1.2 if n == "snape" else 0.9, color=color(n), mec="white", mew=0.3, label=n)
+        for n in ["janus"] + COV:
+            ax[1 + i].plot(qs, [S[(p, f"{q}p", TOOLKEY[n])][2] for q in qs], "-", marker=MARK[n], ms=2.4, lw=1.2 if n == "janus" else 0.9, color=color(n), mec="white", mew=0.3, label=n)
         ax[1 + i].set_xticks(qs); ax[1 + i].set_xlabel("Tumor purity (%)"); ax[1 + i].set_ylabel("F1 score"); title(ax[1 + i], f"{PAIRNAME[p]}, purity", fs=0.0)
     for p in ["h2009", "hcc1937", "h1437", "hg008", "colo829"]:
         ax[3].plot(qs, [S[(p, f"{q}p", "snape")][2] for q in qs], "-o", ms=2.2, lw=0.9, color=PAIRCOL[p])
-    ax[3].set_xticks(qs); ax[3].set_xlabel("Tumor purity (%)"); ax[3].set_ylabel("F1 score"); title(ax[3], "snape, other pairs", fs=0.0)
+    ax[3].set_xticks(qs); ax[3].set_xlabel("Tumor purity (%)"); ax[3].set_ylabel("F1 score"); title(ax[3], "janus, other pairs", fs=0.0)
     for i, a in enumerate(ax):
         a.set_ylim(0, 1); a.set_yticks([0, 0.25, 0.5, 0.75, 1]); a.grid(axis="y", **GRID); tag(a, "abcd"[i], -0.36, 1.03)
         if i == 1: a.legend(loc="lower right", fontsize=FS - 1.2, handlelength=1.4)
@@ -656,7 +660,7 @@ def trace(p):
         rss = collections.defaultdict(float)
         for l in open(f"{d}/full/{p}/monitor/pidstat.txt"):
             x = l.split()
-            if len(x) < 19 or x[0] == "#" or x[-1] not in ("snape", "minimap2"): continue
+            if len(x) < 19 or x[0] == "#" or x[-1] not in ("snape", "janus", "minimap2"): continue
             hh, mm, ss = [int(v) for v in x[0].split(":")]
             t = day + hh * 3600 + mm * 60 + ss
             if t < t0 - 60: t += 86400
@@ -704,7 +708,7 @@ def fig3():
     b.set_xlim(0, x0); b.set_ylim(0, 22); b.set_yticks([0, 5, 10, 15, 20]); b.set_ylabel("Resident memory (GB)"); b.set_xlabel("Wall clock of the run, 16 threads (min)")
     tag(b, "b", -0.2, 1.04)
     GBY = 2.0**30
-    KIND = [("Packed reads", "#3f6ea5"), ("Core positions", "#86a8cc"), ("Counts", "#e0a030"), ("Graph", "#5fa37a"), ("Pieces, other", "#7e6bb0")]
+    KIND = [("Packed reads", "#3f6ea5"), ("Core positions", "#86a8cc"), ("Counts", "#e0a030"), ("Graph", "#5fa37a"), ("Snippets, other", "#7e6bb0")]
     SZ, BAMS = [], []
     for p in P5:
         f = {x["file"]: x["bytes"] for x in json.load(open(f"{RC}/full/{p}/run.json"))["files"] if not x["file"].startswith(("log.", "steps", "calls.vcf"))}
@@ -717,7 +721,7 @@ def fig3():
     for (lab, col), v in zip(KIND, SZ): c.barh(0, v, left=left, color=col, height=0.6, label=lab); left += v
     c.text(left + 2, 0, f"{left:.0f} GB", va="center", fontsize=FS)
     c.barh(1, BAMS[0], color="#b9b9b9", height=0.6, label="BAM (normal, tumor)"); c.barh(1, BAMS[1], left=BAMS[0], color="#d6d6d6", height=0.6); c.text(BAMS.sum() + 2, 1, f"{BAMS.sum():.0f} GB", va="center", fontsize=FS)
-    ylabs = ["snape\nintermediate files", "two sorted\nBAM files"]
+    ylabs = ["janus\nintermediate files", "two sorted\nBAM files"]
     if FQ:
         c.barh(2, FQ[0], color="#c9bfa8", height=0.6, label="FASTQ, gzip (normal, tumor)"); c.barh(2, FQ[1], left=FQ[0], color="#e3dccb", height=0.6); c.text(sum(FQ) + 2, 2, f"{sum(FQ):.0f} GB", va="center", fontsize=FS); ylabs.append("two FASTQ\nfiles (gzip)")
     c.set_yticks(range(len(ylabs))); c.set_yticklabels(ylabs, fontsize=FS); c.set_ylim(len(ylabs) - 0.5, -0.6); c.set_xlim(0, 200); c.set_xlabel("Disk space, mean of five pairs (GB)")
@@ -727,38 +731,38 @@ def fig3():
     ROWS = [("Severus", "severus_phased", 1), ("SAVANA", "savana_phased", 1), ("nanomonsv", "nanomonsv", 0), ("dysgu", "dysgu", 0), ("SVision-pro", "svision-pro", 0),
             ("cuteSV", "cutesv", 0), ("DeBreak", "debreak", 0), ("Sniffles2", "sniffles2", 0), ("kled", "kled", 0), ("SVDSS", "svdss", 0)]
     d = ax(101, 72, 57, 40); sn = sum(T["hcc1954"].values())
-    d.barh(0, sn / 3600, color=SNAPE, height=0.66); d.text(sn / 3600 + 0.08, 0, f"{sn / 60:.0f} min", va="center", fontsize=FS, fontweight="bold")
+    d.barh(0, sn / 3600, color=JANUS, height=0.66); d.text(sn / 3600 + 0.08, 0, f"{sn / 60:.0f} min", va="center", fontsize=FS, fontweight="bold")
     for k, (n, t, ph) in enumerate(ROWS, 1):
         w = json.load(open(f"{R}/competitors/{t}/hcc1954/run.json"))["total"]["wall_s"]; p_ = phase if ph else 0
         d.barh(k, ALN / 3600, color="#b9b9b9", height=0.66); d.barh(k, p_ / 3600, left=ALN / 3600, color="#e0a030", height=0.66); d.barh(k, w / 3600, left=(ALN + p_) / 3600, color="#3f6ea5", height=0.66)
         tot = (ALN + p_ + w) / 3600; d.text(tot + 0.08, k, f"{int(tot)}:{int(round((tot - int(tot)) * 60)):02d} h", va="center", fontsize=FS - 0.4); d.text(0.07, k, f"{tot * 3600 / sn:.0f}×", va="center", ha="left", fontsize=FS - 0.8, color="white", fontweight="bold")
     d.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
              loc="center right", bbox_to_anchor=(1.0, 0.27), ncol=1, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, frameon=False)
-    d.set_xlim(0, 8); d.set_yticks(range(len(ROWS) + 1)); d.set_yticklabels(["snape"] + [r[0] for r in ROWS], fontsize=FS); d.get_yticklabels()[0].set_fontweight("bold"); d.get_yticklabels()[0].set_color(SNAPE)
+    d.set_xlim(0, 8); d.set_yticks(range(len(ROWS) + 1)); d.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); d.get_yticklabels()[0].set_fontweight("bold"); d.get_yticklabels()[0].set_color(JANUS)
     d.set_ylim(len(ROWS) + 0.6, -0.6); d.set_xlabel("Wall clock on HCC1954, 16 threads (h)"); d.tick_params(axis="y", length=0); tag(d, "d", -0.2, 1.03)
     LOG = lambda p, step: open(f"{RC}/full/{p}/logs/log.{step}").read()
     e = ax(12, 10, 38, 38); X = np.arange(5)
     rb = [sum(json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bases"] for x in "nt") / 1e9 for p in P5]
     pb = [int(re.search(r"pieces, (\d+) bp", LOG(p, "select")).group(1)) / 1e9 for p in P5]
     e.bar(X - 0.19, rb, width=0.36, color="#b9b9b9", lw=0, zorder=2, label="both read sets, minimap2")
-    e.bar(X + 0.19, pb, width=0.36, color=SNAPE, lw=0, zorder=2, label="pieces aligned by snape")
-    for i in range(5): e.text(i + 0.19, pb[i] * 1.5, f"{rb[i] / pb[i]:,.0f}×", ha="center", va="bottom", rotation=90, fontsize=FS - 1.0, color=SNAPE)
+    e.bar(X + 0.19, pb, width=0.36, color=JANUS, lw=0, zorder=2, label="snippets aligned by janus")
+    for i in range(5): e.text(i + 0.19, pb[i] * 1.5, f"{rb[i] / pb[i]:,.0f}×", ha="center", va="bottom", rotation=90, fontsize=FS - 1.0, color=JANUS)
     e.set_yscale("log"); e.set_ylim(0.1, 2000); e.set_yticks([0.1, 1, 10, 100, 1000]); e.set_yticklabels(["0.1", "1", "10", "100", "1,000"]); e.set_ylabel("Sequence aligned (Gbp)")
     e.set_xticks(X); e.set_xticklabels([PAIRNAME[p] for p in P5], rotation=30, ha="right", rotation_mode="anchor"); e.tick_params(axis="x", length=0); e.grid(axis="y", **GRID)
     e.legend(loc="lower left", bbox_to_anchor=(-0.02, 1.0), handlelength=1.1, handletextpad=0.4); tag(e, "e", -0.3, 1.22)
     f = ax(72, 10, 34, 38); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
     PCPU = sum(float(l.split("\t")[2]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")) / 3600
     sc = (sum(x["cpu_s"] for x in json.load(open(f"{R}/full/hcc1954/run.json"))["steps"] if x["step"].startswith("pack")) + json.load(open(f"{RC}/full/hcc1954/run.json"))["total"]["cpu_s"]) / 3600
-    f.barh(0, sc, color=SNAPE, height=0.66); f.text(sc + 1.5, 0, f"{sc:.1f} h", va="center", fontsize=FS - 0.4, fontweight="bold")
+    f.barh(0, sc, color=JANUS, height=0.66); f.text(sc + 1.5, 0, f"{sc:.1f} h", va="center", fontsize=FS - 0.4, fontweight="bold")
     for k, (n, t, ph) in enumerate(ROWS, 1):
         cc = json.load(open(f"{R}/competitors/{t}/hcc1954/run.json"))["total"]["cpu_s"] / 3600; pc = PCPU if ph else 0
         f.barh(k, ACPU, color="#b9b9b9", height=0.66); f.barh(k, pc, left=ACPU, color="#e0a030", height=0.66); f.barh(k, cc, left=ACPU + pc, color="#3f6ea5", height=0.66)
         f.text(ACPU + pc + cc + 1.5, k, f"{ACPU + pc + cc:.0f} h", va="center", fontsize=FS - 0.4)
-    f.set_xlim(0, 105); f.set_yticks(range(len(ROWS) + 1)); f.set_yticklabels(["snape"] + [r[0] for r in ROWS], fontsize=FS - 0.4); f.get_yticklabels()[0].set_fontweight("bold"); f.get_yticklabels()[0].set_color(SNAPE)
+    f.set_xlim(0, 105); f.set_yticks(range(len(ROWS) + 1)); f.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS - 0.4); f.get_yticklabels()[0].set_fontweight("bold"); f.get_yticklabels()[0].set_color(JANUS)
     f.set_ylim(len(ROWS) + 0.6, -0.6); f.set_xlabel("CPU time on HCC1954 (h)"); f.tick_params(axis="y", length=0); f.grid(axis="x", **GRID); tag(f, "f", -0.5, 1.03)
     g = ax(122, 10, 36, 38)
     STEPS = [("Tumor reads", lambda p: json.load(open(f"{R}/full/{p}/run.json"))["reads"]["t"]["reads"]), ("Sites", lambda p: int(re.search(r"dropped nodes, (\d+) sites", LOG(p, "prune")).group(1))),
-             ("Pieces", lambda p: int(re.search(r"reads; (\d+) pieces", LOG(p, "select")).group(1))), ("Records", lambda p: int(re.search(r"at sites, (\d+) records", LOG(p, "call")).group(1))),
+             ("Snippets", lambda p: int(re.search(r"reads; (\d+) pieces", LOG(p, "select")).group(1))), ("Records", lambda p: int(re.search(r"at sites, (\d+) records", LOG(p, "call")).group(1))),
              ("PASS calls", lambda p: sum(1 for l in open(f"{H}/verdict/{p}.vcf") if "\tPASS\t" in l))]
     for p in P5: g.plot(range(len(STEPS)), [fn(p) for _, fn in STEPS], marker="o", ms=2.6, lw=0.9, color=PAIRCOL[p], mec="white", mew=0.3, label=PAIRNAME[p])
     g.set_yscale("log"); g.set_ylim(100, 3e7); g.set_xticks(range(len(STEPS))); g.set_xticklabels([n for n, _ in STEPS], rotation=30, ha="right", rotation_mode="anchor"); g.set_xlim(-0.3, len(STEPS) - 0.7)
@@ -784,7 +788,7 @@ def tree(ax, clades, wrong, ttl, mark=()):
     root = clades[-1]; walk(root, 0); deep = max(depth.values())
     for c, p in par.items():
         x0, x1 = depth[p], deep if len(c) == 1 else depth[c]
-        col = "#e0a030" if c in wrong else SNAPE if c in mark else C["ink"]
+        col = "#e0a030" if c in wrong else JANUS if c in mark else C["ink"]
         ax.plot([x0, x0, x1], [y[p], y[c], y[c]], color=col, lw=1.3 if (c in wrong or c in mark) else 0.6, solid_joinstyle="miter", zorder=3 if (c in wrong or c in mark) else 2)
     ax.plot([-0.6, 0], [y[root]] * 2, color=C["ink"], lw=0.6)
     for c in order: ax.text(deep + 0.25, y[c], "T%02d" % (min(c) + 1), fontsize=FS - 1, va="center")
@@ -794,7 +798,7 @@ def tree(ax, clades, wrong, ttl, mark=()):
 def fig4():
     S = simdata(); TR, MP = simtrees(); M2 = mm2()
     SETS = ["20-20", "20-10", "20-5", "10-10", "5-5"]; LAB = [s.replace("-", "/") for s in SETS]; BASE = "20-5"
-    ONE, ALL = "#8c8c8c", SNAPE
+    ONE, ALL = "#8c8c8c", JANUS
     fig, ax = page(160, 165)
     true = [frozenset(c) for c in TR["true"]]; rec = MP[BASE]
     kids = collections.defaultdict(list)
@@ -805,7 +809,7 @@ def fig4():
     miss55 = {frozenset(leaves(n)) for n in MP["5-5"].get("missing", [])}
     at = ax(5, 118, 42, 44); tree(at, true, set(), "Simulated tree", mark=miss55); tag(at, "a", -0.04, 1.0)
     ar = ax(52, 118, 42, 44); tree(ar, rec["clades"], {frozenset(c) for c in rec["wrong"]}, f"Reconstructed, joint calls at {BASE.replace('-', '/')}")
-    if miss55: at.plot([], [], color=SNAPE, lw=1.3, label="the one split missed at 5/5"); at.legend(loc="upper left", bbox_to_anchor=(0.0, 0.0), fontsize=FS - 0.8, handlelength=1.5, frameon=False)
+    if miss55: at.plot([], [], color=JANUS, lw=1.3, label="the one split missed at 5/5"); at.legend(loc="upper left", bbox_to_anchor=(0.0, 0.0), fontsize=FS - 0.8, handlelength=1.5, frameon=False)
     ab = ax(118, 121, 38, 38)
     for i, s in enumerate(SETS):
         d = TR["sets"][s]; v = d["exact"] / d["events"]
@@ -831,7 +835,7 @@ def fig4():
     aw = fig.add_axes([12 / 160, 10 / 165, 86 / 160, 40 / 165]); am = fig.add_axes([114 / 160, 10 / 165, 42 / 160, 40 / 165])
     for i, s in enumerate(SETS):
         t = S[s]["time"]; one, all_ = sum(t["pair_wall"]) / 60, t["joint_wall"] / 60
-        aw.bar(i - 0.2, one, width=0.36, color=ONE, label="snape, 20 pairwise runs (sum)" if i == 0 else None); aw.bar(i + 0.2, all_, width=0.36, color=ALL, label="snape, joint run" if i == 0 else None)
+        aw.bar(i - 0.2, one, width=0.36, color=ONE, label="janus, 20 pairwise runs (sum)" if i == 0 else None); aw.bar(i + 0.2, all_, width=0.36, color=ALL, label="janus, joint run" if i == 0 else None)
         for x, v in ((i - 0.2, one), (i + 0.2, all_)): aw.text(x, v + 4, f"{v:.0f}", ha="center", fontsize=FS - 0.6)
         pm, jm = max(t["pair_peak_kb"]) / 2**20, t["joint_peak_kb"] / 2**20
         am.bar(i - 0.2, pm, width=0.36, color=ONE); am.bar(i + 0.2, jm, width=0.36, color=ALL)
@@ -861,10 +865,10 @@ def gridvals():
             O[(p, k)] = max(O.get((p, k), 0), float(f))
     E = external()
     for p in P5:
-        S[(p, "full")] = D["all_with"][p]["snape"]["F1"]
+        S[(p, "full")] = D["all_with"][p]["janus"]["F1"]
         O[(p, "full")] = max(D["all_with"][p][n]["F1"] for n in ("Severus", "SAVANA", "nanomonsv"))
     for p in ("hg008", "colo829"):
-        S[(p, "full")] = E[p]["snape"][2]
+        S[(p, "full")] = E[p]["janus"][2]
         O[(p, "full")] = max(E[p][n][2] for n in ("Severus", "SAVANA", "nanomonsv"))
     return S, O
 
@@ -911,7 +915,7 @@ def grid():
     cb = fig.colorbar(sm, cax=c, ticks=[-0.2, 0, 0.2])
     cb.ax.tick_params(length=1.5, pad=1)
     cb.outline.set_linewidth(0.4)
-    cb.set_label("snape F1 minus best of\nSeverus, SAVANA, nanomonsv", fontsize=FS - 1.4, labelpad=2)
+    cb.set_label("janus F1 minus best of\nSeverus, SAVANA, nanomonsv", fontsize=FS - 1.4, labelpad=2)
     fig.text(15 / W, 1.5 / 72, "▲/▼: 95% bootstrap interval of the difference above/below 0; =: interval contains 0", fontsize=FS - 1.4, color=C["ink2"], va="bottom")
     fig.savefig(f"{OUT}/fig_grid.pdf", facecolor="white")
     plt.close(fig)
@@ -1111,15 +1115,15 @@ def filesfig():
 
 
     ROWS = [("Sites", "prune", r"dropped nodes, (\d+) sites"),
-            ("Reads cut", "select", r"on (\d+) reads"), ("Pieces", "select", r"reads; (\d+) pieces"),
-            ("Pieces placed", "place", r"pieces, (\d+) placed"), ("Sites with an event", "call", r"\[call\] (\d+) of \d+ sites carry"),
+            ("Reads cut", "select", r"on (\d+) reads"), ("Snippets", "select", r"reads; (\d+) pieces"),
+            ("Snippets placed", "place", r"pieces, (\d+) placed"), ("Sites with an event", "call", r"\[call\] (\d+) of \d+ sites carry"),
             ("Records", "call", r"at sites, (\d+) records")]
     stat = {lab: [grab(p, step, pat)[0] for p in P5] for lab, step, pat in ROWS}
     stat["PASS calls"] = [sum(1 for l in open(f"{H}/verdict/{p}.vcf") if "\tPASS\t" in l) for p in P5]
     for k, v in stat.items():
         print(k, v)
     VAL["files"] = (tot, bam, stat)
-    KIND = [("Packed reads", STAGE["Packing"]), ("Core positions", STAGE["Core extraction"]), ("Counts", STAGE["Counting"]), ("Graph", STAGE["Graph and pruning"]), ("Pieces, alignments, other", STAGE["Placement"])]
+    KIND = [("Packed reads", STAGE["Packing"]), ("Core positions", STAGE["Core extraction"]), ("Counts", STAGE["Counting"]), ("Graph", STAGE["Graph and pruning"]), ("Snippets, alignments, other", STAGE["Placement"])]
     fig, ax = page(W, 76)
     a = ax(14, 19, 62, 40)
     for i, p in enumerate(P5):
@@ -1158,7 +1162,7 @@ def jointfig():
         for i in range(len(ra)):
             for j in range(len(fl)):
                 a.text(j, i, f"{g[i, j]:.3f}", ha="center", va="center", fontsize=FS - 0.5, color="white" if (g[i, j] - lo) / (hi - lo) > 0.6 else C["ink"], fontweight="bold" if (ra[i], fl[j]) == (0.2, 0.1) else "normal")
-        a.add_patch(Rectangle((fl.index(0.1) - 0.5, ra.index(0.2) - 0.5), 1, 1, fill=False, ec=SNAPE, lw=1.4))
+        a.add_patch(Rectangle((fl.index(0.1) - 0.5, ra.index(0.2) - 0.5), 1, 1, fill=False, ec=JANUS, lw=1.4))
         a.set_xticks(range(len(fl))); a.set_xticklabels([f"{v:g}" for v in fl]); a.set_yticks(range(len(ra))); a.set_yticklabels([f"+{v:g}" for v in ra])
         a.set_xlabel("Lowest probability accepted\nwith support from another tumor"); a.set_ylabel("Raise of the threshold\nwithout such support")
         for s in a.spines.values(): s.set_visible(False)
@@ -1230,7 +1234,7 @@ def consensus():
         for x, (k, _) in zip(xs, CB):
             a.text(x, combo[p][k] + top * 0.012, str(combo[p][k]), ha="center", va="bottom", fontsize=FS - 1.4, rotation=90, bbox=dict(fc="white", ec="none", pad=0.2))
     a.set_xticks(range(4)); a.set_xticklabels([l for _, l in CB]); a.set_ylabel("Consensus SVs"); a.set_xlabel("Technologies with a supporting call set")
-    a.set_xlim(-0.5, 3.5); a.set_ylim(0, top); a.grid(axis="y", **GRID); a.set_axisbelow(True)
+    a.set_xlim(-0.5, 3.5); a.set_ylim(0, top); a.grid(axis="y", **GRID); a.set_axisbelow(True); a.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:,.0f}"))
     tag(a, "b", -12 / 65, 1 + 2 / 44)
     save(fig, "consensus")
     tot = collections.Counter(); th = collections.Counter()
@@ -1261,7 +1265,7 @@ def simgen():
     for ty in TY:
         v = np.array([per[t][ty] for t in T]); a.bar(range(20), v, bottom=b, color=COL[ty], alpha=AL.get(ty, 1), width=0.8, lw=0); b += v
     a.set_xticks(range(20)); a.set_xticklabels([t[1:] for t in T], rotation=90); a.set_xlim(-0.7, 19.7); a.set_ylim(0, 1500)
-    a.set_xlabel("Tumor"); a.set_ylabel("Simulated SVs"); a.grid(axis="y", **GRID); a.set_axisbelow(True)
+    a.set_xlabel("Tumor"); a.set_ylabel("Simulated SVs"); a.grid(axis="y", **GRID); a.set_axisbelow(True); a.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:,.0f}"))
     tag(a, "a", -11 / 50, 1 + 2 / 42)
     a = ax(75, 12, 28, 42)
     bins = np.logspace(np.log10(50), np.log10(3e6), 40)
@@ -1274,7 +1278,7 @@ def simgen():
     a.bar(range(1, 21), [h[i] for i in range(1, 21)], color=NEUTRAL, width=0.8)
     a.set_yscale("log"); a.set_ylim(8, 30000); a.set_xlim(0.2, 20.8); a.set_xticks([1, 5, 10, 15, 20]); a.set_xlabel("Tumors carrying the SV"); a.set_ylabel("Distinct SVs")
     for i in range(1, 21):
-        if h[i]: a.text(i, h[i] * 1.12, str(h[i]), ha="center", fontsize=FS - 1.4, rotation=90, va="bottom")
+        if h[i]: a.text(i, h[i] * 1.12, f"{h[i]:,}", ha="center", fontsize=FS - 1.4, rotation=90, va="bottom")
     tag(a, "c", -12 / 44, 1 + 2 / 42)
     fig.legend(handles=[(Patch(facecolor=COL[t], alpha=AL.get(t, 1), lw=0), Line2D([], [], color=COL[t], ls=LS.get(t, "-"), lw=0.9)) for t in TY], labels=TY, handler_map={tuple: HandlerTuple(ndivide=None, pad=0.3)}, loc="upper center", bbox_to_anchor=(57.5 / 160, 1.0), ncol=3, handlelength=3.0, columnspacing=2.0, handletextpad=0.5)
     save(fig, "simgen")
@@ -1304,11 +1308,11 @@ def align():
     a.bar(X - 0.2, [D[p]["pieces"] / 1e3 for p in P5], width=0.38, color=STAGE["Selection"], label="Selected")
     a.bar(X + 0.2, [D[p]["placed"] / 1e3 for p in P5], width=0.38, color=STAGE["Placement"], label="Placed by cores")
     for i, p in enumerate(P5): a.text(i + 0.2, D[p]["placed"] / 1e3 + 1.5, f"{100 * D[p]['placed'] / D[p]['pieces']:.0f}%", ha="center", va="bottom", rotation=90, fontsize=FS - 1.2, bbox=dict(fc="white", ec="none", pad=0.2))
-    a.set_ylim(0, 120); a.legend(loc="upper right", handlelength=1.2); fin(a, "Pieces (thousands)", "a")
+    a.set_ylim(0, 120); a.legend(loc="upper right", handlelength=1.2); fin(a, "Snippets (thousands)", "a")
     a = ax(67, 15, 38, 40)
     v = [100 * D[p]["bp"] / D[p]["tbases"] for p in P5]
     a.bar(X, v, width=0.6, color=STAGE["Selection"])
-    for i, p in enumerate(P5): a.text(i, v[i] + 0.015, f"{D[p]['bp'] / 1e6:.0f} Mb", ha="center", va="bottom", rotation=90, fontsize=FS - 1.2, bbox=dict(fc="white", ec="none", pad=0.2))
+    for i, p in enumerate(P5): a.text(i, v[i] + 0.015, f"{D[p]['bp'] / 1e6:,.0f} Mbp", ha="center", va="bottom", rotation=90, fontsize=FS - 1.2, bbox=dict(fc="white", ec="none", pad=0.2))
     a.set_ylim(0, 0.8); fin(a, "Share of tumor read bases (%)", "b")
     a = ax(121, 15, 38, 40)
     v = [D[p]["gaps"] for p in P5]
@@ -1334,7 +1338,7 @@ def signatures():
     for t in TY:
         v = np.array([N[(p, "PASS", t)] for p in P5]); a.bar(range(5), v, bottom=b, color=SVTYPE[t], width=0.6, label=t, lw=0); b += v
     for i in range(5): a.text(i, b[i] + 20, f"{int(b[i]):,}", ha="center", va="bottom", fontsize=FS - 1.0, bbox=dict(fc="white", ec="none", pad=0.2))
-    a.set_xticks(range(5)); a.set_xticklabels([PAIRNAME[p] for p in P5], rotation=30, ha="right", rotation_mode="anchor"); a.set_xlim(-0.55, 4.55); a.set_ylim(0, 1500); a.set_ylabel("PASS records"); a.grid(axis="y", **GRID); a.set_axisbelow(True)
+    a.set_xticks(range(5)); a.set_xticklabels([PAIRNAME[p] for p in P5], rotation=30, ha="right", rotation_mode="anchor"); a.set_xlim(-0.55, 4.55); a.set_ylim(0, 1500); a.set_ylabel("PASS records"); a.grid(axis="y", **GRID); a.set_axisbelow(True); a.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:,.0f}"))
     a.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=len(TY), handlelength=1.0, columnspacing=1.2, handletextpad=0.4)
     tag(a, "a", -13 / 64, 1 + 2 / 42)
     a = ax(94, 13, 64, 42)
@@ -1378,7 +1382,7 @@ def simeval():
     for x0, w, keys, T_, H_, lab, tg in ((14, 64, TY, tk, hk, "SV type", "a"), (94, 64, [s[0] for s in SZ], ts, hs, "SV size", "b")):
         a = ax(x0, 16, w, 38)
         r = [H_[q] / T_[q] for q in keys]
-        a.bar(range(len(keys)), r, color=SNAPE, width=0.65)
+        a.bar(range(len(keys)), r, color=JANUS, width=0.65)
         for j, q in enumerate(keys): a.text(j, r[j] + 0.015, f"{r[j]:.3f}", ha="center", va="bottom", fontsize=FS - 1.0, bbox=dict(fc="white", ec="none", pad=0.2))
         a.set_xticks(range(len(keys))); a.set_xticklabels([f"{q}\n({T_[q]:,})" for q in keys]); a.set_xlim(-0.55, len(keys) - 0.45); a.set_ylim(0, 1.0); a.set_yticks([0, 0.25, 0.5, 0.75, 1.0]); a.set_yticklabels(["0", ".25", ".5", ".75", "1"])
         a.set_ylabel("Recall"); a.set_xlabel(lab + " (simulated SVs)"); a.grid(axis="y", **GRID); a.set_axisbelow(True); tag(a, tg, -13 / w, 1 + 2 / 38)
@@ -1411,7 +1415,7 @@ def irng(v, sep="--"):
 
 
 def tex(n):
-    return "\\tool{}" if n == "snape" else n
+    return "\\tool{}" if n == "janus" else n
 
 
 def bold(vals, fmt="{:.3f}"):
@@ -1469,7 +1473,7 @@ def tables():
     T, Z = {}, timing()
     rows = []
     for p in P5:
-        r = D["all_with"][p]["snape"]; j = run(R, p); X = j["params"]["bases_per_x"]
+        r = D["all_with"][p]["janus"]; j = run(R, p); X = j["params"]["bases_per_x"]
         rows.append(f"{PAIRNAME[p]} & {j['reads']['n']['bases'] / X:.1f}/{j['reads']['t']['bases'] / X:.1f} & {r['truth']} & {r['calls']} & {r['tp']} & {r['fp']} & {r['fn']} & {r['P']:.3f} & {r['R']:.3f} & {r['F1']:.3f}")
     T["tab:castle"] = tabular("lrrrrrrrrr", "Pair & Coverage & Truth & Calls & TP & FP & FN & Precision & Recall & F1 \\\\\n     & n/t      &       &       &    &    &    &           &        &    \\\\", rows)
     ex = {}
@@ -1480,12 +1484,12 @@ def tables():
     b = {q: bold([ex[(q, n)][3] for n in names]) for q in ("colo829", "hg008")}
     rows = [f"{tex(n)} & " + " & ".join(f"{ex[(q, n)][0]} & {ex[(q, n)][1]:.3f} & {ex[(q, n)][2]:.3f} & {b[q][i]}" for q in ("colo829", "hg008")) for i, n in enumerate(names)]
     T["tab:external"] = tabular("lrrrrrrrr", " & \\multicolumn{4}{c}{COLO829} & \\multicolumn{4}{c}{HG008} \\\\\nCaller & Calls & Precision & Recall & F1 & Calls & Precision & Recall & F1 \\\\", rows)
-    hifi = sorted(["snape"] + OURS, key=lambda n: -mean("all_with", n, "F1"))
+    hifi = sorted(["janus"] + OURS, key=lambda n: -mean("all_with", n, "F1"))
     cols = []
     for s in ("all_with", "all_without"):
         cols += [[D[s][p][n]["F1"] for n in hifi] for p in P5] + [[mean(s, n, "F1") for n in hifi]]
     cols = [bold(c) for c in cols]
-    tm = {n: hmh(Z["pipe"][n]["wall"]) for n in OURS}; tm["snape"] = hm(Z["tot"]["hcc1954"])
+    tm = {n: hmh(Z["pipe"][n]["wall"]) for n in OURS}; tm["janus"] = hm(Z["tot"]["hcc1954"])
     rows = [f"{tex(n)} & " + " & ".join(c[i] for c in cols) + f" & {tm[n]}" for i, n in enumerate(hifi)]
     hd = " & ".join(PAIRNAME[p] for p in P5)
     T["tab:others"] = tabular("lrrrrrrrrrrrrr", " & \\multicolumn{6}{c}{Consensus of 18 call sets} & \\multicolumn{6}{c}{Consensus of 17 call sets, without \\tool{}} & \\\\\n\\cmidrule(lr){2-7}\\cmidrule(lr){8-13}\n"
@@ -1524,19 +1528,19 @@ def tables():
     rows = [f"{tex(n)} & " + " & ".join(f"{L[p][n]['F1']:.3f}" for p in P5) + " & " + " & ".join(f"{lm(n, k):.3f}" for k in ("P", "R", "F1")) for n in sorted(L["hcc1954"], key=lambda n: -lm(n, "F1"))]
     T["stab:loo"] = tabular("lrrrrrrrr", f"Call set & {hd} & Precision & Recall & F1 \\\\", rows)
     C_ = cov(); ks = ["5x", "10x", "15x", "20x", "30x", "full"]
-    rows = [f"\\tool{{}}, {lab} & " + " & ".join(f"{x:.3f}" for x in series(C_, "snape", ks, P5, j)) for j, lab in enumerate(("precision", "recall", "F1"))]
+    rows = [f"\\tool{{}}, {lab} & " + " & ".join(f"{x:.3f}" for x in series(C_, "janus", ks, P5, j)) for j, lab in enumerate(("precision", "recall", "F1"))]
     rows += [f"{n}, F1 & " + " & ".join(f"{x:.3f}" for x in series(C_, n, ks, P5, 2)) for n in COV]
     rows += ["\\midrule", "Purity (30$\\times$) & 20\\% & 40\\% & 60\\% & 80\\% & 100\\% & ", "\\midrule"]
-    for p, tools in [("hcc1954", ["snape"] + COV), ("hcc1395", ["snape"] + COV), ("h2009", ["snape"]), ("hcc1937", ["snape"]), ("h1437", ["snape"])]:
+    for p, tools in [("hcc1954", ["janus"] + COV), ("hcc1395", ["janus"] + COV), ("h2009", ["janus"]), ("hcc1937", ["janus"]), ("h1437", ["janus"])]:
         rows += [f"{PAIRNAME[p]}, {tex(n)} & " + " & ".join(f"{C_[(p, q, TOOLKEY[n])][2]:.3f}" for q in reversed(PURITY)) + " & " for n in tools]
     T["stab:depth"] = tabular("lrrrrrr", "Coverage & 5$\\times$ & 10$\\times$ & 15$\\times$ & 20$\\times$ & 30$\\times$ & full \\\\", rows)
     tot, bam, stat = VAL["files"]
-    T["stab:files"] = tabular("lrrrrrrr", "Pair & Packed reads & Core positions & Counts & Graph & Pieces, alignments, other & Total & BAM files \\\\",
+    T["stab:files"] = tabular("lrrrrrrr", "Pair & Packed reads & Core positions & Counts & Graph & Snippets, alignments, other & Total & BAM files \\\\",
                               [f"{PAIRNAME[p]} & " + " & ".join(f"{x:.1f}" for x in tot[p]) + f" & {sum(bam[p]):.0f}" for p in P5])
     ST = [("Nodes removed as tips or bubbles", lambda p: grab(p, "prune", r"(\d+) dropped nodes")), ("Sites", lambda p: grab(p, "prune", r"dropped nodes, (\d+) sites")),
-          ("Additional rows from distance groups", lambda p: grab(p, "select", r"(\d+) more rows")), ("Reads from which pieces were cut", lambda p: grab(p, "select", r"on (\d+) reads")),
-          ("Pieces", lambda p: grab(p, "select", r"reads; (\d+) pieces")), ("Sequence in pieces (Mbp)", lambda p: round(grab(p, "select", r"pieces, (\d+) bp") / 1e6)),
-          ("Pieces placed on the reference", lambda p: grab(p, "place", r"(\d+) placed")), ("Sites with an event", lambda p: grab(p, "call", r"\[call\] (\d+) of \d+ sites carry")),
+          ("Additional rows from distance groups", lambda p: grab(p, "select", r"(\d+) more rows")), ("Reads from which snippets were cut", lambda p: grab(p, "select", r"on (\d+) reads")),
+          ("Snippets", lambda p: grab(p, "select", r"reads; (\d+) pieces")), ("Sequence in snippets (Mbp)", lambda p: round(grab(p, "select", r"pieces, (\d+) bp") / 1e6)),
+          ("Snippets placed on the reference", lambda p: grab(p, "place", r"(\d+) placed")), ("Sites with an event", lambda p: grab(p, "call", r"\[call\] (\d+) of \d+ sites carry")),
           ("Records", lambda p: grab(p, "call", r"at sites, (\d+) records")), ("PASS calls after classification", lambda p: sum(1 for l in open(f"{H}/verdict/{p}.vcf") if "\tPASS\t" in l))]
     T["stab:steps"] = tabular("lrrrrr", f" & {hd} \\\\", [f"{n} & " + " & ".join(f"{fn(p):,}" for p in P5) for n, fn in ST])
     A = [r for r in supp_tsv("heldout_auc.tsv")]
@@ -1571,40 +1575,40 @@ def numbers(Z):
     j = {p: run(R, p) for p in P5}; X = 3.1e9
     put("depth of the normal samples", rng((j[p]["reads"]["n"]["bases"] / X for p in P5), 0, "--") + "$\\times$")
     put("depth of the tumor samples", rng((j[p]["reads"]["t"]["bases"] / X for p in P5), 0, "--") + "$\\times$")
-    f = {p: D["all_with"][p]["snape"] for p in P5}
+    f = {p: D["all_with"][p]["janus"] for p in P5}
     lo, hi = min(P5, key=lambda p: f[p]["F1"]), max(P5, key=lambda p: f[p]["F1"])
-    put("F1 range of snape", f"from {f[lo]['F1']:.3f} for {PAIRNAME[lo]} to {f[hi]['F1']:.3f} for {PAIRNAME[hi]}")
+    put("F1 range of janus", f"from {f[lo]['F1']:.3f} for {PAIRNAME[lo]} to {f[hi]['F1']:.3f} for {PAIRNAME[hi]}")
     put("lowest precision / recall", f"{PAIRNAME[min(P5, key=lambda p: f[p]['P'])]} / {PAIRNAME[min(P5, key=lambda p: f[p]['R'])]} (consensus {f[min(P5, key=lambda p: f[p]['R'])]['truth']} SVs)")
     lab = {}
     for l in open(f"{H}/supp/labels17/scores.tsv"):
         x = l.rstrip("\n").split("\t"); lab[(x[0], x[1])] = x[2:]
     l17 = lambda k: st.mean(float(lab[(p, k)][2]) for p in P5)
-    put("mean F1 with the 17-call-set labels, against 18 / against 17 call sets", f"{l17('with'):.3f} instead of {mean('all_with', 'snape', 'F1'):.3f} / {l17('without'):.3f} instead of {mean('all_without', 'snape', 'F1'):.3f}")
+    put("mean F1 with the 17-call-set labels, against 18 / against 17 call sets", f"{l17('with'):.3f} instead of {mean('all_with', 'janus', 'F1'):.3f} / {l17('without'):.3f} instead of {mean('all_without', 'janus', 'F1'):.3f}")
     put("labels17 HG008 and COLO829 F1, COLO829 calls", f"HG008 {float(lab[('hg008', 'truth')][2]):.3f}, COLO829 {float(lab[('colo829', 'truth')][2]):.3f}, {lab[('colo829', 'truth')][3]} calls")
     C_ = cov(); ks = ["30x", "20x", "15x", "10x", "5x"]
-    put("labels17 mean F1 at 30x..5x", ", ".join(f"{l17(k):.3f}" for k in ks) + " compared with " + ", ".join(f"{x:.3f}" for x in series(C_, "snape", ks, P5, 2)))
-    put("labels17 largest depth difference", f"{max(abs(round(l17(k), 3) - round(x, 3)) for k, x in zip(ks, series(C_, 'snape', ks, P5, 2))):.3f}")
+    put("labels17 mean F1 at 30x..5x", ", ".join(f"{l17(k):.3f}" for k in ks) + " compared with " + ", ".join(f"{x:.3f}" for x in series(C_, "janus", ks, P5, 2)))
+    put("labels17 largest depth difference", f"{max(abs(round(l17(k), 3) - round(x, 3)) for k, x in zip(ks, series(C_, 'janus', ks, P5, 2))):.3f}")
     allc = list(D["all_with"]["hcc1954"])
-    for n in ["snape", "Severus", "Severus ONT", "SAVANA", "nanomonsv", "Manta", "GRIPSS", "Sniffles2 ONT", "SvABA"]:
+    for n in ["janus", "Severus", "Severus ONT", "SAVANA", "nanomonsv", "Manta", "GRIPSS", "Sniffles2 ONT", "SvABA"]:
         put(f"mean F1 against 18 call sets, {n}", f"{mean('all_with', n, 'F1'):.3f}")
-    put("pairs where snape ranks first (18 call sets)", ", ".join(PAIRNAME[p] for p in P5 if max(allc, key=lambda n: D["all_with"][p][n]["F1"]) == "snape"))
+    put("pairs where janus ranks first (18 call sets)", ", ".join(PAIRNAME[p] for p in P5 if max(allc, key=lambda n: D["all_with"][p][n]["F1"]) == "janus"))
     put("highest precision of all call sets", max(allc, key=lambda n: mean("all_with", n, "P")))
-    put("highest recall of the HiFi call sets", max(["snape"] + OURS, key=lambda n: mean("all_with", n, "R")))
-    wo = sorted(OURS + ["snape"], key=lambda n: -mean("all_without", n, "F1"))[:3]
+    put("highest recall of the HiFi call sets", max(["janus"] + OURS, key=lambda n: mean("all_with", n, "R")))
+    wo = sorted(OURS + ["janus"], key=lambda n: -mean("all_without", n, "F1"))[:3]
     put("top three against 17 call sets", ", ".join(f"{n} {mean('all_without', n, 'F1'):.3f}" for n in wo))
     L = loo(); lm = lambda n: st.mean(L[p][n]["F1"] for p in P5)
     put("leave-one-out top three", ", ".join(f"{n} {lm(n):.3f}" for n in sorted(L["hcc1954"], key=lambda n: -lm(n))[:3]))
-    put("pairs where snape ranks first (leave one out)", ", ".join(PAIRNAME[p] for p in P5 if max(L[p], key=lambda n: L[p][n]["F1"]) == "snape"))
+    put("pairs where janus ranks first (leave one out)", ", ".join(PAIRNAME[p] for p in P5 if max(L[p], key=lambda n: L[p][n]["F1"]) == "janus"))
     for q in ("colo829", "hg008"):
         e = SIG["external"][q]
         put(f"{q}: difference to {e['best']} and 95% interval", f"{e['diff']:.3f} ({e['lo']:.3f} to {e['hi']:.3f})")
-    put("consensus SVs, five pairs", f"{sum(D['all_with'][p]['snape']['truth'] for p in P5):,}")
-    put("consensus without snape, sizes", ", ".join(f"{D['all_without'][p]['Severus']['truth']:,}" for p in P5))
-    s30, s5 = series(C_, "snape", ["30x", "5x"], P5, 2), series(C_, "snape", ["30x", "5x"], P5, 1)
+    put("consensus SVs, five pairs", f"{sum(D['all_with'][p]['janus']['truth'] for p in P5):,}")
+    put("consensus without janus, sizes", ", ".join(f"{D['all_without'][p]['Severus']['truth']:,}" for p in P5))
+    s30, s5 = series(C_, "janus", ["30x", "5x"], P5, 2), series(C_, "janus", ["30x", "5x"], P5, 1)
     v30, v5 = series(C_, "Severus", ["30x", "5x"], P5, 2), series(C_, "Severus", ["30x", "5x"], P5, 1)
-    put("snape mean F1 and recall 30x to 5x", f"F1 {s30[0]:.3f} to {s30[1]:.3f}, recall {s5[0]:.3f} to {s5[1]:.3f}")
+    put("janus mean F1 and recall 30x to 5x", f"F1 {s30[0]:.3f} to {s30[1]:.3f}, recall {s5[0]:.3f} to {s5[1]:.3f}")
     put("Severus mean F1 30x to 5x, recall at 5x", f"{v30[0]:.3f} to {v30[1]:.3f}, recall {v5[1]:.3f}")
-    put("20% purity, snape precision and F1, Severus F1 (HCC1954, HCC1395)", "; ".join(f"{C_[(p, '20p', 'snape')][0]:.3f}, {C_[(p, '20p', 'snape')][2]:.3f}, {C_[(p, '20p', 'severus')][2]:.3f}" for p in ("hcc1954", "hcc1395")))
+    put("20% purity, janus precision and F1, Severus F1 (HCC1954, HCC1395)", "; ".join(f"{C_[(p, '20p', 'snape')][0]:.3f}, {C_[(p, '20p', 'snape')][2]:.3f}, {C_[(p, '20p', 'severus')][2]:.3f}" for p in ("hcc1954", "hcc1395")))
     put("20% purity F1 of the other three pairs", rng((C_[(p, "20p", "snape")][2] for p in ("h2009", "hcc1937", "h1437")), 3))
     c, tot = Z["cost"], Z["tot"]
     def mins(x):
@@ -1614,7 +1618,7 @@ def numbers(Z):
     put("graph and site detection, longest", f"{max((c['time'][p]['Counting'] + c['time'][p]['Graph and pruning']) / 60 for p in P5):.1f} min")
     put("selection, placement and alignment", rng(((c["time"][p]["Selection"] + c["time"][p]["Placement"] + c["time"][p]["minimap2"]) / 60 for p in P5), 0) + " min")
     put("peak memory (minimap2)", rng(max(c["mem"][p].values()) for p in P5) + " GB")
-    put("peak memory of the snape steps", f"{max(v for p in P5 for g, v in c['mem'][p].items() if g != 'minimap2'):.1f} GB")
+    put("peak memory of the janus steps", f"{max(v for p in P5 for g, v in c['mem'][p].items() if g != 'minimap2'):.1f} GB")
     F = json.load(open(f"{H}/verdict/folds.json"))
     put("training one model", rng((F[p]["train_s"] for p in F), 0) + " s")
     put("classification step", f"{float(re.search(r'([\d.]+) s$', open(f'{H}/verdict/log.txt').read().strip().splitlines()[-1]).group(1)) / 60:.1f} minutes")
@@ -1624,14 +1628,14 @@ def numbers(Z):
     put("packed reads / core positions / rest", " / ".join(rng((tot_f[p][i] for p in P5), 0) for i in (0, 1)) + " / " + rng((sum(tot_f[p][2:5]) for p in P5), 0) + " GB")
     put("intermediate files as share of the BAM files", rng((100 * tot_f[p][5] / sum(bam[p]) for p in P5), 0) + "%")
     put("mapping HCC1954", f"{hmin(Z['mapt']['hcc1954'])}, {Z['apk']:.1f} GB")
-    put("snape share of mapping time and memory (HCC1954)", f"{100 * tot['hcc1954'] / Z['mapt']['hcc1954']:.0f}% and {100 * max(c['mem']['hcc1954'].values()) / Z['apk']:.0f}% ({max(c['mem']['hcc1954'].values()):.1f} GB)")
+    put("janus share of mapping time and memory (HCC1954)", f"{100 * tot['hcc1954'] / Z['mapt']['hcc1954']:.0f}% and {100 * max(c['mem']['hcc1954'].values()) / Z['apk']:.0f}% ({max(c['mem']['hcc1954'].values()):.1f} GB)")
     put("estimated mapping time, other four pairs", rng((Z["mapt"][p] / 3600 for p in P5 if p != "hcc1954"), 1) + " hours")
     put("mapping throughput HCC1954, COLO829", " and ".join(f"{Z['tp'][p]:.1f}" for p in ("hcc1954", "colo829")) + " s per Gbp")
     pw = {n: v["wall"] for n, v in Z["pipe"].items()}
     put("pipelines on HCC1954", f"from {hmin(min(pw.values()))} ({', '.join(n for n in pw if hmin(pw[n]) == hmin(min(pw.values())))}) to {hmin(max(pw.values()))} ({max(pw, key=pw.get)}); Severus {hmin(pw['Severus'])}, SAVANA {hmin(pw['SAVANA'])}, phasing {Z['phase'] / 60:.0f} min")
     gb = {p: grab(p, "select", r"pieces, (\d+) bp") / 1e9 for p in P5}
     put("aligned pieces", rng(gb.values(), 2) + " Gbp, " + rng((100 * gb[p] / Z["gbp"][p] for p in P5), 2) + "% of " + rng(Z["gbp"].values(), 0) + " Gbp")
-    put("CPU time on HCC1954: snape, mapping, pipelines", f"{Z['scpu'] / 3600:.1f} h, {Z['acpu'] / 3600:.0f} h, " + rng((v["cpu"] / 3600 for v in Z["pipe"].values()), 0) + " h")
+    put("CPU time on HCC1954: janus, mapping, pipelines", f"{Z['scpu'] / 3600:.1f} h, {Z['acpu'] / 3600:.0f} h, " + rng((v["cpu"] / 3600 for v in Z["pipe"].values()), 0) + " h")
     put("nodes removed as tips or bubbles", rng((grab(p, "prune", r"(\d+) dropped nodes") / 1e6 for p in P5), 1) + " million")
     put("tumor reads, sites, pieces, records", "; ".join([rng((j[p]["reads"]["t"]["reads"] / 1e6 for p in P5), 1) + " million"] + [irng(round(grab(p, s, pat), -3) for p in P5) for s, pat in (("prune", r"dropped nodes, (\d+) sites"), ("select", r"reads; (\d+) pieces"))] + [irng(round(grab(p, "call", r"at sites, (\d+) records"), -2) for p in P5)]))
     sg = VAL["simgen"]
@@ -1657,7 +1661,7 @@ def numbers(Z):
     put("joint rule sweep, F1 range at 20/20 and 20/5", "; ".join(rng(VAL["joint"][s], 3) for s in ("20-20", "20-5")))
     m = VAL["missed"]
     put("consensus SVs without a PASS call, with a record, without", f"{sum(m[p][1] for p in P5)}, {sum(m[p][2] for p in P5)}, {sum(m[p][3] for p in P5)}")
-    put("Minda false negatives, five pairs", f"{sum(D['all_with'][p]['snape']['fn'] for p in P5)}")
+    put("Minda false negatives, five pairs", f"{sum(D['all_with'][p]['janus']['fn'] for p in P5)}")
     ev = VAL["evidence"]
     put("records matching / not matching the labels; share with a normal read |D|<20", f"{ev[1][0]:,} / {ev[0][0]:,}; {100 * ev[1][1]:.0f}% / {100 * ev[0][1]:.0f}%")
     au = [r for r in supp_tsv("heldout_auc.tsv") if r["setting"] == "full"]
@@ -1666,14 +1670,14 @@ def numbers(Z):
     put("three-pair F1 range per pair at full depth", "; ".join(f"{PAIRNAME[p]} " + rng((float(r["F1"]) for r in SP if r["pair"] == p and r["setting"] == "full"), 3) for p in P5))
     ex = ACC["extra"]
     put("Sniffles2 mosaic mean F1, Delly F1 on HCC1954", f"{st.mean(ex['all_with'][p]['Sniffles2 (mosaic)']['F1'] for p in P5):.3f}, {ex['all_with']['hcc1954']['Delly']['F1']:.3f}")
-    hifi = ["snape"] + OURS; mw = lambda n, k="F1": mean("all_with", n, k)
-    put("call sets above snape in HCC1395", ", ".join(n for n in allc if D["all_with"]["hcc1395"][n]["F1"] > D["all_with"]["hcc1395"]["snape"]["F1"]))
+    hifi = ["janus"] + OURS; mw = lambda n, k="F1": mean("all_with", n, k)
+    put("call sets above janus in HCC1395", ", ".join(n for n in allc if D["all_with"]["hcc1395"][n]["F1"] > D["all_with"]["hcc1395"]["janus"]["F1"]))
     put("ONT below HiFi in F1 and precision", ", ".join(f"{n}: {mw(n + ' ONT') < mw(n)} {mw(n + ' ONT', 'P') < mw(n, 'P')}" for n in ("SAVANA", "nanomonsv")))
     put("HiFi call sets below Manta, GRIPSS, SvABA", "; ".join(f"{n}: {', '.join(x for x in hifi if mw(x) < mw(n))}" for n in ("Manta", "GRIPSS", "SvABA")))
     put("Illumina call sets, best and worst pair", "; ".join(f"{n}: {PAIRNAME[max(P5, key=lambda p: D['all_with'][p][n]['F1'])]}, {PAIRNAME[min(P5, key=lambda p: D['all_with'][p][n]['F1'])]}" for n in ILL))
     put("HiFi call sets with higher recall than nanomonsv", ", ".join(n for n in hifi if mw(n, "R") > mw("nanomonsv", "R")))
     for kind, keys in (("type", TYPES), ("size", [k for k, _ in SIZES])):
-        put(f"callers above snape by {kind}", "; ".join(f"{k}: " + ", ".join(n for n in ["Severus", "SAVANA", "nanomonsv", "Sniffles2"] if pooled("all_with", n, kind, k)[0] > pooled("all_with", "snape", kind, k)[0]) for k in keys))
+        put(f"callers above janus by {kind}", "; ".join(f"{k}: " + ", ".join(n for n in ["Severus", "SAVANA", "nanomonsv", "Sniffles2"] if pooled("all_with", n, kind, k)[0] > pooled("all_with", "janus", kind, k)[0]) for k in keys))
     put("aligned sequence, times less than both read sets", irng(round(Z["gbp"][p] / gb[p]) for p in P5))
     xt = {q: int(overall(f"{R}/external_eval/{q}/snape/minda")[0][8]) for q in ("colo829", "hg008")}
     ns = {}; exec(paper.SCRIPTS["score"].split("T, C = recs")[0], ns)

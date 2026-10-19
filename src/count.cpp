@@ -34,8 +34,8 @@ public:
         }
     }
     bool filled() const { return __atomic_load_n(&full, __ATOMIC_RELAXED); }
-    void choose(const std::vector<uint64_t>& nh, const std::vector<uint16_t>& nc, const std::string& path);
-    void automin();
+    void choose(const std::vector<uint64_t>& nh, const std::vector<uint16_t>& nc, const std::string& path, uint32_t clonal);
+    void automin(uint32_t shallow);
     void rank(int fd);
     uint64_t first(int i) const { return shard(i) * z; }
     uint64_t id(uint64_t slot) const { return tab[slot]; }
@@ -61,8 +61,6 @@ static const uint64_t ZDIV = 24;
 static const uint64_t ZADD = 120000000;
 static const uint64_t ZPAD = 64;
 static const uint32_t HB = 256;
-static const uint32_t CLONAL = 40;
-static const uint32_t SHALLOW = 13;
 
 CoreTable::CoreTable(int t, uint32_t support) : z(0), K(0), support(support), full(0), tab(nullptr), sc(NS + 1), nh(nullptr), nc(nullptr), t(t), fd(-1), stage(0) {}
 
@@ -112,7 +110,7 @@ void CoreTable::spectrum(int i) {
     }
 }
 
-void CoreTable::choose(const std::vector<uint64_t>& hashes, const std::vector<uint16_t>& counts, const std::string& path) {
+void CoreTable::choose(const std::vector<uint64_t>& hashes, const std::vector<uint16_t>& counts, const std::string& path, uint32_t clonal) {
     nh = &hashes;
     nc = &counts;
     seen.assign(hashes.size(), 0);
@@ -135,7 +133,7 @@ void CoreTable::choose(const std::vector<uint64_t>& hashes, const std::vector<ui
     for (uint32_t c = 3; c < HB; c++) total += all[c];
     uint32_t p95 = 3;
     while (p95 + 1 < HB && 20 * (run + all[p95]) < 19 * total) run += all[p95++];
-    support = p95 < CLONAL ? 2 : 3;
+    support = p95 < clonal ? 2 : 3;
 }
 
 void CoreTable::tally(int i) {
@@ -143,7 +141,7 @@ void CoreTable::tally(int i) {
     for (uint64_t k = shard(i) * z; k < shard(i + 1) * z; k++) h[std::min<uint64_t>(tab[k] & 0xffff, HB - 1)]++;
 }
 
-void CoreTable::automin() {
+void CoreTable::automin(uint32_t shallow) {
     hist.assign(t, std::vector<uint64_t>(HB));
     stage = 3;
     par(t);
@@ -154,7 +152,7 @@ void CoreTable::automin() {
         for (uint32_t c = 3; c < HB; c++) { all[c] += h[c]; total += h[c]; }
     uint32_t median = 3;
     while (median + 1 < HB && 2 * (run + all[median]) < total) run += all[median++];
-    support = median < SHALLOW ? 2 : 3;
+    support = median < shallow ? 2 : 3;
 }
 
 void CoreTable::count(int i) {
@@ -381,8 +379,8 @@ int Count::run() {
         std::vector<uint16_t> nn(nc.h.n);
         if (std::fread(nh.data(), 8, nh.size(), nc.f) != nh.size() || std::fread(nn.data(), 2, nn.size(), nc.f) != nn.size()) return 1;
         std::fclose(nc.f);
-        cores.choose(nh, nn, std::string(a.out) + ".hist");
-    } else if (!a.support) cores.automin();
+        cores.choose(nh, nn, std::string(a.out) + ".hist", a.clonal);
+    } else if (!a.support) cores.automin(a.shallow);
     cores.rank(fileno(out.f));
     pairs.pick();
     cores.release();

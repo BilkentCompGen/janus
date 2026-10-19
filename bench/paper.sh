@@ -3,27 +3,28 @@
 #   ref          LCP core and minimap2 indexes of the references (hg38 with chrY PAR masked, CHM13 v2), SVDSS index, Delly exclusion list, SVision-pro model
 #   fetch        download the read sets of the paper's pairs into hifi/<pair>
 #   align        minimap2 of both read sets of each CASTLE pair, measured (runs/align)
-#   full         snape on each pair, measured (runs/full)
+#   full         janus on each pair, measured (runs/full)
 #   truth        the published CASTLE consensus regenerated with Minda, the training labels (hifi/truth/castle_without_snape)
-#   coverage     snape at 5-30x on every pair, then verdict
-#   purity       snape on tumor/normal mixtures at 30x, then verdict
+#   coverage     janus at 5-30x on every pair, then verdict
+#   purity       janus on tumor/normal mixtures at 30x, then verdict
 #   verdict      one classifier over the full, coverage and purity runs, each CASTLE pair held out (verdict/)
 #   phase        Clair3 + LongPhase on each normal, haplotag both BAMs, measured (runs/phase)
 #   competitors  every other caller on the CASTLE pairs, measured (runs/competitors/<tool>/<pair>); competitors <tool> hg008 for the other pairs
-#   covcallers   Severus, SAVANA and nanomonsv on the same reads as the coverage and purity runs of snape (runs/coverage_callers)
-#   consensus    Minda consensus of the CASTLE call sets with and without snape, every call set scored against both (eval_sets)
+#   covcallers   Severus, SAVANA and nanomonsv on the same reads as the coverage and purity runs of janus (runs/coverage_callers)
+#   consensus    Minda consensus of the CASTLE call sets with and without janus, every call set scored against both (eval_sets)
 #   loo          every HiFi call set scored against a consensus built without it (eval_loo)
-#   external     snape and every HiFi caller on HG008 and COLO829 against their truth sets (runs/external_eval)
-#   covscore     snape, Severus, SAVANA and nanomonsv at every depth and purity (runs/coverage_eval)
-#   labels       the classifier trained on the consensus of the 17 call sets other than snape, scored (supp/labels17)
+#   external     janus and every HiFi caller on HG008 and COLO829 against their truth sets (runs/external_eval)
+#   covscore     janus, Severus, SAVANA and nanomonsv at every depth and purity (runs/coverage_eval)
+#   labels       the classifier trained on the consensus of the 17 call sets other than janus, scored (supp/labels17)
 #   supp         held-out AUC, all 3-train/2-test splits, the classifier ablation and the feature groups (supp)
 #   sim          the 20-tumor simulation at five normal/tumor depths: pairwise and joint runs, classified and scored (runs/sim)
 #   simmap       minimap2 on the 21 simulated read sets at 5/5 and 20/20, one at a time, measured (runs/sim/mm2)
+#   sweep        the count-stage thresholds theta0 (5, 10, 15, 20, 25) x theta_t (20, 30, 40, 50, 60) on the CASTLE full, coverage and purity runs: janus reruns only a minimum read support pair (m0, mt) not seen before, one classifier and Minda score per distinct configuration (runs/sweep)
 #   timing       the CASTLE pairs and the simulated runs once more, one at a time on an otherwise idle machine, measured (runs_clean)
 #   figures      Figure 1, the other figures, the tables and the quoted numbers (bench/figures.py, bench/out), and the paper
 #   guard        memory guard, disk guard and load log (run as services)
 #   caller       one caller on one pair (used by competitors): caller <tool> <tumor.bam> <normal.bam> <out dir> <threads>
-S=/home/yuio/snape; H=$S/bench; R=$H/runs; K=$H/callers; L=$S/lib/callers; G=3100000000; V=$S/.venv-ml/bin/python
+S=/home/yuio/janus; H=$S/bench; R=$H/runs; K=$H/callers; L=$S/lib/callers; G=3100000000; V=$S/.venv-ml/bin/python
 CASTLE="hcc1954 h2009 hcc1937 h1437 hcc1395"; LABELED="$CASTLE hg008 colo829"
 TOOLS="severus_hp savana nanomonsv sniffles2 sniffles2_mosaic svision-pro cutesv debreak dysgu kled svdss delly"
 HIFI="severus_phased savana_phased nanomonsv sniffles2 dysgu svision-pro cutesv debreak kled svdss"; M=$HOME/.local/bin/minda
@@ -96,7 +97,7 @@ tset() { $M truthset --base $1 --vcfs $2 --min_size 50 --tolerance 500 --out_dir
 depth() { python3 -c "import json; r=json.load(open('$R/full/$1/run.json'))['reads']; print(int(min(r['n']['bases'], r['t']['bases']) // $G))"; }
 DEV=$(basename $(findmnt -no SOURCE /home) | sed 's/p[0-9]*$//'); HW=$(ls -d /sys/block/$DEV/device/hwmon* 2>/dev/null | head -1)
 
-snape_run() {
+janus_run() {
     local E=$1 D=$2 p=$3 n=$4 th=16
     [ -s $D/run.json ] && return
     mkdir -p $D/work $D/monitor $D/logs; log "[$(basename $D)] start"
@@ -104,7 +105,7 @@ snape_run() {
     sync; sleep 30
     printf '{"experiment": "%s", "pair": "%s", "coverage_x": %s, "bases_per_x": %s, "threads": %s, "intermediates": "deleted"}\n' \
         $E $p "${n:-null}" $G $th > $D/monitor/params.json
-    pidstat -h -r -u -d -C 'snape|minimap2' 2 >> $D/monitor/pidstat.txt 2>&1 & m1=$!
+    pidstat -h -r -u -d -C 'janus|minimap2' 2 >> $D/monitor/pidstat.txt 2>&1 & m1=$!
     iostat -dxm -t $DEV 5 >> $D/monitor/iostat.txt 2>&1 & m2=$!
     vmstat -t 5 >> $D/monitor/vmstat.txt 2>&1 & m3=$!
     ( while :; do echo "$(date +%s) $(cat $HW/temp1_input) $(cat $HW/temp3_input) $(sensors 2>/dev/null | awk '/Tctl/{print $2}')"; sleep 5; done ) >> $D/monitor/temp.txt & m4=$!
@@ -174,7 +175,7 @@ caller() {
         $F --input $T --vcf $O/t.mosaic.vcf --mosaic --threads $P --reference $REF --tandem-repeats $VNTR --allow-overwrite
         $F --input $N --vcf $O/n.vcf --threads $P --reference $REF --tandem-repeats $VNTR --allow-overwrite --minsupport 1
         sub $O/t.mosaic.vcf $O/n.vcf --dist 1000 > $O/calls.vcf ;;
-    svision-pro) local I=snape-bench/svision-pro:2.5-pysam0.21 RR=$K/ref/svision-pro NP=$(( P / 2 )); [ $NP -lt 1 ] && NP=1; mkdir -p $O/svp
+    svision-pro) local I=janus-bench/svision-pro:2.5-pysam0.21 RR=$K/ref/svision-pro NP=$(( P / 2 )); [ $NP -lt 1 ] && NP=1; mkdir -p $O/svp
         dk $I SVision-pro --target_path $T --base_path $N --genome_path $REF --model_path $RR/src/pre_process/model_liteunet_256_8_16_32_32_32.pth \
            --access_path $RR/src/pre_process/hg38.access.10M.bed --out_path $O/svp --sample_name tumor --preset hifi --detect_mode somatic \
            --process_num $NP --unet_cpu_num 2 --device cpu
@@ -212,7 +213,7 @@ caller() {
 }
 
 simreads() {
-    local SP=$S/simulation/phylo/reads O=$R/sim B=$S/build/snape TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' ') x s t
+    local SP=$S/simulation/phylo/reads O=$R/sim B=$S/build/janus TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' ') x s t
     for x in 5 10; do for s in germline $TUM; do [ -s $O/x$x/reads/$s.svb.idx ] || { mkdir -p $O/x$x/reads; py thin $SP/$s/$s.svb $O/x$x/reads/$s.svb $((20 / x)) >> $O/x$x/sub.log; }; done; done
     [ -x $O/svb2fq ] || { echo "$SVB2FQ" > $O/svb2fq.c; gcc -O2 -o $O/svb2fq $O/svb2fq.c; }
     mkdir -p $O/reads20; [ -s $O/reads20/germline.svb.idx ] || { $O/svb2fq $SP/germline/germline.svb germline 2> $O/reads20/germline.log | pigz -p 16 -3 > $O/reads20/germline.fastq.gz && $B pack -i $O/reads20/germline.fastq.gz -o $O/reads20/germline.svb -t 16; rm -f $O/reads20/germline.fastq.gz; }
@@ -220,7 +221,7 @@ simreads() {
 }
 reads() { [ $1 = 20 ] && echo $R/sim/reads20/$2 || echo $R/sim/x$1/reads/$2; }
 joint() {
-    local nx=$1 tx=$2 B=$S/build/snape RF=$S/ref/chm13v2 TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' '); local d=${3:-$R/sim/settings/${1}_${2}/joint}; [ -s $d/calls.vcf ] && return; mkdir -p $d/work; cd $d/work
+    local nx=$1 tx=$2 B=$S/build/janus RF=$S/ref/chm13v2 TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' '); local d=${3:-$R/sim/settings/${1}_${2}/joint}; [ -s $d/calls.vcf ] && return; mkdir -p $d/work; cd $d/work
     st() { n=$1; shift; [ -e done.$n ] && return; /usr/bin/time -f "$n %e s %M KB %U user %S sys" "$@" > log.$n 2>&1 || exit 1; tail -1 log.$n >> steps.txt; touch done.$n; }
     local SM="germline $TUM" s; local svb=$(for s in $SM; do printf "%s.svb," $s; done | sed 's/,$//') cnt=$(for s in $SM; do printf "%s.cnt," $s; done | sed 's/,$//')
     for e in svb svb.idx; do ln -sf $(readlink -f $(reads $nx germline.$e)) germline.$e; for s in $TUM; do ln -sf $(readlink -f $(reads $tx $s.$e)) $s.$e; done; done
@@ -245,9 +246,9 @@ joint() {
 case $X in
 ref)
     cd $S/ref
-    $S/build/snape refidx -i hg38_parmask.fa -o hg38_parmask.cidx -t 16
+    $S/build/janus refidx -i hg38_parmask.fa -o hg38_parmask.cidx -t 16
     minimap2 -x map-hifi -d hg38_parmask.mmi hg38_parmask.fa; minimap2 -x sr -d hg38_parmask.sr.mmi hg38_parmask.fa
-    $S/build/snape refidx -i chm13v2.fa -o chm13v2.cidx -t 16; minimap2 -x sr -d chm13v2.sr.mmi chm13v2.fa
+    $S/build/janus refidx -i chm13v2.fa -o chm13v2.cidx -t 16; minimap2 -x sr -d chm13v2.sr.mmi chm13v2.fa
     [ -s $K/ref/human.hg38.excl.tsv ] || curl -sL -o $K/ref/human.hg38.excl.tsv https://raw.githubusercontent.com/dellytools/delly/main/excludeTemplates/human.hg38.excl.tsv
     [ -d $K/ref/svision-pro ] || { git clone -q https://github.com/songbowang125/SVision-pro.git $K/ref/svision-pro && git -C $K/ref/svision-pro checkout -q v2.5; }
     mkdir -p $K/ref/svdss; docker run --rm --log-driver none -u "$(id -u):$(id -g)" -v $S:$S quay.io/biocontainers/svdss:2.1.1--he17396a_0 \
@@ -256,7 +257,7 @@ fetch)
     bash -s <<'FETCHEOF'
 #!/usr/bin/env bash
 set -uo pipefail
-H=/home/yuio/snape/hifi; RAW=$H/raw; T=$H/truth; TK=$H/tools/sratoolkit/bin; cd "$H"; mkdir -p "$RAW/tmp" "$T"
+H=/home/yuio/janus/hifi; RAW=$H/raw; T=$H/truth; TK=$H/tools/sratoolkit/bin; cd "$H"; mkdir -p "$RAW/tmp" "$T"
 SDL="https://www.ncbi.nlm.nih.gov/Traces/sdl/2/retrieve?location=s3.us-east-1&type=src&acc="
 GIAB=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/data_somatic
 PB=https://downloads.pacbcloud.com/public/revio
@@ -426,7 +427,7 @@ align)
             bash -c "$(declare -f src aligned); S=$S aligned $p $s $S/hifi/$p/$s.bam $S/ref/hg38_parmask.mmi"
     done; done ;;
 full)
-    for p in ${*:-$LABELED}; do snape_run full $R/full/$p $p ""; done ;;
+    for p in ${*:-$LABELED}; do janus_run full $R/full/$p $p ""; done ;;
 verdict)
     mkdir -p $H/verdict; ( cd $H && OMP_NUM_THREADS=16 taskset -c 0-15 $V $H/paper.py verdict > $H/verdict/stdout.txt 2>&1 ); cat $H/verdict/log.txt ;;
 truth)
@@ -455,13 +456,13 @@ coverage)
     E=$R/coverage
     for p in ${*:-$CASTLE}; do
         M=$E/mix/$p; mkdir -p $M
-        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $(src $p $s) -o $M/$s.svb -t 16 -s 1 > $M/pack_$s.log 2>&1; done
+        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/janus pack -i $(src $p $s) -o $M/$s.svb -t 16 -s 1 > $M/pack_$s.log 2>&1; done
         for n in 5 10 15 20 30; do
             [ $n -le $(depth $p) ] || continue
             D=$E/${p}_${n}x; [ -s $D/run.json ] && continue; mkdir -p $D/work
             for s in n t; do py mix $D/work/$s.svb $M/$s.svb:0:$((n * G)) >> $Q 2>&1 || continue 2; done
             touch $D/work/done.pack_n $D/work/done.pack_t
-            snape_run coverage $D $p $n
+            janus_run coverage $D $p $n
         done
         rm -rf $M
     done
@@ -470,7 +471,7 @@ purity)
     E=$R/purity
     for p in ${*:-hcc1954 hcc1395}; do
         M=$E/mix/$p; mkdir -p $M
-        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/snape pack -i $(src $p $s) -o $M/$s.svb -t 16 -s 1 > $M/pack_$s.log 2>&1; done
+        for s in n t; do [ -s $M/$s.svb.idx ] || taskset -c 0-15 $S/build/janus pack -i $(src $p $s) -o $M/$s.svb -t 16 -s 1 > $M/pack_$s.log 2>&1; done
         nb=$(python3 -c "import struct; print(struct.unpack_from('<Q', open('$M/n.svb', 'rb').read(32), 16)[0])")
         nm=$((nb - 24 * G - G / 10)); [ $nm -gt $((30 * G)) ] && nm=$((30 * G))
         [ -s $M/nm.svb.idx ] || py mix $M/nm.svb $M/n.svb:0:$nm >> $Q 2>&1 || continue
@@ -479,7 +480,7 @@ purity)
             D=$E/${p}_${q}p; mkdir -p $D/work
             for f in svb svb.idx; do ln -sf $M/nm.$f $D/work/n.$f; ln -sf $M/t$q.$f $D/work/t.$f; done
             touch $D/work/done.pack_n $D/work/done.pack_t
-            snape_run purity $D $p ""
+            janus_run purity $D $p ""
         done
         rm -rf $M
     done
@@ -520,7 +521,7 @@ competitors)
             bash $H/paper.sh caller $t $S/hifi/$p/t.bam $S/hifi/$p/n.bam $R/competitors/$n/$p/out $th
     done; done ;;
 sim)
-    SP=$S/simulation/phylo/reads; O=$R/sim; E=$O/settings; B=$S/build/snape; RF=$S/ref/chm13v2; TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' ')
+    SP=$S/simulation/phylo/reads; O=$R/sim; E=$O/settings; B=$S/build/janus; RF=$S/ref/chm13v2; TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' ')
     [ -s $O/truth/tree.json ] || py simtruth $O/truth
     simreads
     one() {
@@ -674,9 +675,60 @@ simmap)
             rm -f $d/$s.bam $d/$s.bam.bai; mv $d/$s.time.part $d/$s.time
         done
     done ;;
+sweep)
+    W=$R/sweep; mkdir -p $W/runs
+    one() {
+        local k=$1 n=$2 a=$3 b=$4 p=${2%%_*} D=$W/runs/$1/$2/t$3_$4 MX=$W/mix/${2%%_*} x
+        mkdir -p $D/work; log "[$k/$n theta $a/$b] $([ -e $D/work/done.pack_t ] && echo resume || echo start)"
+        [ -e $D/work/done.pack_t ] || case $k in
+            coverage) x=${n##*_}; x=${x%x}; for s in n t; do py mix $D/work/$s.svb $MX/$s.svb:0:$((x * G)) >> $Q 2>&1; done; touch $D/work/done.pack_n $D/work/done.pack_t ;;
+            purity) x=${n##*_}; x=${x%p}; for f in svb svb.idx; do ln -sf $MX/nm.$f $D/work/n.$f; ln -sf $MX/t$x.$f $D/work/t.$f; done; touch $D/work/done.pack_n $D/work/done.pack_t ;;
+        esac
+        SHALLOW=$a CLONAL=$b bash $S/pipeline.sh $D/work $(src $p n) $(src $p t) 16 > $D/pipeline.log 2>&1
+        if [ -s $D/work/calls.vcf ] && [ -e $D/work/done.call ]; then
+            mkdir -p $D/logs; mv $D/work/calls.vcf $D/work/n.cnt $D/work/t.cnt $D/work/t.cnt.hist $D/; mv $D/work/log.* $D/work/steps.txt $D/logs/
+            rm -rf $D/work; log "$(py sweep check $k $n $D)"
+        else log "[$k/$n theta $a/$b] FAILED: $(tail -1 $D/pipeline.log) $(tail -qn 1 $D/work/log.* 2>/dev/null | grep -m 1 -i 'cannot\|error\|exit')"; [ -e $D/attempt ] && touch $D/failed || touch $D/attempt; fi
+    }
+    room() { df --output=avail -BG /home | tail -1 | tr -dc 0-9; }
+    for p in ${*:-$CASTLE}; do
+        MX=$W/mix/$p
+        while :; do
+            L=$(py sweep plan $p | while read k n a b m0 mt; do [ -e $W/runs/$k/$n/t${a}_$b/calls.vcf ] || [ -e $W/runs/$k/$n/t${a}_$b/failed ] || echo "$k $n $a $b"; done)
+            [ -z "$L" ] && break
+            NEW=$(echo "$L" | while read k n a b; do [ -e $W/runs/$k/$n/t${a}_$b/work/done.pack_t ] || echo "$k $n $a $b"; done)
+            if echo "$NEW" | grep -q '^coverage\|^purity'; then
+                mkdir -p $MX
+                for s in n t; do [ -s $MX/$s.svb.idx ] || $S/build/janus pack -i $(src $p $s) -o $MX/$s.svb -t 16 -s 1 > $MX/pack_$s.log 2>&1; done
+            fi
+            if echo "$NEW" | grep -q '^purity'; then
+                nb=$(python3 -c "import struct; print(struct.unpack_from('<Q', open('$MX/n.svb', 'rb').read(32), 16)[0])")
+                nm=$((nb - 24 * G - G / 10)); [ $nm -gt $((30 * G)) ] && nm=$((30 * G))
+                [ -s $MX/nm.svb.idx ] || py mix $MX/nm.svb $MX/n.svb:0:$nm >> $Q 2>&1
+                for q in $(echo "$NEW" | awk '$1 == "purity" {sub(/.*_/, "", $2); sub(/p$/, "", $2); print $2}' | sort -u); do
+                    [ -s $MX/t$q.svb.idx ] || py mix $MX/t$q.svb $MX/t.svb:0:$((q * 30 * G / 100)) $([ $q -lt 100 ] && echo $MX/n.svb:$nm:$(((100 - q) * 30 * G / 100))) >> $Q 2>&1
+                done
+            fi
+            echo "$L" | { while read k n a b; do while [ $(jobs -rp | wc -l) -ge 2 ] || { [ $(jobs -rp | wc -l) -gt 0 ] && [ $(room) -lt 150 ]; }; do wait -n; done; one $k $n $a $b & done; wait; }
+        done
+        rm -rf $MX
+    done
+    ( cd $H && py sweep configs ) > $W/configs.txt 2> $W/configs.err
+    for k in $(cat $W/configs.txt); do
+        C=$W/conf/$k; mkdir -p $C/verdict
+        [ -s $C/verdict/folds.json ] || ( cd $H && RUNS=$C/full COV=$C/coverage PUR=$C/purity OUTV=$C/verdict OMP_NUM_THREADS=16 $V $H/paper.py verdict > $C/verdict/stdout.txt 2>&1 )
+        log "[config $k] $(tail -1 $C/verdict/log.txt)"
+        sc() { local d=$C/score/$1/$2; [ -s $d/minda/results/overall.tsv ] && return; mkdir -p $d; grep -E '^#|	PASS	' $3 > $d/in.vcf; tset $H/eval_sets/${2%%_*}/all_$1/None_minda_ensemble.vcf $d/in.vcf $d/minda; }
+        for p in $CASTLE; do
+            sc without $p $C/verdict/$p.vcf & sc with $p $C/verdict/$p.vcf &
+            for f in $C/verdict/coverage_matched/${p}_*x.vcf $C/verdict/purity_matched/${p}_*p.vcf; do [ -s $f ] && sc without $(basename $f .vcf) $f & done
+            wait
+        done
+    done
+    py sweep table > $W/summary.txt; log "sweep done" ;;
 timing)
-    RC=$H/runs_clean; Q=$RC/queue.log; mkdir -p $RC; B=$S/build/snape; TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' ')
-    for p in $CASTLE; do snape_run full $RC/full/$p $p ""; done
+    RC=$H/runs_clean; Q=$RC/queue.log; mkdir -p $RC; B=$S/build/janus; TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' ')
+    for p in $CASTLE; do janus_run full $RC/full/$p $p ""; done
     O=$R/sim; RF=$S/ref/chm13v2; simreads
     tm() { sync; sleep 10; /usr/bin/time -f "%e %M %U %S %x" -o $1 taskset -c 0-15 "${@:2}"; }
     for set in 20_20 20_10 20_5 10_10 5_5; do
@@ -691,7 +743,7 @@ timing)
         d=$RC/sim/timing/$set/joint; [ -s $d/time.txt ] || { tm $d.time bash $H/paper.sh joint $nx $tx $d; mv $d.time $d/time.txt; }
     done ;;
 figures)
-    for i in latex-tikz phangorn; do n=$i; [ $i = phangorn ] && n=snape-bench/phangorn; docker image inspect $n > /dev/null 2>&1 || docker build -q -t $n $K/images/$i > /dev/null; done
+    for i in latex-tikz phangorn; do n=$i; [ $i = phangorn ] && n=janus-bench/phangorn; docker image inspect $n > /dev/null 2>&1 || docker build -q -t $n $K/images/$i > /dev/null; done
     tex() { docker run --rm --log-driver none -v $1:/w -w /w -u "$(id -u):$(id -g)" -e HOME=/tmp latex-tikz sh -c "$2"; }
     F=$S/paper/overleaf; mkdir -p $F/figures $H/out
     tex $S/paper/figures/system "pdflatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp 20_system.tex > /dev/null && cp /tmp/20_system.pdf /w/" && cp $S/paper/figures/system/20_system.pdf $F/figures/fig_system.pdf

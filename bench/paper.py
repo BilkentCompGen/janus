@@ -86,7 +86,7 @@ with open(os.path.join(D, "files.tsv"), "w") as o:
     o.write("file\tbytes\tkept\n")
     for f in files: o.write(f"{f['file']}\t{f['bytes']}\t{'yes' if f['kept'] else GONE}\n")
 
-S = "/home/yuio/snape"
+S = "/home/yuio/janus"
 P = json.load(open(os.path.join(M, "params.json"))) if os.path.exists(os.path.join(M, "params.json")) else {}
 pair = P.get("pair", os.path.basename(D))
 src = lambda s: next(f for f in (f"{S}/hifi/{pair}/{s}.bam", f"{S}/hifi/{pair}/{s}.fastq.gz") if os.path.exists(f))
@@ -207,13 +207,13 @@ print("truth %d calls %d recall %.3f precision %.3f f1 %.3f" % (len(T), len(C), 
 SCRIPTS["verdict"] = r'''import sys, time, numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 exec(SCRIPTS["score"].split("T, C = recs")[0])
-H = "/home/yuio/snape/bench"; TR = "/home/yuio/snape/hifi/truth"
+H = "/home/yuio/janus/bench"; TR = "/home/yuio/janus/hifi/truth"
 TRUTH = {p: f"{TR}/castle_without_snape/{p}/None_minda_ensemble.vcf" for p in ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]}
 TRUTH.update(hg008=f"{TR}/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar_PASS.draftbenchmark.vcf.gz",
              colo829=f"{TR}/colo829/truth.vcf")
 RUNS = __import__("os").environ.get("RUNS", f"{H}/runs/full"); OUTV = __import__("os").environ.get("OUTV", f"{H}/verdict")
 TRAIN = ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]
-C = f"{H}/runs/coverage"; U = f"{H}/runs/purity"; O = f"{OUTV}/coverage_matched"
+C = __import__("os").environ.get("COV", f"{H}/runs/coverage"); U = __import__("os").environ.get("PUR", f"{H}/runs/purity"); O = f"{OUTV}/coverage_matched"
 DEPTHS = [5, 10, 15, 20, 30]; PUR = [20, 40, 60, 80, 100]
 HGB = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=40, l2_regularization=1.0)
 CUTS = np.arange(0.2, 0.81, 0.05)
@@ -340,6 +340,94 @@ s = f"verdict (one model for all depths and purities on depth-normalised counts 
 print(s); log.write(s + "\n")
 json.dump(folds, open(f"{OUTV}/folds.json", "w"))
 '''
+SCRIPTS["sweep"] = r'''import os, sys, glob, itertools, hashlib, numpy as np
+H = "/home/yuio/janus/bench"; R = f"{H}/runs"; W = f"{R}/sweep"
+CASTLE = ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]
+N0 = [5, 10, 15, 20, 25]; NT = [20, 30, 40, 50, 60]; GRID = list(itertools.product(N0, NT))
+
+def exps(p):
+    e = [("full", p)] + [("coverage", f"{p}_{n}x") for n in (5, 10, 15, 20, 30)] + [("purity", f"{p}_{q}p") for q in (20, 40, 60, 80, 100)]
+    return [(k, n) for k, n in e if os.path.exists(f"{R}/{k}/{n}/t.cnt.hist")]
+
+def hist(d):
+    return {l.split()[0]: np.array(l.split()[1:], float) for l in open(f"{d}/t.cnt.hist")}
+
+def median(h):
+    n = h["shared_normal"] + h["normal_only"]; tot = n[3:].sum(); run = 0; m = 3
+    while m + 1 < len(n) and 2 * (run + n[m]) < tot: run += n[m]; m += 1
+    return m
+
+def p95(h):
+    t = h["tumor_only"]; tot = t[3:].sum(); run = 0; p = 3
+    while p + 1 < len(t) and 20 * (run + t[p]) < 19 * tot: run += t[p]; p += 1
+    return p
+
+def pair(d):
+    return open(f"{d}/n.cnt", "rb").read(27)[26], open(f"{d}/t.cnt", "rb").read(27)[26]
+
+def runs(k, n):
+    out = {}
+    for d in [f"{R}/{k}/{n}"] + sorted(glob.glob(f"{W}/runs/{k}/{n}/*/")):
+        d = d.rstrip("/")
+        if all(os.path.exists(f"{d}/{f}") for f in ("calls.vcf", "n.cnt", "t.cnt", "t.cnt.hist")): out.setdefault(pair(d), d)
+    return out
+
+def choice(k, n, a, b):
+    rs = runs(k, n); hs = {}
+    for (m0, mt), d in rs.items(): hs.setdefault(m0, hist(d))
+    m0 = 2 if median(next(iter(hs.values()))) < a else 3
+    if m0 not in hs: return m0, 0, None
+    mt = 3 if p95(hs[m0]) >= b else 2
+    return m0, mt, rs.get((m0, mt))
+
+mode = sys.argv[1]
+if mode == "plan":
+    for k, n in exps(sys.argv[2]):
+        want = {}
+        for a, b in GRID:
+            m0, mt, d = choice(k, n, a, b)
+            if not d: want.setdefault((m0, mt), (a, b))
+        for (m0, mt), (a, b) in sorted(want.items()): print(k, n, a, b, m0, mt or "?")
+elif mode == "check":
+    k, n, d = sys.argv[2:5]; m0, mt = pair(d)
+    ref = [x for (a, b), x in runs(k, n).items() if a == m0 and x != d]
+    same = [all((hist(d)[g] == hist(x)[g]).all() for g in hist(d)) for x in ref]
+    print(f"{k}/{n} {os.path.basename(d)}: minimum read support {m0}/{mt}" + (f", count spectra {'identical to' if all(same) else 'DIFFERENT FROM'} the earlier run with m0 {m0}" if ref else ""))
+elif mode == "configs":
+    os.makedirs(W, exist_ok=True); keys = {}; P = open(f"{W}/pairs.tsv", "w"); P.write("theta0\tthetat\texperiment\tm0\tmt\trun\n")
+    for a, b in GRID:
+        sel = {}
+        for p in CASTLE:
+            for k, n in exps(p):
+                m0, mt, d = choice(k, n, a, b); sel[f"{k}/{n}"] = d; P.write(f"{a}\t{b}\t{k}/{n}\t{m0}\t{mt}\t{d}\n")
+        if not all(sel.values()): print(f"theta {a}/{b}: missing runs for {[e for e, d in sel.items() if not d]}", file=sys.stderr); continue
+        key = hashlib.sha1("".join(f"{e}={d};" for e, d in sorted(sel.items())).encode()).hexdigest()[:10]; keys[(a, b)] = key
+        for e, d in sel.items():
+            l = f"{W}/conf/{key}/{e}"; os.makedirs(os.path.dirname(l), exist_ok=True)
+            if not os.path.islink(l): os.symlink(d, l)
+    P.close()
+    with open(f"{W}/combos.tsv", "w") as o:
+        o.write("theta0\ttheta_t\tconfig\n"); o.write("".join(f"{a}\t{b}\t{k}\n" for (a, b), k in keys.items()))
+    print("\n".join(sorted(set(keys.values()))))
+elif mode == "table":
+    rows = []
+    for l in open(f"{W}/combos.tsv").read().split("\n")[1:]:
+        if not l: continue
+        a, b, key = l.split("\t")
+        for f in sorted(glob.glob(f"{W}/conf/{key}/score/*/*/minda/results/overall.tsv")):
+            c, e = f.split("/")[-5:-3]; v = open(f).read().split("\n")[1].split("\t")
+            rows.append((int(a), int(b), key, e, c, int(v[7]), float(v[4]), float(v[5]), float(v[6])))
+    with open(f"{W}/scores.tsv", "w") as o:
+        o.write("theta0\ttheta_t\tconfig\texperiment\tconsensus\tcalls\tprecision\trecall\tf1\n")
+        for r in sorted(rows): o.write("%d\t%d\t%s\t%s\t%s\t%d\t%.4f\t%.4f\t%.4f\n" % r)
+    with open(f"{W}/summary.tsv", "w") as o:
+        o.write("theta0\ttheta_t\tconfig\tfull_f1_without_janus\tfull_f1_with_janus\tcoverage_f1_without_janus\tpurity_f1_without_janus\n")
+        for (a, b, key) in sorted({r[:3] for r in rows}):
+            kind = lambda e: "full" if "_" not in e else "coverage" if e.endswith("x") else "purity"
+            m = lambda c, k: np.mean([r[8] for r in rows if r[:3] == (a, b, key) and r[4] == c and kind(r[3]) == k])
+            o.write(f"{a}\t{b}\t{key}\t{m('without', 'full'):.4f}\t{m('with', 'full'):.4f}\t{m('without', 'coverage'):.4f}\t{m('without', 'purity'):.4f}\n")
+    print(open(f"{W}/summary.tsv").read())
+'''
 SCRIPTS["subtract"] = r'''#!/usr/bin/env python3
 import sys, collections, argparse
 
@@ -400,8 +488,8 @@ mp.BaseProcess.join = reap
 sys.exit(main())
 '''
 SCRIPTS["simtruth"] = r'''import sys, json, re, bisect, os
-G = "/home/yuio/snape/simulation/phylo/genomes"
-OUT = sys.argv[1] if len(sys.argv) > 1 else "/home/yuio/snape/bench/runs/sim/truth"
+G = "/home/yuio/janus/simulation/phylo/genomes"
+OUT = sys.argv[1] if len(sys.argv) > 1 else "/home/yuio/janus/bench/runs/sim/truth"
 plan = json.load(open(f"{G}/tumor/plan.json"))
 PAR = plan["parent"]
 
@@ -683,7 +771,7 @@ with open(out + ".idx", "wb") as o:
 print(out, n, "reads", total, "bases", "%.2fx" % (total / 3117292070))
 '''
 SCRIPTS["simjoint"] = r'''import sys, io, os, json, pickle, collections, numpy as np
-H = "/home/yuio/snape/bench"
+H = "/home/yuio/janus/bench"
 G = {"__name__": "x", "SCRIPTS": SCRIPTS, "run_score": run_score}; sys.argv = sys.argv[:1]
 exec(G["SCRIPTS"]["verdict"].split("t0 = time.time()")[0], G)
 ALT, np_ = G["ALT"], np
@@ -782,14 +870,14 @@ for name, s in SETS:
 json.dump(out, open(f"{H}/runs/sim/scores.json", "w"), indent=1)
 '''
 SCRIPTS["supp"] = r'''import os, sys, json, itertools, tempfile
-os.environ.setdefault("OUTV", "/home/yuio/snape/bench/supp/work")
+os.environ.setdefault("OUTV", "/home/yuio/janus/bench/supp/work")
 job = sys.argv[1] if len(sys.argv) > 1 else "all"
 G = {"__name__": "supp", "SCRIPTS": SCRIPTS, "run_score": run_score}; sys.argv = ["supp"]
 v = G["SCRIPTS"]["verdict"]
 exec(v.split("t0 = time.time()")[0], G)
 exec("t0 = time.time()" + v.split("t0 = time.time()")[1].split("D = {(p, k)")[0], G)
 exec("D = {(p, k): feats(f, p) for p in FULL for k, f in sets(p).items()}", G)
-np = G["np"]; D = G["D"]; TRAIN = G["TRAIN"]; OUT = os.environ.get("SUPPOUT", "/home/yuio/snape/bench/supp"); os.makedirs(OUT, exist_ok=True)
+np = G["np"]; D = G["D"]; TRAIN = G["TRAIN"]; OUT = os.environ.get("SUPPOUT", "/home/yuio/janus/bench/supp"); os.makedirs(OUT, exist_ok=True)
 from sklearn.metrics import roc_auc_score, average_precision_score
 
 def outcome(ms, cuts, c0, p):
@@ -844,7 +932,7 @@ if job == "features":
               ("Tumor reads, anchor grid and paths", [39, 40, 49]), ("Normal reads, anchor grid and paths", [38, 41, 42, 43, 44, 45, 46, 47, 48, 50, 51, 52]),
               ("Graph context", [12, 13, 36, 37, 53, 54, 55]), ("Alignment quality", [14, 15]), ("Reference context and depth", [16, 17, 23]),
               ("Type and size", [18, 19, 20, 21, 22]), ("Minimum and count-stage context", [56, 57, 58, 59, 60])]
-    F = json.load(open("/home/yuio/snape/bench/verdict/folds.json")); out = {}
+    F = json.load(open("/home/yuio/janus/bench/verdict/folds.json")); out = {}
     for p in TRAIN + ["hg008", "colo829"]:
         tr = [q for q in TRAIN if q != p]; ks = [k for k in D if k[0] in tr and k[1] != "100p"]
         ms = G["fitm"](np.vstack([D[k][1][D[k][4]] for k in ks]), np.concatenate([D[k][3][D[k][4]] for k in ks]))
@@ -866,7 +954,7 @@ if job == "features":
 print("done", job)
 '''
 SCRIPTS["labels"] = r'''import os, sys
-os.environ.setdefault("OUTV", "/home/yuio/snape/bench/supp/labels17")
+os.environ.setdefault("OUTV", "/home/yuio/janus/bench/supp/labels17")
 os.makedirs(os.environ["OUTV"], exist_ok=True)
 G = {"__name__": "supp", "SCRIPTS": SCRIPTS, "run_score": run_score}; sys.argv = ["supp"]
 v = G["SCRIPTS"]["verdict"]

@@ -7,7 +7,7 @@
 __pycache__
 
 # the binary and its objects
-/snape
+/janus
 build
 
 # third-party sources built in place (Badread, ...) and generated benchmark data; lcptools (packed) is vendored
