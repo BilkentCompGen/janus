@@ -144,8 +144,8 @@ PUR, PL = ["100p", "80p", "60p", "40p", "20p"], ["100%", "80%", "60%", "40%", "2
 TYPES = ["BND", "DEL", "DUP", "INS", "INV"]
 SIZES = [("BND", "no length"), ("50-100", "50–100 bp"), ("100-1k", "0.1–1 kb"), ("1k-10k", "1–10 kb"), ("10k-100k", "10–100 kb"), (">100k", ">100 kb")]
 CAL5 = ["janus", "Severus", "SAVANA", "nanomonsv", "Sniffles2"]
-LBL = {"colo829": {"janus": (0.86, 0.96, "center"), "SAVANA": (0.50, 0.93, "center"), "Severus": (0.40, 0.78, "right"), "nanomonsv": (0.80, 0.60, "left")},
-       "hg008": {"janus": (0.99, 0.97, "right"), "Severus": (0.70, 0.92, "right"), "nanomonsv": (0.66, 0.78, "right"), "SAVANA": (0.99, 0.58, "right")}}
+LBL = {"colo829": {"janus": (0.86, 0.96, "center"), "SAVANA": (0.50, 0.93, "center"), "Severus": (0.40, 0.78, "right"), "nanomonsv": (0.99, 0.60, "right"), "dysgu": (0.99, 0.48, "right")},
+       "hg008": {"janus": (0.99, 0.97, "right"), "Severus": (0.70, 0.92, "right"), "nanomonsv": (0.66, 0.78, "right"), "dysgu": (0.64, 0.56, "right"), "SAVANA": (0.99, 0.56, "right")}}
 ROWS = P5 + ["hg008", "colo829"]
 
 
@@ -582,7 +582,7 @@ def ext_scatter(ax, E, sample, ttl):
     for n, (p, r, f1) in sorted(E.items(), key=lambda x: x[1][2]):
         c = color(n); top = n == "janus"
         ax.scatter([p], [r], s=46 if top else 24, marker=MARK.get(n, "o"), facecolor=c, edgecolor="#333333" if c in ("#d0d0d0", "#b0b0b0") else c, lw=0.5, zorder=5 if top else 4)
-        if n not in ["janus"] + COV: continue  # the other callers keep their colour and marker; the legend names them
+        if n not in ["janus"] + COV + ["dysgu"]: continue  # the other callers keep their colour and marker; the legend names them
         lx, ly, ha = LBL[sample][n]
         ax.annotate(f"{n} {f1:.2f}", (p, r), xytext=(lx, ly), fontsize=FS - 0.5, ha=ha, va="center", color=JANUS if top else "#333333", fontweight="bold" if top else "normal",
                     bbox=dict(boxstyle="square,pad=0.12", fc="white", ec="none"), arrowprops=dict(arrowstyle="-", color="#9a9a9a", lw=0.4, shrinkA=0, shrinkB=2.5), zorder=3)
