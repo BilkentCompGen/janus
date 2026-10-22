@@ -886,7 +886,7 @@ def fig4():
     if miss55: at.plot([], [], color=JANUS, lw=1.3, label="the one split missed at 5/5"); at.legend(loc="upper left", bbox_to_anchor=(0.0, 0.0), fontsize=FS - 0.8, handlelength=1.5, frameon=False)
     ab = ax(14, 10, 44, 36); PO = json.load(open(f"{R}/sim/pooled/scores.json"))[BASE.replace("-", "/").replace("/", "-")]; CL = list(PO["joint"]["classes"]); w = 0.26
     POOLED = "#e0a030"
-    for j, (key, col, lab) in enumerate((("pooled", POOLED, "20 tumors pooled into one sample"), ("pairwise", ONE, "20 pairwise runs, union"), ("joint", ALL, "joint run"))):
+    for j, (key, col, lab) in enumerate((("pooled", POOLED, "20 tumors pooled into one sample"), ("pairwise", ONE, "20 pairwise runs"), ("joint", ALL, "joint run"))):
         ab.bar(np.arange(len(CL)) + (j - 1) * w, [PO[key]["classes"][c][1] for c in CL], w * 0.92, color=col, lw=0, zorder=2, label=lab)
     ab.set_ylim(0, 1); fticks(ab); ab.set_xticks(range(len(CL))); ab.set_xticklabels([f"{c}\n({PO['joint']['classes'][c][0]:,})" for c in CL], fontsize=FS - 0.6); ab.set_xlabel("Tumors carrying the SV (SVs)"); ab.set_ylabel("Recall of the cohort's SVs"); ab.grid(axis="y", **GRID); ab.tick_params(axis="x", length=0)
     ab.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False, labelspacing=0.3); title(ab, f"At {BASE.replace('-', '/')}", 1.03, 0.0); tag(ab, "c", 2, 2.5)
@@ -931,7 +931,7 @@ def fig4():
         SD += [["b", l, "janus, 20 pairwise runs (sum)", "wall clock (min)", "", "", "", sum(t["pair_wall"]) / 60, ""], ["b", l, "janus, joint run", "wall clock (min)", "", "", "", t["joint_wall"] / 60, ""],
                ["b", l, "janus, pairwise runs (largest)", "peak memory (GB)", "", "", "", max(t["pair_peak_kb"]) / 2**20, ""], ["b", l, "janus, joint run", "peak memory (GB)", "", "", "", t["joint_peak_kb"] / 2**20, ""],
                ["d", l, "joint run", "splits recovered", "", "", "", MP[s]["shared"], f"of {MP[s]['true']}"]]
-    for key, ser in (("pooled", "20 tumors pooled into one sample"), ("pairwise", "20 pairwise runs, union"), ("joint", "joint run")):
+    for key, ser in (("pooled", "20 tumors pooled into one sample"), ("pairwise", "20 pairwise runs"), ("joint", "joint run")):
         o = PO[key]; SD += [["c", BASE.replace("-", "/"), ser, f"SVs carried by {c} tumors", "", "", "", v[1], f"{v[0]} SVs"] for c, v in o["classes"].items()]
         SD.append(["c", BASE.replace("-", "/"), ser, "all distinct SVs", o["P"], o["R"], o["F1"], o["found"], f"{o['calls']} calls, {o['tp']} true, {PO['truth']} SVs"])
     for k, v in M2.items():
@@ -1775,7 +1775,7 @@ def tables():
         rows.append(f"{s.replace('-', '/')} & {n1:,} & {t1:,} & {t1 / max(n1, 1):.3f} & {n2:,} & {t2:,} & {t2 / max(n2, 1):.3f} & " + " & ".join(f"{x[2]:.3f}" for x in S[s]["mu"]["PRF"]))
     PO = json.load(open(f"{R}/sim/pooled/scores.json"))["20-5"]; CL = list(PO["joint"]["classes"])
     rows = [f"{lab} & {o['calls']:,} & {o['tp']:,} & {o['found']:,} & {o['P']:.3f} & {o['R']:.3f} & {o['F1']:.3f} & " + " & ".join(f"{o['classes'][c][1]:.3f}" for c in CL)
-            for key, lab in (("pooled", "20 tumors pooled into one sample"), ("pairwise", "20 pairwise runs, union"), ("joint", "Joint run")) for o in [PO[key]]]
+            for key, lab in (("pooled", "20 tumors pooled into one sample"), ("pairwise", "20 pairwise runs"), ("joint", "Joint run")) for o in [PO[key]]]
     T["stab:pooled"] = tabular("lrrrrrrrrrr", " & & & & & & & \\multicolumn{4}{c}{Recall by the number of tumors carrying the SV} \\\\\n\\cmidrule(lr){8-11}\nRun & Calls & True & SVs found & Precision & Recall & F1 & " + " & ".join(f"{c} ({PO['joint']['classes'][c][0]:,})" for c in CL) + " \\\\", rows)
     T["stab:clade"] = tabular("l" + "r" * 11, " & \\multicolumn{3}{c}{Carriers, first pass} & \\multicolumn{3}{c}{Carriers, clade pass} & \\multicolumn{5}{c}{Median F1 of the clade pass by $\\mu$} \\\\\n\\cmidrule(lr){2-4}\\cmidrule(lr){5-7}\\cmidrule(lr){8-12}\nDepth n/t & Reported & True & Precision & Reported & True & Precision & 0.3 & 0.5 & 1.0 & 1.5 & 2.0 \\\\", rows)
     T["stab:simtumor"] = tabular("l" + "r" * 15, " & " + " & ".join(f"\\multicolumn{{3}}{{c}}{{{s_.replace('-', '/')}}}" for s_ in SIMSETS) + " \\\\\n" + "".join(f"\\cmidrule(lr){{{2 + 3 * k}-{4 + 3 * k}}}" for k in range(5)) + "\nTumor" + " & pairwise & first pass & clade pass" * 5 + " \\\\",
