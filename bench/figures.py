@@ -833,13 +833,13 @@ def fig3(main=False):
         SZ.append([x / GBY for x in (pk, ex, sum(f.values()) - pk - ex)])
         BAMS.append([json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bytes"] / GBY for x in "nt"])
     SZ = np.array(SZ).mean(0); BAMS = np.array(BAMS).mean(0)
-    c = ax(125.5, Y1, 13, 32); bot = 0
+    c = ax(126, 68, 30, 29); bot = 0
     for (lab, col), v in zip(KIND, SZ): c.bar(0, v, bottom=bot, color=col, width=0.62, label=lab); bot += v
     c.text(0, bot + 3, f"{bot:.0f}", ha="center", fontsize=FS - 0.4)
     SD += [["c", "janus", lab, v, "GB"] for (lab, _), v in zip(KIND, SZ)] + [["c", "janus", "Total", bot, "GB"], ["c", "BAM", "normal", BAMS[0], "GB"], ["c", "BAM", "tumor", BAMS[1], "GB"], ["c", "BAM", "Total", BAMS.sum(), "GB"]]
     c.bar(1, BAMS[0], color="#b9b9b9", width=0.62, label="BAM, normal"); c.bar(1, BAMS[1], bottom=BAMS[0], color="#d6d6d6", width=0.62, label="BAM, tumor"); c.text(1, BAMS.sum() + 3, f"{BAMS.sum():.0f}", ha="center", fontsize=FS - 0.4)
     c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean of pairs (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
-    c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "b", 114.5, 3.6)
+    fig.legend(handles=c.get_legend_handles_labels()[0], loc="lower center", bbox_to_anchor=((114 + 159) / 2 / 160, 52.8 / 104), ncol=2, fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, columnspacing=0.9, labelspacing=0.4, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "b", 114.5, 3.6)
     # d: stage times per pair
     a = ax(74.5, Y2, 35, 27); rows = P5 + ["mean"]; tot = []
     for i, p in enumerate(rows):
