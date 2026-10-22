@@ -751,8 +751,8 @@ def fig3(main=False):
         src("fig_cost", ["panel", "series", "item", "value", "unit"], SD); return
     ROWS = [("Severus", "severus_phased", 1), ("SAVANA", "savana_phased", 1), ("nanomonsv", "nanomonsv", 0), ("dysgu", "dysgu", 0), ("SVision-pro", "svision-pro", 0),
             ("cuteSV", "cutesv", 0), ("DeBreak", "debreak", 0), ("Sniffles2", "sniffles2", 0), ("kled", "kled", 0), ("SVDSS", "svdss", 0)]
-    Y1, Y2 = 60, 16
-    fig, ax = page(160, 104)
+    Y1, Y2 = 59, 16
+    fig, ax = page(160, 103)
     # a: pipelines on HCC1954
     ALN = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["wall_s"] for x in "nt")
     PH = {l.split("\t")[0]: float(l.split("\t")[1]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")}; phase = sum(PH.values())
@@ -772,7 +772,7 @@ def fig3(main=False):
     for g, ks in GROUP:
         ks = [k for k in ks if k in width]; tot = sum(width[k] for k in ks); tgt = st.median(T[p][g] for p in P5) / 60
         for k in ks: width[k] *= tgt / tot
-    b = ax(19, Y2, 34, 28); x0 = 0
+    b = ax(19, Y2, 34, 27); x0 = 0
     for k in ORDER:
         w = width[k]; n = max(4, int(round(w * 30))); u = np.linspace(0.02, 0.98, n); Y = []
         for p in P5:
@@ -808,7 +808,7 @@ def fig3(main=False):
     c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean of pairs (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
     c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "c", 114.5, 4.6)
     # d: stage times per pair
-    a = ax(74.5, Y2, 35, 28); rows = P5 + ["mean"]; tot = []
+    a = ax(74.5, Y2, 35, 27); rows = P5 + ["mean"]; tot = []
     for i, p in enumerate(rows):
         left = 0
         for g, _ in GROUP:
@@ -819,7 +819,7 @@ def fig3(main=False):
     a.get_yticklabels()[-1].set_fontweight("bold"); a.set_ylim(len(rows) - 0.4, -0.6); a.set_xlim(0, 16); a.set_xticks([0, 5, 10, 15]); a.set_xlabel("Wall clock, 16 threads (min)")
     a.tick_params(axis="y", length=0); tag(a, "e", 63.5, 6.2)
     # e: sequence aligned
-    e = ax(127, Y2, 29, 28); X = np.arange(5)
+    e = ax(127, Y2, 29, 27); X = np.arange(5)
     rb = [sum(json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bases"] for x in "nt") / 1e9 for p in P5]
     pb = [int(re.search(r"pieces, (\d+) bp", LOG(p, "select")).group(1)) / 1e9 for p in P5]
     e.bar(X - 0.19, rb, width=0.36, color="#b9b9b9", lw=0, zorder=2, label="minimap2, both read sets")
