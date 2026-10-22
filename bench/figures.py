@@ -884,12 +884,13 @@ def fig4():
     at = ax(70, 4, 40, 42); tree(at, true, set(), "Simulated tree", mark=miss55); tag(at, "d", 64, 2.5)
     ar = ax(116, 4, 40, 42); tree(ar, rec["clades"], {frozenset(c) for c in rec["wrong"]}, f"Reconstructed at {BASE.replace('-', '/')}")
     if miss55: at.plot([], [], color=JANUS, lw=1.3, label="the one split missed at 5/5"); at.legend(loc="upper left", bbox_to_anchor=(0.0, 0.0), fontsize=FS - 0.8, handlelength=1.5, frameon=False)
-    ab = ax(14, 10, 44, 36); PO = json.load(open(f"{R}/sim/pooled/scores.json"))[BASE.replace("-", "/").replace("/", "-")]; CL = list(PO["joint"]["classes"]); w = 0.26
-    POOLED = "#e0a030"
-    for j, (key, col, lab) in enumerate((("pooled", POOLED, "20 tumors pooled into one sample"), ("pairwise", ONE, "20 pairwise runs"), ("joint", ALL, "joint run"))):
-        ab.bar(np.arange(len(CL)) + (j - 1) * w, [PO[key]["classes"][c][1] for c in CL], w * 0.92, color=col, lw=0, zorder=2, label=lab)
-    ab.set_ylim(0, 1); fticks(ab); ab.set_xticks(range(len(CL))); ab.set_xticklabels([f"{c}\n({PO['joint']['classes'][c][0]:,})" for c in CL], fontsize=FS - 0.6); ab.set_xlabel("Tumors carrying the SV (SVs)"); ab.set_ylabel("Recall of the cohort's SVs"); ab.grid(axis="y", **GRID); ab.tick_params(axis="x", length=0)
-    ab.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False, labelspacing=0.3); title(ab, f"At {BASE.replace('-', '/')}", 1.03, 0.0); tag(ab, "c", 2, 2.5)
+    ab = ax(14, 10, 50, 36); PO = json.load(open(f"{R}/sim/pooled/scores.json"))[BASE.replace("-", "/").replace("/", "-")]; CL = list(PO["joint"]["classes"]); w = 0.26
+    POOLED = "#e0a030"; XP = [0, 1.25] + [2.9 + i for i in range(len(CL))]
+    for j, (key, col, lab) in enumerate((("pooled", POOLED, "20 tumors pooled"), ("pairwise", ONE, "20 pairwise runs"), ("joint", ALL, "joint run"))):
+        ab.bar(np.array(XP) + (j - 1) * w, [PO[key]["P"], PO[key]["R"]] + [PO[key]["classes"][c][1] for c in CL], w * 0.92, color=col, lw=0, zorder=2, label=lab)
+    ab.set_ylim(0, 1); fticks(ab); ab.set_xticks(XP); ab.set_xticklabels(["precision\nall SVs", "recall\nall SVs"] + [f"{c}{' tumor' if c == '1' else ''}\n({PO['joint']['classes'][c][0]:,})" for c in CL], fontsize=FS - 1.0); ab.set_xlim(-0.6, XP[-1] + 0.6)
+    ab.set_ylabel("Cohort's SVs"); ab.grid(axis="y", **GRID); ab.tick_params(axis="x", length=0)
+    ab.legend(loc="upper left", bbox_to_anchor=(0.13, 1.0), fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False, labelspacing=0.3); title(ab, f"At {BASE.replace('-', '/')}", 1.03, 0.0); tag(ab, "c", 2, 2.5)
 
     def f1(d): return [2 * p * r / (p + r) for p, r in zip(d["P"], d["R"])]
 
