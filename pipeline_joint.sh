@@ -23,4 +23,4 @@ step gaps minimap2 -cx sr --secondary=no -t $P -o ev.gaps.raw.paf $R/${REF:-hg38
 step patch $B patch -i ev -r ev.gaps.raw.paf -d aln.paf -o ev.paf
 step call $B call -i ev -r $SVB -d $R/${REF:-hg38_parmask}.fa -g graph.gph -o calls.vcf -v $R/$( [ -n "$REF" ] && echo $REF.trf.bed || echo vntr.trf.bed ) -t $P -m $M
 HS=$(for k in $(seq 1 $K); do printf "t%s.cnt.hist," $k; done | sed 's/,$//')
-step joint env PYTHONPATH=$J/python $PY -m janus.joint -i calls.vcf -o janus.vcf -m $J/models/janus.pkl -H $HS -s $MS
+step joint env PYTHONPATH=$J/src $PY -m janus.joint -i calls.vcf -o janus.vcf -m $J/models/janus.pkl -H $HS -s $MS

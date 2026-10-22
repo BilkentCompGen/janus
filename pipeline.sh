@@ -19,4 +19,4 @@ step clip $B clip -i ev -r aln.paf -o ev.gaps.fa
 step gaps minimap2 -cx sr --secondary=no -t $P -o ev.gaps.raw.paf $R/${REF:-hg38_parmask}.sr.mmi ev.gaps.fa
 step patch $B patch -i ev -r ev.gaps.raw.paf -d aln.paf -o ev.paf
 step call $B call -i ev -r n.svb,t.svb -d $R/${REF:-hg38_parmask}.fa -g graph.gph -o calls.vcf -v $R/$( [ -n "$REF" ] && echo $REF.trf.bed || echo vntr.trf.bed ) -t $P -m $MT ${GERMLINE:+-G 1}
-step classify env PYTHONPATH=$J/python $PY -m janus.classify -i calls.vcf -o janus.vcf -m $J/models/janus.pkl -H t.cnt.hist
+step classify env PYTHONPATH=$J/src $PY -m janus.classify -i calls.vcf -o janus.vcf -m $J/models/janus.pkl -H t.cnt.hist

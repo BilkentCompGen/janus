@@ -207,7 +207,7 @@ print("truth %d calls %d recall %.3f precision %.3f f1 %.3f" % (len(T), len(C), 
 SCRIPTS["verdict"] = r'''import sys, time, numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 exec(SCRIPTS["score"].split("T, C = recs")[0])
-sys.path.insert(0, "/home/yuio/janus/python")
+sys.path.insert(0, "/home/yuio/janus/src")
 from janus import features as JF, classify as JC
 H = "/home/yuio/janus/bench"; TR = "/home/yuio/janus/hifi/truth"
 TRUTH = {p: f"{H}/eval_sets/{p}/all_without/None_minda_ensemble.vcf" for p in ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]}
@@ -778,7 +778,7 @@ TR = f"{H}/runs/sim/truth"; P = os.environ.get("SIMPAIR", f"{H}/runs/sim/setting
 jd = lambda s: f"{JD}/{s}" if JD else f"{P}/{s}/joint"
 SETS = [("20-20", "20_20"), ("20-10", "20_10"), ("20-5", "20_5"), ("10-10", "10_10"), ("5-5", "5_5")]
 
-sys.path.insert(0, "/home/yuio/janus/python")
+sys.path.insert(0, "/home/yuio/janus/src")
 from janus import features as JF, classify as JC, joint as JJ
 
 def load(f):
