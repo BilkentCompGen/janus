@@ -751,8 +751,8 @@ def fig3(main=False):
         src("fig_cost", ["panel", "series", "item", "value", "unit"], SD); return
     ROWS = [("Severus", "severus_phased", 1), ("SAVANA", "savana_phased", 1), ("nanomonsv", "nanomonsv", 0), ("dysgu", "dysgu", 0), ("SVision-pro", "svision-pro", 0),
             ("cuteSV", "cutesv", 0), ("DeBreak", "debreak", 0), ("Sniffles2", "sniffles2", 0), ("kled", "kled", 0), ("SVDSS", "svdss", 0)]
-    Y1, Y2 = 64, 18
-    fig, ax = page(160, 108)
+    Y1, Y2 = 60, 16
+    fig, ax = page(160, 104)
     # a: pipelines on HCC1954
     ALN = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["wall_s"] for x in "nt")
     PH = {l.split("\t")[0]: float(l.split("\t")[1]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")}; phase = sum(PH.values())
@@ -763,16 +763,16 @@ def fig3(main=False):
         d.barh(k, ALN / 3600, color="#b9b9b9", height=0.66); d.barh(k, p_ / 3600, left=ALN / 3600, color="#e0a030", height=0.66); d.barh(k, w / 3600, left=(ALN + p_) / 3600, color="#3f6ea5", height=0.66)
         tot = (ALN + p_ + w) / 3600; SD += [["a", n, x_, v, "h"] for x_, v in (("mapping", ALN / 3600), ("phasing", p_ / 3600), ("caller", w / 3600), ("total", tot))] + [["a", n, "factor over janus", tot * 3600 / sn, "x"]]; d.annotate(f"{int(tot)}:{int(round((tot - int(tot)) * 60)):02d} h", (tot, k), fontsize=FS - 0.4, **pad); d.text(0.07, k, f"{tot * 3600 / sn:.0f}×", va="center", ha="left", fontsize=FS - 0.8, color=C["ink"], fontweight="bold")
     fig.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
-               loc="lower center", bbox_to_anchor=((19 + 109.5) / 2 / 160, (Y1 + 36 + 1.5) / 108), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0)
+               loc="lower center", bbox_to_anchor=((19 + 109.5) / 2 / 160, (Y1 + 36 + 0.8) / 104), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0)
     d.set_xlim(0, 7); d.set_xticks(range(8)); d.set_yticks(range(len(ROWS) + 1)); d.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); d.get_yticklabels()[0].set_fontweight("bold"); d.get_yticklabels()[0].set_color(JANUS)
-    d.set_ylim(len(ROWS) + 0.6, -0.6); d.set_xlabel("Wall clock on HCC1954, 16 threads (h)"); d.tick_params(axis="y", length=0); tag(d, "a", 2, 6.2)
+    d.set_ylim(len(ROWS) + 0.6, -0.6); d.set_xlabel("Wall clock on HCC1954, 16 threads (h)"); d.tick_params(axis="y", length=0); tag(d, "a", 2, 4.6)
     # b: memory trace
     TR = {p: trace(p) for p in P5}
     width = {k: st.median(TR[p][0][k][1] - TR[p][0][k][0] for p in P5) / 60 for k in ORDER}
     for g, ks in GROUP:
         ks = [k for k in ks if k in width]; tot = sum(width[k] for k in ks); tgt = st.median(T[p][g] for p in P5) / 60
         for k in ks: width[k] *= tgt / tot
-    b = ax(19, Y2, 34, 30); x0 = 0
+    b = ax(19, Y2, 34, 28); x0 = 0
     for k in ORDER:
         w = width[k]; n = max(4, int(round(w * 30))); u = np.linspace(0.02, 0.98, n); Y = []
         for p in P5:
@@ -806,9 +806,9 @@ def fig3(main=False):
     SD += [["c", "janus", lab, v, "GB"] for (lab, _), v in zip(KIND, SZ)] + [["c", "janus", "Total", bot, "GB"], ["c", "BAM", "normal", BAMS[0], "GB"], ["c", "BAM", "tumor", BAMS[1], "GB"], ["c", "BAM", "Total", BAMS.sum(), "GB"]]
     c.bar(1, BAMS[0], color="#b9b9b9", width=0.62, label="BAM, normal"); c.bar(1, BAMS[1], bottom=BAMS[0], color="#d6d6d6", width=0.62, label="BAM, tumor"); c.text(1, BAMS.sum() + 3, f"{BAMS.sum():.0f}", ha="center", fontsize=FS - 0.4)
     c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean of pairs (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
-    c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "c", 114.5, 6.2)
+    c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "c", 114.5, 4.6)
     # d: stage times per pair
-    a = ax(74.5, Y2, 35, 30); rows = P5 + ["mean"]; tot = []
+    a = ax(74.5, Y2, 35, 28); rows = P5 + ["mean"]; tot = []
     for i, p in enumerate(rows):
         left = 0
         for g, _ in GROUP:
@@ -819,7 +819,7 @@ def fig3(main=False):
     a.get_yticklabels()[-1].set_fontweight("bold"); a.set_ylim(len(rows) - 0.4, -0.6); a.set_xlim(0, 16); a.set_xticks([0, 5, 10, 15]); a.set_xlabel("Wall clock, 16 threads (min)")
     a.tick_params(axis="y", length=0); tag(a, "e", 63.5, 6.2)
     # e: sequence aligned
-    e = ax(127, Y2, 29, 30); X = np.arange(5)
+    e = ax(127, Y2, 29, 28); X = np.arange(5)
     rb = [sum(json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bases"] for x in "nt") / 1e9 for p in P5]
     pb = [int(re.search(r"pieces, (\d+) bp", LOG(p, "select")).group(1)) / 1e9 for p in P5]
     e.bar(X - 0.19, rb, width=0.36, color="#b9b9b9", lw=0, zorder=2, label="minimap2, both read sets")
@@ -840,7 +840,7 @@ def fig3(main=False):
         SD += [["f", n, x_, v, "h"] for x_, v in (("mapping", ACPU), ("phasing", pc), ("caller", cc), ("total", ACPU + pc + cc))]
         f.text(ACPU + pc + cc + 1.5, k, f"{ACPU + pc + cc:.0f} h", va="center", fontsize=FS - 0.4)
     f.set_xlim(0, 105); f.set_xticks([0, 25, 50, 75, 100]); f.set_yticks(range(len(ROWS) + 1)); f.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); f.get_yticklabels()[0].set_fontweight("bold"); f.get_yticklabels()[0].set_color(JANUS)
-    f.set_ylim(len(ROWS) + 0.6, -0.6); f.set_xlabel("CPU time on HCC1954 (h)"); f.tick_params(axis="y", length=0); f.grid(axis="x", **GRID); f.set_axisbelow(True); tag(f, "b", 63.5, 6.2)
+    f.set_ylim(len(ROWS) + 0.6, -0.6); f.set_xlabel("CPU time on HCC1954 (h)"); f.tick_params(axis="y", length=0); f.grid(axis="x", **GRID); f.set_axisbelow(True); tag(f, "b", 63.5, 4.6)
     fig.savefig(f"{OUT}/fig_runtime.pdf", facecolor="white"); plt.close(fig)
     LET = {"b": "d", "d": "e", "e": "f", "f": "b"}
     src("fig_runtime", ["panel", "series", "item", "x_min", "value", "low", "high", "unit"], [[LET.get(r[0], r[0])] + (r[1:3] + ["", r[3], "", "", r[4]] if len(r) == 5 else r[1:] + ["GB"]) for r in SD])
