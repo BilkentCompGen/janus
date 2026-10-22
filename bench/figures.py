@@ -783,21 +783,21 @@ def fig3(main=False):
         src("fig_cost", ["panel", "series", "item", "value", "unit"], SD); return
     ROWS = [("Severus", "severus_phased", 1), ("SAVANA", "savana_phased", 1), ("nanomonsv", "nanomonsv", 0), ("dysgu", "dysgu", 0), ("SVision-pro", "svision-pro", 0),
             ("cuteSV", "cutesv", 0), ("DeBreak", "debreak", 0), ("Sniffles2", "sniffles2", 0), ("kled", "kled", 0), ("SVDSS", "svdss", 0)]
-    Y1, Y2 = 61, 16
-    fig, ax = page(160, 103)
+    Y1, Y2 = 65, 16
+    fig, ax = page(160, 104)
     # a: pipelines on HCC1954
     ALN = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["wall_s"] for x in "nt")
     PH = {l.split("\t")[0]: float(l.split("\t")[1]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")}; phase = sum(PH.values())
-    d = ax(19, Y1, 34, 34); sn = sum(T["hcc1954"].values()); pad = dict(xytext=(2.8, 0), textcoords="offset points", va="center")
+    d = ax(19, Y1, 34, 32); sn = sum(T["hcc1954"].values()); pad = dict(xytext=(2.8, 0), textcoords="offset points", va="center")
     SD.append(["a", "janus", "total", sn / 3600, "h"]); d.barh(0, sn / 3600, color=JANUS, height=0.66); d.annotate(f"{sn / 60:.0f} min", (sn / 3600, 0), fontsize=FS, fontweight="bold", **pad)
     for k, (n, t, ph) in enumerate(ROWS, 1):
         w = json.load(open(f"{R}/competitors/{t}/hcc1954/run.json"))["total"]["wall_s"]; p_ = phase if ph else 0
         d.barh(k, ALN / 3600, color="#b9b9b9", height=0.66); d.barh(k, p_ / 3600, left=ALN / 3600, color="#e0a030", height=0.66); d.barh(k, w / 3600, left=(ALN + p_) / 3600, color="#3f6ea5", height=0.66)
         tot = (ALN + p_ + w) / 3600; SD += [["a", n, x_, v, "h"] for x_, v in (("mapping", ALN / 3600), ("phasing", p_ / 3600), ("caller", w / 3600), ("total", tot))] + [["a", n, "factor over janus", tot * 3600 / sn, "x"]]; d.annotate(f"{int(tot)}:{int(round((tot - int(tot)) * 60)):02d} h", (tot, k), fontsize=FS - 0.4, **pad); d.text(0.07, k, f"{tot * 3600 / sn:.0f}×", va="center", ha="left", fontsize=FS - 0.8, color=C["ink"], fontweight="bold")
-    d.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
-             loc="lower left", bbox_to_anchor=(-0.05, 1.0), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0.3)
+    fig.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
+               loc="lower center", bbox_to_anchor=((19 + 109.5) / 2 / 160, 52.8 / 104), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0)
     d.set_xlim(0, 7); d.set_xticks(range(8)); d.set_yticks(range(len(ROWS) + 1)); d.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); d.get_yticklabels()[0].set_fontweight("bold"); d.get_yticklabels()[0].set_color(JANUS)
-    d.set_ylim(len(ROWS) + 0.6, -0.6); d.set_xlabel("Wall clock on HCC1954, 16 threads (h)"); d.tick_params(axis="y", length=0); tag(d, "a", 2, 4.6)
+    d.set_ylim(len(ROWS) + 0.6, -0.6); d.set_xlabel("Wall clock on HCC1954, 16 threads (h)"); d.tick_params(axis="y", length=0); tag(d, "a", 2, 3.6)
     # b: memory trace
     TR = {p: trace(p) for p in P5}
     width = {k: st.median(TR[p][0][k][1] - TR[p][0][k][0] for p in P5) / 60 for k in ORDER}
@@ -832,13 +832,13 @@ def fig3(main=False):
         SZ.append([x / GBY for x in (pk, ex, sum(f.values()) - pk - ex)])
         BAMS.append([json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bytes"] / GBY for x in "nt"])
     SZ = np.array(SZ).mean(0); BAMS = np.array(BAMS).mean(0)
-    c = ax(125.5, Y1, 13, 34); bot = 0
+    c = ax(125.5, Y1, 13, 32); bot = 0
     for (lab, col), v in zip(KIND, SZ): c.bar(0, v, bottom=bot, color=col, width=0.62, label=lab); bot += v
     c.text(0, bot + 3, f"{bot:.0f}", ha="center", fontsize=FS - 0.4)
     SD += [["c", "janus", lab, v, "GB"] for (lab, _), v in zip(KIND, SZ)] + [["c", "janus", "Total", bot, "GB"], ["c", "BAM", "normal", BAMS[0], "GB"], ["c", "BAM", "tumor", BAMS[1], "GB"], ["c", "BAM", "Total", BAMS.sum(), "GB"]]
     c.bar(1, BAMS[0], color="#b9b9b9", width=0.62, label="BAM, normal"); c.bar(1, BAMS[1], bottom=BAMS[0], color="#d6d6d6", width=0.62, label="BAM, tumor"); c.text(1, BAMS.sum() + 3, f"{BAMS.sum():.0f}", ha="center", fontsize=FS - 0.4)
     c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean of pairs (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
-    c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "b", 114.5, 4.6)
+    c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "b", 114.5, 3.6)
     # d: stage times per pair
     a = ax(74.5, Y2, 35, 27); rows = P5 + ["mean"]; tot = []
     for i, p in enumerate(rows):
@@ -862,7 +862,7 @@ def fig3(main=False):
     e.set_xticks(X); e.set_xticklabels([PAIRNAME[p] for p in P5], rotation=30, ha="right", rotation_mode="anchor", fontsize=FS - 0.6); e.tick_params(axis="x", length=0); e.grid(axis="y", **GRID)
     e.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False); e.yaxis.set_minor_locator(matplotlib.ticker.NullLocator()); tag(e, "d", 114.5, 4.0)
     # f: CPU time
-    f = ax(74.5, Y1, 35, 34); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
+    f = ax(74.5, Y1, 35, 32); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
     PCPU = sum(float(l.split("\t")[2]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")) / 3600
     sc = (sum(x["cpu_s"] for x in json.load(open(f"{R}/full/hcc1954/run.json"))["steps"] if x["step"].startswith("pack")) + json.load(open(f"{RC}/full/hcc1954/run.json"))["total"]["cpu_s"]) / 3600
     SD.append(["f", "janus", "total", sc, "h"]); f.barh(0, sc, color=JANUS, height=0.66); f.text(sc + 1.5, 0, f"{sc:.1f} h", va="center", fontsize=FS - 0.4, fontweight="bold")
@@ -873,7 +873,7 @@ def fig3(main=False):
         f.text(ACPU + pc + cc + 1.5, k, f"{ACPU + pc + cc:.0f} h", va="center", fontsize=FS - 0.4)
     f.set_xlim(0, 105); f.set_xticks([0, 25, 50, 75, 100]); f.set_yticks(range(len(ROWS) + 1)); f.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); f.get_yticklabels()[0].set_fontweight("bold"); f.get_yticklabels()[0].set_color(JANUS)
     f.set_ylim(len(ROWS) + 0.6, -0.6); f.set_xlabel("CPU time on HCC1954 (h)"); f.tick_params(axis="y", length=0); f.grid(axis="x", **GRID); f.set_axisbelow(True); None
-    for x0, x1 in ((1, 112.5), (114, 159)): box(fig, x0, 52, x1, 102.5)
+    for x0, x1 in ((1, 112.5), (114, 159)): box(fig, x0, 52, x1, 103.5)
     for x0, x1 in ((1, 112.5), (114, 159)): box(fig, x0, 0.4, x1, 50)
     boxcheck(fig, "fig4")
     fig.savefig(f"{OUT}/fig_runtime.pdf", facecolor="white"); plt.close(fig)
