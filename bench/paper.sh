@@ -549,6 +549,15 @@ sim)
         ( joint $1 $2 ); log "joint $1/$2: $(grep -vc '^#' $N/joint/calls.vcf 2> /dev/null) records"
     done
     $V $H/paper.py simjoint | tee $O/scores.txt ;;
+pooled)
+    # the 20 tumors of a depth setting as one tumor sample through the pairwise pipeline, scored against the union of the truth sets (runs/sim/pooled)
+    set -- ${1:-20} ${2:-5}; P=$R/sim/pooled/${1}_${2}; TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' '); mkdir -p $P/work; cd $P/work
+    for e in svb svb.idx; do ln -sf $(reads $1 germline.$e) n.$e; done
+    [ -s t.svb.idx ] || $V $H/paper.py svbcat t.svb $(for t in $TUM; do reads $2 $t.svb; done) > ../svbcat.log
+    touch done.pack_n done.pack_t
+    REF=chm13v2 /usr/bin/time -f "%e %M %U %S %x" -o ../time.txt bash $S/pipeline.sh $PWD n.svb t.svb 16 > ../pipeline.log 2>&1
+    cp steps.txt calls.vcf janus.vcf t.cnt.hist ../; cd $P; rm -rf work
+    $V $H/paper.py pooledscore ${1}_${2} ;;
 covcallers)
     C=$R/coverage_callers; mkdir -p $C/names $C/lists
     sub() { samtools view -@ 12 -b -N $1 -o $3.tmp $2 && mv $3.tmp $3 && samtools index -@ 12 $3; }

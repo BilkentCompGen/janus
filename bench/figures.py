@@ -630,17 +630,17 @@ def pr_lines(axp, axr, S, keys, labs, pairs):
 
 def fig2():
     S = cov(); E = external()
-    H = 154; T1 = H - 7; T2 = T1 - 34 - 17; T3 = T2 - 42 - 13
+    H = 150; T1 = H - 7; T2 = T1 - 34 - 17; T3 = T2 - 40 - 13
     fig, ax = page(160, H)
     order = [n for n in sorted(D["all_with"]["hcc1954"], key=lambda n: -mean("all_with", n, "F1")) if tech(n) == "HiFi"]
     a1 = ax(22, T1 - 34, 32, 34); f1_dots(a1, "all_with", order, "", True); title(a1, "Consensus of all 18 call sets", 1.03, 0.0); tag(a1, "a", 2, 4.8)
     ph = [Line2D([], [], ls="", marker="o", color=PAIRCOL[p], ms=3.4, label=PAIRNAME[p]) for p in P5] + [Line2D([], [], ls="", marker="|", color="black", ms=6, mew=0.9, label="mean of five pairs")]
     f = ax(88, T1 - 34, 34, 34); f1_lines(f, S, DEP, ["full", "30", "20", "15", "10", "5"], P5, "Depth, five pairs", pvals=False, band=False); f.set_xlabel("Depth of both samples (×)"); tag(f, "b", 78, 4.8)
     h = ax(124, T1 - 34, 34, 34); f1_lines(h, S, PUR, ["100", "80", "60", "40", "20"], P5, "Purity at 30×", pvals=False, band=False); h.set_ylabel(""); h.set_yticklabels([]); h.set_xlabel("Tumor purity (%)"); tag(h, "c", 117, 4.8)
-    b = ax(22, T2 - 42, 42, 42); ext_scatter(b, E["colo829"], "colo829", "COLO829, 62 truth SVs"); tag(b, "d", 2, 9.6)
-    c = ax(100, T2 - 42, 42, 42); ext_scatter(c, E["hg008"], "hg008", "HG008, 172 truth SVs"); tag(c, "e", 84, 9.6)
-    d = ax(13, T3 - 22, 58, 22); fbars(d, "all_with", "type", TYPES, TYPES, "F1 by SV type, five CASTLE pairs pooled"); tag(d, "f", 2, 4.6)
-    e = ax(88, T3 - 22, 70, 22); fbars(e, "all_with", "size", [k for k, _ in SIZES], [l for _, l in SIZES], "F1 by SV size (consensus SVs in parentheses)"); tag(e, "g", 87, 4.6)
+    b = ax(23, T2 - 40, 40, 40); ext_scatter(b, E["colo829"], "colo829", "COLO829, 62 truth SVs"); tag(b, "d", 2, 9.6)
+    c = ax(101, T2 - 40, 40, 40); ext_scatter(c, E["hg008"], "hg008", "HG008, 172 truth SVs"); tag(c, "e", 84, 9.6)
+    d = ax(13, T3 - 20, 58, 20); fbars(d, "all_with", "type", TYPES, TYPES, "F1 by SV type, five CASTLE pairs pooled"); tag(d, "f", 2, 4.6)
+    e = ax(88, T3 - 20, 70, 20); fbars(e, "all_with", "size", [k for k, _ in SIZES], [l for _, l in SIZES], "F1 by SV size (consensus SVs in parentheses)"); tag(e, "g", 87, 4.6)
     lh = [Line2D([], [], color=color(n), marker=MARK[n], ms=3.4, mec="white", lw=1.1 if n == "janus" else 1.0, label=n) for n in ["janus"] + COV]
     lh += [Patch(color=color("Sniffles2"), label="Sniffles2 (f, g)")]
     fig.legend(handles=lh, loc="lower center", bbox_to_anchor=(0.5, 5.0 / H), ncol=5, fontsize=FS - 0.7, handletextpad=0.4, columnspacing=1.2, frameon=False, borderaxespad=0)
@@ -750,12 +750,12 @@ def fig3(main=False):
         src("fig_cost", ["panel", "series", "item", "value", "unit"], SD); return
     ROWS = [("Severus", "severus_phased", 1), ("SAVANA", "savana_phased", 1), ("nanomonsv", "nanomonsv", 0), ("dysgu", "dysgu", 0), ("SVision-pro", "svision-pro", 0),
             ("cuteSV", "cutesv", 0), ("DeBreak", "debreak", 0), ("Sniffles2", "sniffles2", 0), ("kled", "kled", 0), ("SVDSS", "svdss", 0)]
-    Y1, Y2 = 62, 12
-    fig, ax = page(160, 110)
+    Y1, Y2 = 58, 12
+    fig, ax = page(160, 102)
     # a: pipelines on HCC1954
     ALN = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["wall_s"] for x in "nt")
     PH = {l.split("\t")[0]: float(l.split("\t")[1]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")}; phase = sum(PH.values())
-    d = ax(19, Y1, 34, 40); sn = sum(T["hcc1954"].values()); pad = dict(xytext=(2.8, 0), textcoords="offset points", va="center")
+    d = ax(19, Y1, 34, 36); sn = sum(T["hcc1954"].values()); pad = dict(xytext=(2.8, 0), textcoords="offset points", va="center")
     SD.append(["a", "janus", "total", sn / 3600, "h"]); d.barh(0, sn / 3600, color=JANUS, height=0.66); d.annotate(f"{sn / 60:.0f} min", (sn / 3600, 0), fontsize=FS, fontweight="bold", **pad)
     for k, (n, t, ph) in enumerate(ROWS, 1):
         w = json.load(open(f"{R}/competitors/{t}/hcc1954/run.json"))["total"]["wall_s"]; p_ = phase if ph else 0
@@ -771,7 +771,7 @@ def fig3(main=False):
     for g, ks in GROUP:
         ks = [k for k in ks if k in width]; tot = sum(width[k] for k in ks); tgt = st.median(T[p][g] for p in P5) / 60
         for k in ks: width[k] *= tgt / tot
-    b = ax(74.5, Y1, 35, 40); x0 = 0
+    b = ax(74.5, Y1, 35, 36); x0 = 0
     for k in ORDER:
         w = width[k]; n = max(4, int(round(w * 30))); u = np.linspace(0.02, 0.98, n); Y = []
         for p in P5:
@@ -799,7 +799,7 @@ def fig3(main=False):
         SZ.append([x / GBY for x in (pk, ex, cn, gr, sum(f.values()) - pk - ex - cn - gr)])
         BAMS.append([json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bytes"] / GBY for x in "nt"])
     SZ = np.array(SZ).mean(0); BAMS = np.array(BAMS).mean(0)
-    c = ax(125.5, Y1, 13, 40); bot = 0
+    c = ax(125.5, Y1, 13, 36); bot = 0
     for (lab, col), v in zip(KIND, SZ): c.bar(0, v, bottom=bot, color=col, width=0.62, label=lab); bot += v
     c.text(0, bot + 3, f"{bot:.0f}", ha="center", fontsize=FS - 0.4)
     SD += [["c", "janus", lab, v, "GB"] for (lab, _), v in zip(KIND, SZ)] + [["c", "janus", "Total", bot, "GB"], ["c", "BAM", "normal", BAMS[0], "GB"], ["c", "BAM", "tumor", BAMS[1], "GB"], ["c", "BAM", "Total", BAMS.sum(), "GB"]]
@@ -807,7 +807,7 @@ def fig3(main=False):
     c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean of pairs (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
     c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "c", 114.5, 6.2)
     # d: stage times per pair
-    a = ax(19, Y2, 34, 34); rows = P5 + ["mean"]; tot = []
+    a = ax(19, Y2, 34, 30); rows = P5 + ["mean"]; tot = []
     for i, p in enumerate(rows):
         left = 0
         for g, _ in GROUP:
@@ -818,7 +818,7 @@ def fig3(main=False):
     a.get_yticklabels()[-1].set_fontweight("bold"); a.set_ylim(len(rows) - 0.4, -0.6); a.set_xlim(0, 16); a.set_xticks([0, 5, 10, 15]); a.set_xlabel("Wall clock, 16 threads (min)")
     a.tick_params(axis="y", length=0); tag(a, "d", 2, 6.2)
     # e: sequence aligned
-    e = ax(74.5, Y2, 35, 34); X = np.arange(5)
+    e = ax(74.5, Y2, 35, 30); X = np.arange(5)
     rb = [sum(json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bases"] for x in "nt") / 1e9 for p in P5]
     pb = [int(re.search(r"pieces, (\d+) bp", LOG(p, "select")).group(1)) / 1e9 for p in P5]
     e.bar(X - 0.19, rb, width=0.36, color="#b9b9b9", lw=0, zorder=2, label="minimap2, both read sets")
@@ -829,7 +829,7 @@ def fig3(main=False):
     e.set_xticks(X); e.set_xticklabels([PAIRNAME[p] for p in P5], rotation=30, ha="right", rotation_mode="anchor", fontsize=FS - 0.6); e.tick_params(axis="x", length=0); e.grid(axis="y", **GRID)
     e.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False); e.yaxis.set_minor_locator(matplotlib.ticker.NullLocator()); tag(e, "e", 63.5, 6.2)
     # f: CPU time
-    f = ax(127, Y2, 29, 34); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
+    f = ax(127, Y2, 29, 30); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
     PCPU = sum(float(l.split("\t")[2]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")) / 3600
     sc = (sum(x["cpu_s"] for x in json.load(open(f"{R}/full/hcc1954/run.json"))["steps"] if x["step"].startswith("pack")) + json.load(open(f"{RC}/full/hcc1954/run.json"))["total"]["cpu_s"]) / 3600
     SD.append(["f", "janus", "total", sc, "h"]); f.barh(0, sc, color=JANUS, height=0.66); f.text(sc + 1.5, 0, f"{sc:.1f} h", va="center", fontsize=FS - 0.4, fontweight="bold")
@@ -884,11 +884,12 @@ def fig4():
     at = ax(70, 4, 40, 42); tree(at, true, set(), "Simulated tree", mark=miss55); tag(at, "d", 64, 2.5)
     ar = ax(116, 4, 40, 42); tree(ar, rec["clades"], {frozenset(c) for c in rec["wrong"]}, f"Reconstructed at {BASE.replace('-', '/')}")
     if miss55: at.plot([], [], color=JANUS, lw=1.3, label="the one split missed at 5/5"); at.legend(loc="upper left", bbox_to_anchor=(0.0, 0.0), fontsize=FS - 0.8, handlelength=1.5, frameon=False)
-    ab = ax(14, 10, 44, 36); F = lambda d: float(np.median([2 * p * r / max(p + r, 1e-9) for p, r in zip(d["P"], d["R"])]))
-    for key, col, lab in (("pair", ONE, "20 pairwise runs"), ("first", "#e8a3b0", "joint run, first pass"), ("joint", ALL, "joint run, clade pass")):
-        ab.plot(range(5), [F(S[s][key]) for s in SETS], color=col, marker="o", ms=3.6, mec="white", mew=0.4, lw=1.1, label=lab, zorder=3 if key == "joint" else 2)
-    ab.set_ylim(0.4, 0.9); fticks(ab, "y", np.arange(0.4, 0.91, 0.1)); ab.set_xlim(-0.4, 4.4); ab.set_xticks(range(5)); ab.set_xticklabels(LAB, fontsize=FS - 0.6); ab.set_xlabel("Depth, normal/tumor (×)"); ab.set_ylabel("Median F1 score"); ab.grid(axis="y", **GRID)
-    ab.legend(loc="lower left", fontsize=FS - 0.8, handlelength=1.2, borderaxespad=0.3, frameon=False); tag(ab, "c", 2, 2.5)
+    ab = ax(14, 10, 44, 36); PO = json.load(open(f"{R}/sim/pooled/scores.json"))[BASE.replace("-", "/").replace("/", "-")]; CL = list(PO["joint"]["classes"]); w = 0.26
+    POOLED = "#e0a030"
+    for j, (key, col, lab) in enumerate((("pooled", POOLED, "20 tumors pooled into one sample"), ("pairwise", ONE, "20 pairwise runs, union"), ("joint", ALL, "joint run"))):
+        ab.bar(np.arange(len(CL)) + (j - 1) * w, [PO[key]["classes"][c][1] for c in CL], w * 0.92, color=col, lw=0, zorder=2, label=lab)
+    ab.set_ylim(0, 1); fticks(ab); ab.set_xticks(range(len(CL))); ab.set_xticklabels([f"{c}\n({PO['joint']['classes'][c][0]:,})" for c in CL], fontsize=FS - 0.6); ab.set_xlabel("Tumors carrying the SV (SVs)"); ab.set_ylabel("Recall of the cohort's SVs"); ab.grid(axis="y", **GRID); ab.tick_params(axis="x", length=0)
+    ab.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False, labelspacing=0.3); title(ab, f"At {BASE.replace('-', '/')}", 1.03, 0.0); tag(ab, "c", 2, 2.5)
 
     def f1(d): return [2 * p * r / (p + r) for p, r in zip(d["P"], d["R"])]
 
@@ -929,8 +930,10 @@ def fig4():
         t = S[s]["time"]; d = TR["sets"][s]
         SD += [["b", l, "janus, 20 pairwise runs (sum)", "wall clock (min)", "", "", "", sum(t["pair_wall"]) / 60, ""], ["b", l, "janus, joint run", "wall clock (min)", "", "", "", t["joint_wall"] / 60, ""],
                ["b", l, "janus, pairwise runs (largest)", "peak memory (GB)", "", "", "", max(t["pair_peak_kb"]) / 2**20, ""], ["b", l, "janus, joint run", "peak memory (GB)", "", "", "", t["joint_peak_kb"] / 2**20, ""],
-               ["c", l, "20 pairwise runs", "median F1", "", "", "", F(S[s]["pair"]), ""], ["c", l, "joint run, first pass", "median F1", "", "", "", F(S[s]["first"]), ""], ["c", l, "joint run, clade pass", "median F1", "", "", "", F(S[s]["joint"]), ""],
                ["d", l, "joint run", "splits recovered", "", "", "", MP[s]["shared"], f"of {MP[s]['true']}"]]
+    for key, ser in (("pooled", "20 tumors pooled into one sample"), ("pairwise", "20 pairwise runs, union"), ("joint", "joint run")):
+        o = PO[key]; SD += [["c", BASE.replace("-", "/"), ser, f"SVs carried by {c} tumors", "", "", "", v[1], f"{v[0]} SVs"] for c, v in o["classes"].items()]
+        SD.append(["c", BASE.replace("-", "/"), ser, "all distinct SVs", o["P"], o["R"], o["F1"], o["found"], f"{o['calls']} calls, {o['tp']} true, {PO['truth']} SVs"])
     for k, v in M2.items():
         SD += [["b", k.replace("-", "/"), "minimap2, 21 read sets", "wall clock (min)", "", "", "", v["wall_min"], ""], ["b", k.replace("-", "/"), "minimap2, 21 read sets", "peak memory (GB)", "", "", "", v["peak_gb"], ""]]
     SD += [["d", "", "simulated tree", ";".join("T%02d" % (i + 1) for i in sorted(c)), "", "", "", "", "split missed at 5/5" if c in miss55 else ""] for c in sorted(true, key=lambda c: (len(c), sorted(c)))]
@@ -1770,6 +1773,10 @@ def tables():
     for s in SIMSETS:
         a_, b_ = S[s]["first"], S[s]["joint"]; n1, t1, n2, t2 = sum(a_["carried"]), sum(a_["carried_true"]), sum(b_["carried"]), sum(b_["carried_true"])
         rows.append(f"{s.replace('-', '/')} & {n1:,} & {t1:,} & {t1 / max(n1, 1):.3f} & {n2:,} & {t2:,} & {t2 / max(n2, 1):.3f} & " + " & ".join(f"{x[2]:.3f}" for x in S[s]["mu"]["PRF"]))
+    PO = json.load(open(f"{R}/sim/pooled/scores.json"))["20-5"]; CL = list(PO["joint"]["classes"])
+    rows = [f"{lab} & {o['calls']:,} & {o['tp']:,} & {o['found']:,} & {o['P']:.3f} & {o['R']:.3f} & {o['F1']:.3f} & " + " & ".join(f"{o['classes'][c][1]:.3f}" for c in CL)
+            for key, lab in (("pooled", "20 tumors pooled into one sample"), ("pairwise", "20 pairwise runs, union"), ("joint", "Joint run")) for o in [PO[key]]]
+    T["stab:pooled"] = tabular("lrrrrrrrrrr", " & & & & & & & \\multicolumn{4}{c}{Recall by the number of tumors carrying the SV} \\\\\n\\cmidrule(lr){8-11}\nRun & Calls & True & SVs found & Precision & Recall & F1 & " + " & ".join(f"{c} ({PO['joint']['classes'][c][0]:,})" for c in CL) + " \\\\", rows)
     T["stab:clade"] = tabular("l" + "r" * 11, " & \\multicolumn{3}{c}{Carriers, first pass} & \\multicolumn{3}{c}{Carriers, clade pass} & \\multicolumn{5}{c}{Median F1 of the clade pass by $\\mu$} \\\\\n\\cmidrule(lr){2-4}\\cmidrule(lr){5-7}\\cmidrule(lr){8-12}\nDepth n/t & Reported & True & Precision & Reported & True & Precision & 0.3 & 0.5 & 1.0 & 1.5 & 2.0 \\\\", rows)
     T["stab:simtumor"] = tabular("l" + "r" * 15, " & " + " & ".join(f"\\multicolumn{{3}}{{c}}{{{s_.replace('-', '/')}}}" for s_ in SIMSETS) + " \\\\\n" + "".join(f"\\cmidrule(lr){{{2 + 3 * k}-{4 + 3 * k}}}" for k in range(5)) + "\nTumor" + " & pairwise & first pass & clade pass" * 5 + " \\\\",
                                  [f"T{i + 1:02d} & " + " & ".join(f"{f1(S[s_][m])[i]:.3f}" for s_ in SIMSETS for m in ("pair", "first", "joint")) for i in range(20)])

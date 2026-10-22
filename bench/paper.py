@@ -747,6 +747,87 @@ for l in open(sys.argv[1]):
         else:
             print(f"{c}\t{p}\t{name}_{n}\tN\t<{t}>\t.\tPASS\tSVTYPE={t};SVLEN={ln};END={e}")
 '''
+SCRIPTS["svbcat"] = r'''import struct, sys
+
+out, ins = sys.argv[1], sys.argv[2:]
+n = total = longest = 0; off = []; pos = 32
+with open(out, "wb") as o:
+    o.write(b"\0" * 32)
+    for f in ins:
+        hb = open(f, "rb").read(32); ni, ti = struct.unpack_from("<QQ", hb, 8)
+        ib = open(f + ".idx", "rb").read(); li = struct.unpack_from("<Q", ib, 16)[0]
+        offs = struct.unpack_from("<%dQ" % (ni + 1), ib, 32)
+        with open(f, "rb") as i:
+            i.seek(offs[0]); left = offs[-1] - offs[0]
+            while left:
+                b = i.read(min(left, 1 << 26)); o.write(b); left -= len(b)
+        off += [x - offs[0] + pos for x in offs[:-1]]; pos += offs[-1] - offs[0]
+        n += ni; total += ti; longest = max(longest, li)
+    off.append(pos)
+    o.seek(0); o.write(b"SVB1" + struct.pack("<IQQ", 1, n, total) + b"\0" * 8)
+with open(out + ".idx", "wb") as o:
+    o.write(b"SVBI" + struct.pack("<IQQ", 1, n, longest) + b"\0" * 8)
+    o.write(struct.pack("<%dQ" % len(off), *off))
+print(out, n, "reads", total, "bases", "%.2fx" % (total / 3117292070))
+'''
+SCRIPTS["pooledscore"] = r'''import sys, os, io, json, pickle, numpy as np
+sys.path.insert(0, "/home/yuio/janus/src")
+from janus import features as JF, classify as JC, joint as JJ
+ns = {}; exec(SCRIPTS["simscore"].split("if __name__")[0], ns)
+MEM = {}; ns["open"] = lambda p, *x: io.StringIO(MEM[p]) if p in MEM else open(p, *x)
+R = "/home/yuio/janus/bench/runs/sim"; T = ["T%02d" % i for i in range(1, 21)]; s = sys.argv[1] if len(sys.argv) > 1 else "20_5"
+model = pickle.load(open("/home/yuio/janus/models/janus.pkl", "rb"))
+CLS = [("1", 1, 1), ("2-5", 2, 5), ("6-19", 6, 19), ("20", 20, 20)]
+
+def junctions(L):
+    out = []
+    for l in L:
+        g = l.rstrip("\n").split("\t"); MEM["m"] = "\t".join(g[:6] + ["PASS"] + g[7:]) + "\n"; c = ns["calls"]("m"); out.append(c[0] if c else None)
+    return out
+
+sv, J, NC = {}, {}, {}
+for t in T:
+    a, b = ns["truth"](f"{R}/truth/{t}.tsv"); sv.update(a)
+    for mid in a: NC[mid] = NC.get(mid, 0) + 1
+    for j in b: J[j] = j
+I = ns["index"](list(J.values()))
+
+def score(calls):
+    found, tp = set(), 0
+    for c in calls:
+        h = ns["match"](c, I)
+        if h: tp += 1; found |= h
+    P = tp / max(len(calls), 1); Rr = len(found) / len(sv)
+    cls = {lab: (lambda ids: [len(ids), len(ids & found) / max(len(ids), 1)])({m for m, n in NC.items() if lo <= n <= hi}) for lab, lo, hi in CLS}
+    return dict(calls=len(calls), tp=tp, found=len(found), P=P, R=Rr, F1=2 * P * Rr / max(P + Rr, 1e-9), classes=cls)
+
+def merged(KC):
+    K = [k for k, _ in KC]; C = [c for _, c in KC]
+    NB, grp = JJ.neighbors(K, np.zeros(len(K), bool)); first = {}
+    for i, g in enumerate(grp): first.setdefault(g, i)
+    return [C[i] for i in first.values()]
+
+def passing(vcf, mask):
+    H, L, X, K, own, SM, SP = JF.records(vcf); C = junctions(L)
+    return [(k, c) for k, c, m in zip(K, C, mask(L, X, K)) if m and c]
+
+out = {"truth": len(sv)}
+out["pooled"] = score(merged(passing(f"{R}/pooled/{s}/janus.vcf", lambda L, X, K: ["\tPASS\t" in l for l in L])))
+pairs = []
+for t in T:
+    d = f"{R}/settings/{s}/{t}"
+    pairs += passing(f"{d}/calls.vcf", lambda L, X, K, d=d: (lambda pr, du, cut: (pr >= cut) & ~du)(*JC.classify(model, X, K, f"{d}/t.cnt.hist")))
+out["pairwise"] = score(merged(pairs))
+jv = f"{R}/settings/{s}/joint/calls.vcf"; hists = [f"{R}/settings/{s}/joint/{t}.cnt.hist" for t in T]; mins = [int(open(f"{R}/settings/{s}/joint/{t}.minimum").read()) for t in T]
+H, L, X, K, own, SM, SP = JF.records(jv); C = junctions(L)
+pr, du, cut, acc, lists, adds = JJ.run(model, X, K, own, SM, SP, hists, mins)
+out["joint"] = score(merged([(k, c) for k, c, a in zip(K, C, acc) if a and c]))
+out["time"] = [float(x) for x in open(f"{R}/pooled/{s}/time.txt").read().split()[:2]]
+A = json.load(open(f"{R}/pooled/scores.json")) if os.path.exists(f"{R}/pooled/scores.json") else {}
+A[s.replace("_", "-")] = out; json.dump(A, open(f"{R}/pooled/scores.json", "w"), indent=1)
+for n in ("pooled", "pairwise", "joint"):
+    o = out[n]; print(f"{s} {n:9s} calls {o['calls']} tp {o['tp']} found {o['found']} P {o['P']:.3f} R {o['R']:.3f} F1 {o['F1']:.3f}  " + " ".join(f"{k}:{v[1]:.3f}" for k, v in o["classes"].items()))
+'''
 SCRIPTS["thin"] = r'''import mmap, struct, sys
 src, out, stride = sys.argv[1], sys.argv[2], int(sys.argv[3])
 n = total = longest = i = 0; off = []
