@@ -529,16 +529,16 @@ def pooled(s, n, kind, c):
     return 2 * tp / max(1, 2 * tp + fp + fn), tp + fn
 
 
-def f1_dots(ax, s, order, ttl, show_y, techs=False):
+def f1_dots(ax, s, order, ttl, show_y, techs=False, cols=(1.47, 1.69)):
     for i, n in enumerate(order):
         v = [D[s][p][n]["F1"] for p in P5]; m = st.mean(v)
         ax.plot([min(v), max(v)], [i, i], color="#d0d0d0", lw=1.2, zorder=1)
         for p, x in zip(P5, v): ax.scatter([x], [i], s=7, color=PAIRCOL[p], zorder=2, lw=0)
         ax.scatter([m], [i], s=44, marker="|", color="black", lw=0.9, zorder=1.5)
         ax.text(1.03, i, f"{m:.3f}", fontsize=FS, va="center", ha="left", fontweight="bold" if m >= max(mean(s, x, "F1") for x in order) - 1e-9 else "normal", transform=ax.get_yaxis_transform())
-        ax.text(1.47, i, f"{mean(s, n, 'P'):.2f}", fontsize=FS - 0.5, va="center", ha="right", color="#555555", transform=ax.get_yaxis_transform())
-        ax.text(1.69, i, f"{mean(s, n, 'R'):.2f}", fontsize=FS - 0.5, va="center", ha="right", color="#555555", transform=ax.get_yaxis_transform())
-    for x, hd, al in ((1.03, "F1", "left"), (1.47, "P", "right"), (1.69, "R", "right")): ax.text(x, -1.05, hd, fontsize=FS - 0.3, va="center", ha=al, color="#555555", transform=ax.get_yaxis_transform())
+        ax.text(cols[0], i, f"{mean(s, n, 'P'):.2f}", fontsize=FS - 0.5, va="center", ha="right", color="#555555", transform=ax.get_yaxis_transform())
+        ax.text(cols[1], i, f"{mean(s, n, 'R'):.2f}", fontsize=FS - 0.5, va="center", ha="right", color="#555555", transform=ax.get_yaxis_transform())
+    for x, hd, al in ((1.03, "F1", "left"), (cols[0], "P", "right"), (cols[1], "R", "right")): ax.text(x, -1.05, hd, fontsize=FS - 0.3, va="center", ha=al, color="#555555", transform=ax.get_yaxis_transform())
     ax.set_ylim(len(order) - 0.4, -1.6); ax.set_yticks(range(len(order)))
     if show_y:
         ax.set_yticklabels([label(n) for n in order], fontsize=FS)
@@ -671,10 +671,10 @@ def loo():
 def supp_allsets():
     D["loo"] = loo()
     fig, ax = page(160, 123.5)
-    order = sorted(D["all_with"]["hcc1954"], key=lambda n: -mean("all_with", n, "F1"))
-    a1 = ax(29, 61, 38, 54); f1_dots(a1, "all_with", order, "Consensus of all 18 call sets", True); tag(a1, "a", 2, 4.5)
-    a2 = ax(98, 61, 38, 54); f1_dots(a2, "all_without", order, "Consensus of 17, janus excluded", False); tag(a2, "b", 88, 4.5)
-    a3 = ax(29, 9, 38, 33); f1_dots(a3, "loo", [n for n in order if tech(n) == "HiFi"], "Each call set against the consensus of the other 17", True, techs=True); tag(a3, "c", 2, 4.5)
+    order = sorted(D["all_with"]["hcc1954"], key=lambda n: -mean("all_with", n, "F1")); SC = (1.38, 1.54)
+    a1 = ax(29, 61, 38, 54); f1_dots(a1, "all_with", order, "Consensus of all 18 call sets", True, cols=SC); tag(a1, "a", 2, 4.5)
+    a2 = ax(98, 61, 38, 54); f1_dots(a2, "all_without", order, "Consensus of 17, janus excluded", False, cols=SC); tag(a2, "b", 88, 4.5)
+    a3 = ax(29, 9, 38, 33); f1_dots(a3, "loo", [n for n in order if tech(n) == "HiFi"], "Each call set against the consensus of the other 17", True, techs=True, cols=SC); tag(a3, "c", 2, 4.5)
     ph = [Line2D([], [], ls="", marker="o", color=PAIRCOL[p], ms=3.4, label=PAIRNAME[p]) for p in P5] + [Line2D([], [], ls="", marker="|", color="black", ms=6, mew=0.9, label="mean")]
     ph += [Patch(color=TECHCOL[t], label=l) for t, l in (("HiFi", "PacBio HiFi"), ("ONT", "ONT"), ("Illumina", "Illumina"))]
     fig.legend(handles=ph, loc="upper left", bbox_to_anchor=(98 / 160, 42 / 123.5), ncol=2, fontsize=FS - 0.5, handletextpad=0.4, columnspacing=1.6, handlelength=1.0, labelspacing=0.7)
