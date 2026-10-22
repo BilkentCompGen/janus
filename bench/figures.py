@@ -45,6 +45,7 @@ GROUP = [("Packing", ["pack_n", "pack_t"]), ("Core extraction", ["extract_n", "e
          ("Graph and pruning", ["graph", "prune"]), ("Selection", ["select"]), ("Placement", ["place", "lift", "clip", "patch"]),
          ("minimap2", ["local", "gaps"]), ("Calling", ["call"])]
 STAGE = dict(zip([g for g, _ in GROUP], ["#d8cfc0", "#b7c9dd", "#86a8cc", "#4f7cae", "#f0b9a8", "#d9735f", "#8c8c8c", "#5fa37a"]))
+FILEKIND = [("Packed reads", "#5b4a8a"), ("Core positions", "#9f93c9"), ("Others", "#d5cfe8")]  # intermediate files of janus (Fig 4c, Fig S19a)
 STEPCOL = {s: STAGE[g] for g, ss in GROUP for s in ss}
 CALLERCOL = {"janus": JANUS, "Severus": "#3f6ea5", "SAVANA": "#4bb3b3", "nanomonsv": "#5fa37a", "Sniffles2": "#8c8c8c", "dysgu": "#7e6bb0",
              "SVision-pro": "#e0a030", "cuteSV": "#b98b5e", "DeBreak": "#c9a0c4", "kled": "#b0b0b0", "SVDSS": "#d0d0d0"}
@@ -750,8 +751,8 @@ def fig3(main=False):
         src("fig_cost", ["panel", "series", "item", "value", "unit"], SD); return
     ROWS = [("Severus", "severus_phased", 1), ("SAVANA", "savana_phased", 1), ("nanomonsv", "nanomonsv", 0), ("dysgu", "dysgu", 0), ("SVision-pro", "svision-pro", 0),
             ("cuteSV", "cutesv", 0), ("DeBreak", "debreak", 0), ("Sniffles2", "sniffles2", 0), ("kled", "kled", 0), ("SVDSS", "svdss", 0)]
-    Y1, Y2 = 58, 12
-    fig, ax = page(160, 102)
+    Y1, Y2 = 64, 18
+    fig, ax = page(160, 108)
     # a: pipelines on HCC1954
     ALN = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["wall_s"] for x in "nt")
     PH = {l.split("\t")[0]: float(l.split("\t")[1]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")}; phase = sum(PH.values())
@@ -761,8 +762,8 @@ def fig3(main=False):
         w = json.load(open(f"{R}/competitors/{t}/hcc1954/run.json"))["total"]["wall_s"]; p_ = phase if ph else 0
         d.barh(k, ALN / 3600, color="#b9b9b9", height=0.66); d.barh(k, p_ / 3600, left=ALN / 3600, color="#e0a030", height=0.66); d.barh(k, w / 3600, left=(ALN + p_) / 3600, color="#3f6ea5", height=0.66)
         tot = (ALN + p_ + w) / 3600; SD += [["a", n, x_, v, "h"] for x_, v in (("mapping", ALN / 3600), ("phasing", p_ / 3600), ("caller", w / 3600), ("total", tot))] + [["a", n, "factor over janus", tot * 3600 / sn, "x"]]; d.annotate(f"{int(tot)}:{int(round((tot - int(tot)) * 60)):02d} h", (tot, k), fontsize=FS - 0.4, **pad); d.text(0.07, k, f"{tot * 3600 / sn:.0f}×", va="center", ha="left", fontsize=FS - 0.8, color=C["ink"], fontweight="bold")
-    d.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
-             loc="lower left", bbox_to_anchor=(-0.05, 1.0), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0.3)
+    fig.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
+               loc="lower center", bbox_to_anchor=((19 + 109.5) / 2 / 160, (Y1 + 36 + 1.5) / 108), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0)
     d.set_xlim(0, 7); d.set_xticks(range(8)); d.set_yticks(range(len(ROWS) + 1)); d.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); d.get_yticklabels()[0].set_fontweight("bold"); d.get_yticklabels()[0].set_color(JANUS)
     d.set_ylim(len(ROWS) + 0.6, -0.6); d.set_xlabel("Wall clock on HCC1954, 16 threads (h)"); d.tick_params(axis="y", length=0); tag(d, "a", 2, 6.2)
     # b: memory trace
@@ -771,7 +772,7 @@ def fig3(main=False):
     for g, ks in GROUP:
         ks = [k for k in ks if k in width]; tot = sum(width[k] for k in ks); tgt = st.median(T[p][g] for p in P5) / 60
         for k in ks: width[k] *= tgt / tot
-    b = ax(74.5, Y1, 35, 36); x0 = 0
+    b = ax(19, Y2, 34, 30); x0 = 0
     for k in ORDER:
         w = width[k]; n = max(4, int(round(w * 30))); u = np.linspace(0.02, 0.98, n); Y = []
         for p in P5:
@@ -785,12 +786,12 @@ def fig3(main=False):
     MAP = max(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["peak_rss_kib"] for x in "nt") / 2**20
     SD.append(["b", "minimap2 mapping HCC1954, peak", "", "", MAP, "", ""]); b.axhline(MAP, color="#444444", ls=(0, (4, 3)), lw=0.9); b.text(x0 * 0.985, MAP - 0.6, f"minimap2,\nHCC1954: {MAP:.1f} GB", ha="right", va="top", fontsize=FS - 1.2, zorder=6)
     b.set_xlim(0, x0); b.set_ylim(0, 22); b.set_yticks([0, 5, 10, 15, 20]); b.set_ylabel("Resident memory (GB)"); b.set_xlabel("Wall clock of the run (min)")
-    tag(b, "b", 63.5, 6.2)
-    fig.legend(handles=[Patch(color="none", label="Stages (strip in b, bars in d):")] + [Patch(color=STAGE[g], label=g) for g, _ in GROUP], loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=9, fontsize=FS - 1.2,
-               handlelength=0.9, handletextpad=0.35, columnspacing=0.9, borderaxespad=0.3)
+    tag(b, "d", 2, 6.2)
+    fig.legend(handles=[Patch(color=STAGE[g], label=g) for g, _ in GROUP], loc="lower center", bbox_to_anchor=((19 + 109.5) / 2 / 160, 0.0), ncol=4, fontsize=FS - 1.0,
+               handlelength=0.9, handletextpad=0.35, columnspacing=1.0, labelspacing=0.3, borderaxespad=0.3, frameon=False)
     # c: disk
     GBY = 2.0**30
-    KIND = [("Packed reads", "#5b4a8a"), ("Core positions", "#9f93c9"), ("Others", "#d5cfe8")]  # own palette: the stage colours of b and d mean steps, not files
+    KIND = FILEKIND
     SZ, BAMS = [], []
     for p in P5:
         f = {x["file"]: x["bytes"] for x in json.load(open(f"{RC}/full/{p}/run.json"))["files"] if not x["file"].startswith(("log.", "steps", "calls.vcf"))}
@@ -807,7 +808,7 @@ def fig3(main=False):
     c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean of pairs (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
     c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "c", 114.5, 6.2)
     # d: stage times per pair
-    a = ax(19, Y2, 34, 30); rows = P5 + ["mean"]; tot = []
+    a = ax(74.5, Y2, 35, 30); rows = P5 + ["mean"]; tot = []
     for i, p in enumerate(rows):
         left = 0
         for g, _ in GROUP:
@@ -816,9 +817,9 @@ def fig3(main=False):
         a.text(left + 0.15, i, f"{left:.1f}", va="center", fontsize=FS - 0.4, fontweight="bold" if p == "mean" else "normal"); tot.append(left); SD.append(["d", PAIRNAME.get(p, "mean of five pairs"), "Total", left, "min"])
     a.set_yticks(range(len(rows))); a.set_yticklabels([PAIRNAME.get(p, "mean") for p in rows], fontsize=FS)
     a.get_yticklabels()[-1].set_fontweight("bold"); a.set_ylim(len(rows) - 0.4, -0.6); a.set_xlim(0, 16); a.set_xticks([0, 5, 10, 15]); a.set_xlabel("Wall clock, 16 threads (min)")
-    a.tick_params(axis="y", length=0); tag(a, "d", 2, 6.2)
+    a.tick_params(axis="y", length=0); tag(a, "e", 63.5, 6.2)
     # e: sequence aligned
-    e = ax(74.5, Y2, 35, 30); X = np.arange(5)
+    e = ax(127, Y2, 29, 30); X = np.arange(5)
     rb = [sum(json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bases"] for x in "nt") / 1e9 for p in P5]
     pb = [int(re.search(r"pieces, (\d+) bp", LOG(p, "select")).group(1)) / 1e9 for p in P5]
     e.bar(X - 0.19, rb, width=0.36, color="#b9b9b9", lw=0, zorder=2, label="minimap2, both read sets")
@@ -827,9 +828,9 @@ def fig3(main=False):
     for i in range(5): e.text(i + 0.19, pb[i] * 1.5, f"{rb[i] / pb[i]:,.0f}×", ha="center", va="bottom", rotation=90, fontsize=FS - 1.2, color=JANUS)
     e.set_yscale("log"); e.set_ylim(0.1, 30000); e.set_yticks([0.1, 1, 10, 100, 1000]); e.set_yticklabels(["0.1", "1", "10", "100", "1,000"]); e.set_ylabel("Sequence aligned (Gbp)")
     e.set_xticks(X); e.set_xticklabels([PAIRNAME[p] for p in P5], rotation=30, ha="right", rotation_mode="anchor", fontsize=FS - 0.6); e.tick_params(axis="x", length=0); e.grid(axis="y", **GRID)
-    e.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False); e.yaxis.set_minor_locator(matplotlib.ticker.NullLocator()); tag(e, "e", 63.5, 6.2)
+    e.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False); e.yaxis.set_minor_locator(matplotlib.ticker.NullLocator()); tag(e, "f", 114.5, 6.2)
     # f: CPU time
-    f = ax(127, Y2, 29, 30); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
+    f = ax(74.5, Y1, 35, 36); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
     PCPU = sum(float(l.split("\t")[2]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")) / 3600
     sc = (sum(x["cpu_s"] for x in json.load(open(f"{R}/full/hcc1954/run.json"))["steps"] if x["step"].startswith("pack")) + json.load(open(f"{RC}/full/hcc1954/run.json"))["total"]["cpu_s"]) / 3600
     SD.append(["f", "janus", "total", sc, "h"]); f.barh(0, sc, color=JANUS, height=0.66); f.text(sc + 1.5, 0, f"{sc:.1f} h", va="center", fontsize=FS - 0.4, fontweight="bold")
@@ -839,9 +840,10 @@ def fig3(main=False):
         SD += [["f", n, x_, v, "h"] for x_, v in (("mapping", ACPU), ("phasing", pc), ("caller", cc), ("total", ACPU + pc + cc))]
         f.text(ACPU + pc + cc + 1.5, k, f"{ACPU + pc + cc:.0f} h", va="center", fontsize=FS - 0.4)
     f.set_xlim(0, 105); f.set_xticks([0, 25, 50, 75, 100]); f.set_yticks(range(len(ROWS) + 1)); f.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); f.get_yticklabels()[0].set_fontweight("bold"); f.get_yticklabels()[0].set_color(JANUS)
-    f.set_ylim(len(ROWS) + 0.6, -0.6); f.set_xlabel("CPU time on HCC1954 (h)"); f.tick_params(axis="y", length=0); f.grid(axis="x", **GRID); f.set_axisbelow(True); tag(f, "f", 114.5, 6.2)
+    f.set_ylim(len(ROWS) + 0.6, -0.6); f.set_xlabel("CPU time on HCC1954 (h)"); f.tick_params(axis="y", length=0); f.grid(axis="x", **GRID); f.set_axisbelow(True); tag(f, "b", 63.5, 6.2)
     fig.savefig(f"{OUT}/fig_runtime.pdf", facecolor="white"); plt.close(fig)
-    src("fig_runtime", ["panel", "series", "item", "x_min", "value", "low", "high", "unit"], [r[:3] + ["", r[3], "", "", r[4]] if r[0] != "b" else r + ["GB"] for r in SD])
+    LET = {"b": "d", "d": "e", "e": "f", "f": "b"}
+    src("fig_runtime", ["panel", "series", "item", "x_min", "value", "low", "high", "unit"], [[LET.get(r[0], r[0])] + (r[1:3] + ["", r[3], "", "", r[4]] if len(r) == 5 else r[1:] + ["GB"]) for r in SD])
 
 
 def tree(ax, clades, wrong, ttl, mark=()):
@@ -1226,14 +1228,14 @@ def filesfig():
     for k, v in stat.items():
         print(k, v)
     VAL["files"] = (tot, bam, stat)
-    KIND = [("Packed reads", STAGE["Packing"]), ("Core positions", STAGE["Core extraction"]), ("Counts", STAGE["Counting"]), ("Graph", STAGE["Graph and pruning"]), ("Snippets, alignments, other", STAGE["Placement"])]
+    KIND = FILEKIND; VK = {p: [tot[p][0], tot[p][1], sum(tot[p][2:5])] for p in P5}
     fig, ax = page(W, 76)
     a = ax(14, 19, 62, 40)
     for i, p in enumerate(P5):
         b = 0
         for j, (lab, c) in enumerate(KIND):
-            a.bar(i - 0.2, tot[p][j], bottom=b, width=0.36, color=c, lw=0, zorder=2, label=lab if i == 0 else None)
-            b += tot[p][j]
+            a.bar(i - 0.2, VK[p][j], bottom=b, width=0.36, color=c, lw=0, zorder=2, label=lab if i == 0 else None)
+            b += VK[p][j]
         a.text(i - 0.2, b + 2, "%.0f" % b, ha="center", va="bottom", fontsize=FS - 1.4, color=C["ink2"])
         a.bar(i + 0.2, sum(bam[p]), width=0.36, color=LIGHT, lw=0, zorder=2, label="Two sorted BAM files" if i == 0 else None)
         a.text(i + 0.2, sum(bam[p]) + 2, "%.0f" % sum(bam[p]), ha="center", va="bottom", fontsize=FS - 1.4, color=C["ink2"])
