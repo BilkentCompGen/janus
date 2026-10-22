@@ -207,16 +207,17 @@ print("truth %d calls %d recall %.3f precision %.3f f1 %.3f" % (len(T), len(C), 
 SCRIPTS["verdict"] = r'''import sys, time, numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 exec(SCRIPTS["score"].split("T, C = recs")[0])
+sys.path.insert(0, "/home/yuio/janus/python")
+from janus import features as JF, classify as JC
 H = "/home/yuio/janus/bench"; TR = "/home/yuio/janus/hifi/truth"
-TRUTH = {p: f"{TR}/castle_without_snape/{p}/None_minda_ensemble.vcf" for p in ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]}
+TRUTH = {p: f"{H}/eval_sets/{p}/all_without/None_minda_ensemble.vcf" for p in ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]}
 TRUTH.update(hg008=f"{TR}/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar_PASS.draftbenchmark.vcf.gz",
              colo829=f"{TR}/colo829/truth.vcf")
 RUNS = __import__("os").environ.get("RUNS", f"{H}/runs/full"); OUTV = __import__("os").environ.get("OUTV", f"{H}/verdict")
 TRAIN = ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]
 C = __import__("os").environ.get("COV", f"{H}/runs/coverage"); U = __import__("os").environ.get("PUR", f"{H}/runs/purity"); O = f"{OUTV}/coverage_matched"
 DEPTHS = [5, 10, 15, 20, 30]; PUR = [20, 40, 60, 80, 100]
-HGB = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=15, min_samples_leaf=40, l2_regularization=1.0)
-CUTS = np.arange(0.2, 0.81, 0.05)
+HGB = dict(JC.HGB); CUTS = JC.CUTS
 TT = {p: recs(TRUTH[p]) for p in TRAIN}
 BY = {}
 for p in TRAIN:
@@ -243,34 +244,7 @@ def score(v, p):
     P = tpc / max(len(Cc), 1); R = tpt / max(len(TT[p]), 1)
     return len(Cc), tpc, tpt, P, R, 2 * P * R / max(P + R, 1e-9)
 
-def mark(K, pr):
-    ix = sorted(range(len(K)), key=lambda i: (K[i][:4], i)); d = np.zeros(len(K), bool)
-    for a in range(len(ix)):
-        x = K[ix[a]]
-        for b in ix[a + 1:]:
-            y = K[b]
-            if y[:2] != x[:2] or y[2] > x[2] + 500: break
-            if abs(y[3] - x[3]) <= 500 and (x[4] != y[4] or x[5] == y[5]): d[ix[a] if pr[ix[a]] < pr[b] else b] = True
-    return d
-
-def f1(p, y, c):
-    return 2 * ((p >= c) & (y > 0)).sum() / max((p >= c).sum() + (y > 0).sum(), 1)
-
-def pct(h, f, lo):
-    c = np.cumsum(h[lo:]) / max(h[lo:].sum(), 1)
-    return float(lo + np.searchsorted(c, f))
-
-def context(d, X):
-    h = {l.split()[0]: np.array(l.split()[1:], float) for l in open(f"{d}/t.cnt.hist")}
-    mt = round(2 ** X[:, 1].min() - 1); mn = int(np.nonzero(h["shared_normal"])[0][0])
-    tm = pct(h["shared_tumor"], 0.5, mt); nm = pct(h["shared_normal"], 0.5, mn)
-    return tm, nm, [np.log2(tm), np.log2(nm), pct(h["tumor_only"], 0.05, mt) / tm, pct(h["tumor_only"], 0.95, mt) / tm]
-
-def dfeat(X, ctx):
-    tm, nm, c4 = ctx; Z = X.copy()
-    for j in (1, 3, 39): Z[:, j] -= np.log2(tm + 1)
-    for j in (26, 27, 33, 34, 38, 41, 47, 51): Z[:, j] -= np.log2(nm + 1)
-    return np.hstack([Z, np.full((len(X), 1), round(2 ** X[:, 1].min() - 1)), np.tile(c4, (len(X), 1))])
+mark, f1, pct = JF.duplicates, JC.f1, JF.pct
 
 t0 = time.time()
 import os, json, pickle
@@ -288,26 +262,17 @@ def sets(p):
 
 def feats(path, p):
     L, X, K, y, keep = crecords(path, p)
-    return L, dfeat(X, context(os.path.dirname(path), X)), K, y, keep
+    return L, JF.features(X, f"{os.path.dirname(path)}/t.cnt.hist", JF.minimum(X)), K, y, keep
 
-def fitm(X, y):
+def fitm(X, y):  # the bench varies HGB and fitm (supp); the default is JC.fit_models
     return [HistGradientBoostingClassifier(**HGB, random_state=s).fit(X, y) for s in range(5)]
 
-def prob(ms, X):
-    return np.mean([m.predict_proba(X)[:, 1] for m in ms], 0)
+prob = JC.predict
 
 def fit(train):
     ks = [k for k in D if k[0] in train and k[1] != "100p"]
-    X = np.vstack([D[k][1][D[k][4]] for k in ks]); y = np.concatenate([D[k][3][D[k][4]] for k in ks]); g = np.round(X[:, 56])
-    t = time.time(); ms = fitm(X, y); ts = time.time() - t
-    oof = np.zeros(len(y)); o = 0; sl = {}
-    for k in ks: n = int(D[k][4].sum()); sl[k] = slice(o, o + n); o += n
-    for q in train:
-        mi = fitm(np.vstack([D[k][1][D[k][4]] for k in ks if k[0] != q]), np.concatenate([D[k][3][D[k][4]] for k in ks if k[0] != q]))
-        for k in ks:
-            if k[0] == q: oof[sl[k]] = prob(mi, D[k][1][D[k][4]])
-    cuts = {int(m): float(max(CUTS, key=lambda c: f1(oof[g == m], y[g == m], c))) for m in set(g)}
-    return ms, cuts, float(max(CUTS, key=lambda c: f1(oof, y, c))), ts, len(y)
+    m = JC.train([(k[0], D[k][1][D[k][4]], D[k][3][D[k][4]]) for k in ks], fitm=lambda X, y: fitm(X, y))
+    return m["models"], m["cuts"], m["cut"], m["train_s"], m["n"]
 
 D = {(p, k): feats(f, p) for p in FULL for k, f in sets(p).items()}
 log = open(f"{OUTV}/log.txt", "w"); folds = {}; fits = {}
@@ -343,7 +308,7 @@ json.dump(folds, open(f"{OUTV}/folds.json", "w"))
 SCRIPTS["sweep"] = r'''import os, sys, glob, itertools, hashlib, numpy as np
 H = "/home/yuio/janus/bench"; R = f"{H}/runs"; W = f"{R}/sweep"
 CASTLE = ["hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"]
-N0 = [5, 10, 15, 20, 25]; NT = [20, 30, 40, 50, 60]; GRID = list(itertools.product(N0, NT))
+N0 = [5, 10, 15, 20, 25]; NT = [20, 30, 40, 50, 60]; GRID = list(itertools.product(N0, NT)) + [(70, 40), (10, 5), (70, 5)]
 
 def exps(p):
     e = [("full", p)] + [("coverage", f"{p}_{n}x") for n in (5, 10, 15, 20, 30)] + [("purity", f"{p}_{q}p") for q in (20, 40, 60, 80, 100)]
@@ -409,6 +374,37 @@ elif mode == "configs":
     with open(f"{W}/combos.tsv", "w") as o:
         o.write("theta0\ttheta_t\tconfig\n"); o.write("".join(f"{a}\t{b}\t{k}\n" for (a, b), k in keys.items()))
     print("\n".join(sorted(set(keys.values()))))
+elif mode == "rescore":
+    C = sys.argv[2]; S = {}
+    WITH = ["Severus", "SAVANA", "nanomonsv", "Sniffles2", "dysgu", "SVision-pro", "cuteSV", "DeBreak", "kled", "SVDSS", "janus", "Severus ONT", "SAVANA ONT", "nanomonsv ONT", "Sniffles2 ONT", "SvABA", "GRIPSS", "Manta"]
+    LOO = {"snape": "janus", "severus_phased": "Severus", "savana_phased": "SAVANA", "nanomonsv": "nanomonsv", "dysgu": "dysgu", "svision-pro": "SVision-pro", "sniffles2": "Sniffles2", "cutesv": "cuteSV", "debreak": "DeBreak", "kled": "kled", "svdss": "SVDSS"}
+    TOOL = {"snape": "janus", "severus": "Severus", "savana": "SAVANA", "nanomonsv": "nanomonsv"}
+    SETS = ["with", "without", "loo", "30x", "20x", "15x", "10x", "5x", "100p", "80p", "60p", "40p", "20p"]
+    rows = lambda d: [l.split("\t") for l in open(f"{d}/results/overall.tsv").read().split("\n")[1:] if l]
+    for p in CASTLE:
+        for s, names in (("with", WITH), ("without", [n for n in WITH if n != "janus"])):
+            r = rows(f"{C}/eval_sets/{p}/all_{s}"); assert len(r) == len(names), (p, s)
+            for n, x in zip(names, r): S[(s, n, p)] = [float(v) for v in x[4:7]]
+        S[("without", "janus", p)] = [float(v) for v in rows(f"{C}/eval_sets/{p}/all_without_snape")[0][4:7]]
+        for k, n in LOO.items(): S[("loo", n, p)] = [float(v) for v in rows(f"{C}/eval_loo/{p}/{k}/score")[0][4:7]]
+    for l in open(f"{C}/coverage_eval/scores.tsv"):
+        e, t, n, pr, rc, f = l.split(); p, k = e.split("_"); S[(k, TOOL[t], p)] = [float(pr), float(rc), float(f)]
+    print("set\tcaller\t" + "\t".join(CASTLE) + "\tP\tR\tF1")
+    for s in SETS:
+        for n in dict.fromkeys(k[1] for k in S if k[0] == s):
+            v = [S.get((s, n, p)) for p in CASTLE]
+            print(f"{s}\t{n}\t" + "\t".join(f"{x[2]:.4f}" if x else "NA" for x in v) + "\t" + "\t".join(f"{np.mean([x[i] for x in v if x]):.4f}" for i in range(3)))
+elif mode == "rescores":
+    SETS = ["with", "without", "loo", "30x", "20x", "15x", "10x", "5x", "100p", "80p", "60p", "40p", "20p"]
+    print("theta0\ttheta_t\tconfig\t" + "\t".join(f"{s}\t{s}_rank" if s in SETS[:3] else s for s in SETS) + "\twith_runner_up")
+    for l in open(f"{W}/combos.tsv").read().split("\n")[1:]:
+        if not l or not os.path.exists(f"{W}/conf/{l.split()[2]}/rescore.tsv"): continue
+        a, b, key = l.split("\t"); E = {}
+        for r in open(f"{W}/conf/{key}/rescore.tsv").read().split("\n")[1:]:
+            if r: x = r.split("\t"); E.setdefault(x[0], {})[x[1]] = float(x[-1])
+        rank = lambda s: 1 + sum(v > E[s]["janus"] for n, v in E[s].items() if n != "janus")
+        nxt = max((v, n) for n, v in E["with"].items() if n != "janus")
+        print(f"{a}\t{b}\t{key}\t" + "\t".join(f"{E[s]['janus']:.4f}\t{rank(s)}" if s in SETS[:3] else f"{E[s]['janus']:.4f}" for s in SETS) + f"\t{nxt[1]} {nxt[0]:.4f}")
 elif mode == "table":
     rows = []
     for l in open(f"{W}/combos.tsv").read().split("\n")[1:]:
@@ -782,31 +778,17 @@ TR = f"{H}/runs/sim/truth"; P = os.environ.get("SIMPAIR", f"{H}/runs/sim/setting
 jd = lambda s: f"{JD}/{s}" if JD else f"{P}/{s}/joint"
 SETS = [("20-20", "20_20"), ("20-10", "20_10"), ("20-5", "20_5"), ("10-10", "10_10"), ("5-5", "5_5")]
 
-def context(hist, mt):
-    h = {l.split()[0]: np.array(l.split()[1:], float) for l in open(hist)}
-    mn = int(np.nonzero(h["shared_normal"])[0][0])
-    tm = G["pct"](h["shared_tumor"], 0.5, mt); nm = G["pct"](h["shared_normal"], 0.5, mn)
-    return tm, nm, [np.log2(tm), np.log2(nm), G["pct"](h["tumor_only"], 0.05, mt) / tm, G["pct"](h["tumor_only"], 0.95, mt) / tm]
-
-def features(X, hist, mt):
-    Z = G["dfeat"](X, context(hist, mt)); Z[:, 56] = mt
-    return Z
+sys.path.insert(0, "/home/yuio/janus/python")
+from janus import features as JF, classify as JC, joint as JJ
 
 def load(f):
-    L, K, X, J = [], [], [], []
+    L, J = [], []
     for l in open(f):
         if l[0] == "#": continue
-        g = l.rstrip("\n").split("\t"); info = dict(kv.split("=", 1) for kv in g[7].split(";") if "=" in kv); m = ALT.search(g[4])
+        g = l.rstrip("\n").split("\t")
         MEM["m"] = "\t".join(g[:6] + ["PASS"] + g[7:]) + "\n"; c = ns["calls"]("m")
-        K.append((g[0], m.group(1) if m else g[0], int(g[1]), int(m.group(2)) if m else int(g[1]) + int(info["SVLEN"]), info["SVTYPE"], info["O"]))
-        X.append([float(v) for v in info["F"].split(",")]); L.append((g, info)); J.append(c[0] if c else None)
-    return L, K, np.array(X), J
-
-def prob(Z):
-    return np.mean([m.predict_proba(Z)[:, 1] for m in ms], 0)
-
-def cutfor(mt):
-    return M["cuts"].get(int(mt), M["cut"])
+        L.append(g); J.append(c[0] if c else None)
+    return L, J
 
 out = {}
 for name, s in SETS:
@@ -816,57 +798,37 @@ for name, s in SETS:
         sv, TJ = ns["truth"](f"{TR}/{t}.tsv"); TI.append(ns["index"](TJ)); NT.append(len(sv))
     pair = []
     for k, t in enumerate(T):
-        d = f"{P}/{s}/{t}"; L, K, X, J = load(f"{d}/calls.vcf"); mt = round(2 ** X[:, 1].min() - 1)
-        pr = prob(features(X, f"{d}/t.cnt.hist", mt)); du = G["mark"](K, pr); pp = np.where((pr >= cutfor(mt)) & ~du)[0]
+        d = f"{P}/{s}/{t}"; L, J = load(f"{d}/calls.vcf"); _, _, X, K, _, _, _ = JF.records(f"{d}/calls.vcf")
+        pr, du, cut = JC.classify(M, X, K, f"{d}/t.cnt.hist"); mt = JF.minimum(X); pp = np.where((pr >= cut) & ~du)[0]
         hits = [ns["match"](J[i], TI[k]) if J[i] else set() for i in pp]; f = set().union(*hits) if hits else set()
         pair.append((sum(1 for h in hits if h) / max(len(pp), 1), len(f) / NT[k], len(pp), mt))
-    L, K, X, J = load(f"{jd(s)}/calls.vcf"); N = len(L)
-    own = np.array([[x.split(":")[0] for x in g[10:]].index("0/1") for g, _ in L])
-    SM = np.array([[int(x) for x in i["SAME"].split(",")][1:] for _, i in L]); SP = np.array([[int(x) for x in i["SPAN"].split(",")][1:] for _, i in L])
-    pr = np.zeros(N); cut = np.zeros(N); du = np.zeros(N, bool)
-    for k, t in enumerate(T):
-        ix = np.where(own == k)[0]
-        if not len(ix): continue
-        mt = int(open(f"{jd(s)}/{t}.minimum").read())
-        pr[ix] = prob(features(X[ix], f"{jd(s)}/{t}.cnt.hist", mt)); cut[ix] = cutfor(mt); du[ix] = G["mark"]([K[i] for i in ix], pr[ix])
-    key = lambda q, da=0, db=0: (q[0], q[1], q[2] // 500 + da, q[3] // 500 + db)
-    grid = collections.defaultdict(list)
-    for i in np.where(~du)[0]: grid[key(K[i])].append(i)
-    NB = {i: [j for da in (-1, 0, 1) for db in (-1, 0, 1) for j in grid.get(key(K[i], da, db), ()) if abs(K[j][2] - K[i][2]) <= 500 and abs(K[j][3] - K[i][3]) <= 500] for i in np.where(~du)[0]}
-    conf = np.array([len({own[j] for j in NB.get(i, ()) if own[j] != own[i] and pr[j] >= cut[j]}) for i in range(N)])
-    nown = np.array([len({own[j] for j in NB.get(i, ())} | {own[i]}) for i in range(N)])
-    anyown = [set() for _ in range(20)]
-    for i in np.where(~du)[0]: anyown[own[i]].update(NB[i])
-    def accept(raise_, floor):
-        acc = ~du & ((pr >= cut + raise_) | ((pr >= floor) & (conf >= 1)))
+    L, J = load(f"{jd(s)}/calls.vcf"); _, _, X, K, own, SM, SP = JF.records(f"{jd(s)}/calls.vcf"); N = len(L)
+    hists = [f"{jd(s)}/{t}.cnt.hist" for t in T]; mins = [int(open(f"{jd(s)}/{t}.minimum").read()) for t in T]
+    pr, du, cut, acc1, L1, D1 = JJ.run(M, X, K, own, SM, SP, hists, mins, clade=False)
+    NB, grp = JJ.neighbors(K, du)
+    def evaluate(lists, adds):
         A = []
         for k in range(20):
-            mine = list(np.where(acc & (own == k))[0]); have = set(mine)
-            for i in mine: have.update(NB[i])
-            add, seen = [], set()
-            ok = acc & (own != k) & (SM[:, k] >= 1) & (0.25 * SP[:, k] <= SM[:, k]) & (nown >= 3)
-            for i in np.where(ok)[0]:
-                if i in anyown[k] or i in have or i in seen: continue
-                add.append(i); seen.update(NB[i])
-            hits = [ns["match"](J[i], TI[k]) if J[i] else set() for i in mine + add]; f = set().union(*hits) if hits else set()
-            A.append((sum(1 for h in hits if h) / max(len(hits), 1), len(f) / NT[k], len(hits), len(add)))
+            hits = [ns["match"](J[i], TI[k]) if J[i] else set() for i in lists[k]]; f = set().union(*hits) if hits else set()
+            A.append((sum(1 for h in hits if h) / max(len(hits), 1), len(f) / NT[k], len(hits), len(adds[k]), sum(1 for h in hits[len(hits) - len(adds[k]):] if h)))
         return A
-    A = accept(0.2, 0.1)
+    clade = lambda lists, mu: JJ.clade_pass(acc1, lists, pr, cut, du, own, grp, 20, mu, M["cut"])
+    A1 = evaluate(L1, D1); L2, D2 = clade(L1, JJ.MU); A = evaluate(L2, D2)
     pickle.dump(dict(pr=pr, du=du, own=own, NB=NB, J=J, SM=SM, SP=SP, cut=cut, pair=[(x[0], x[1]) for x in pair]), open(f"{jd(s)}/carry.pkl", "wb"))
-    out[name] = dict(truth=NT, pair=dict(P=[x[0] for x in pair], R=[x[1] for x in pair], calls=[x[2] for x in pair], minimum=[int(x[3]) for x in pair]),
-                     joint=dict(P=[x[0] for x in A], R=[x[1] for x in A], calls=[x[2] for x in A], carried=[x[3] for x in A]))
+    res = lambda A_: dict(P=[x[0] for x in A_], R=[x[1] for x in A_], calls=[x[2] for x in A_], carried=[x[3] for x in A_], carried_true=[x[4] for x in A_])
+    out[name] = dict(truth=NT, pair=dict(P=[x[0] for x in pair], R=[x[1] for x in pair], calls=[x[2] for x in pair], minimum=[int(x[3]) for x in pair]), first=res(A1), joint=res(A))
+    med = lambda A_: [float(np.median([x[0] for x in A_])), float(np.median([x[1] for x in A_])), float(np.median([2 * x[0] * x[1] / max(x[0] + x[1], 1e-9) for x in A_]))]
+    out[name]["mu"] = dict(mu=[0.3, 0.5, 1.0, 1.5, 2.0], PRF=[med(evaluate(*clade(L1, m_))) for m_ in (0.3, 0.5, 1.0, 1.5, 2.0)])
     if name in ("20-20", "20-5"):
         sw = []
         for r in (0.0, 0.1, 0.2, 0.3):
-            row = []
-            for fl in (0.05, 0.1, 0.2, 0.3):
-                B = np.array([x[:2] for x in accept(r, fl)]); row.append([float(np.median(B[:, 0])), float(np.median(B[:, 1])), float(np.median(2 * B[:, 0] * B[:, 1] / np.maximum(B.sum(1), 1e-9)))])
-            sw.append(row)
+            sw.append([med(evaluate(*JJ.accept(pr, cut, du, own, NB, SM, SP, 20, r, fl)[1:])) for fl in (0.05, 0.1, 0.2, 0.3)])
         out[name]["sweep"] = dict(raise_=[0.0, 0.1, 0.2, 0.3], floor=[0.05, 0.1, 0.2, 0.3], PRF=sw)
     P1, R1, P2, R2 = [np.array(x) for x in (out[name]["pair"]["P"], out[name]["pair"]["R"], out[name]["joint"]["P"], out[name]["joint"]["R"])]
     F1, F2 = 2 * P1 * R1 / np.maximum(P1 + R1, 1e-9), 2 * P2 * R2 / np.maximum(P2 + R2, 1e-9)
-    print(f"{name}  one at a time P {np.median(P1):.3f} R {np.median(R1):.3f} F1 {np.median(F1):.3f}  joint P {np.median(P2):.3f} R {np.median(R2):.3f} F1 {np.median(F2):.3f}"
-          f"  both better {int(((P2 > P1) & (R2 > R1)).sum())}/20  F1 better {int((F2 > F1).sum())}/20  dF1 {np.min(F2 - F1):+.3f}..{np.max(F2 - F1):+.3f}", flush=True)
+    print(f"{name}  one at a time P {np.median(P1):.3f} R {np.median(R1):.3f} F1 {np.median(F1):.3f}  first pass P {med(A1)[0]:.3f} R {med(A1)[1]:.3f} F1 {med(A1)[2]:.3f}"
+          f"  joint P {np.median(P2):.3f} R {np.median(R2):.3f} F1 {np.median(F2):.3f}  both better {int(((P2 > P1) & (R2 > R1)).sum())}/20  F1 better {int((F2 > F1).sum())}/20"
+          f"  dF1 {np.min(F2 - F1):+.3f}..{np.max(F2 - F1):+.3f}  carriers {sum(x[3] for x in A1)} ({sum(x[4] for x in A1)} true) -> {sum(x[3] for x in A)} ({sum(x[4] for x in A)} true)", flush=True)
 json.dump(out, open(f"{H}/runs/sim/scores.json", "w"), indent=1)
 '''
 SCRIPTS["supp"] = r'''import os, sys, json, itertools, tempfile
@@ -887,7 +849,7 @@ def outcome(ms, cuts, c0, p):
         pr = G["prob"](ms, X); m = int(round(X[0, 56])); cut = cuts.get(m, c0); d = G["mark"](K, pr)
         with tempfile.NamedTemporaryFile("w", suffix=".vcf", delete=False) as o:
             for l, x, u in zip(L, pr, d):
-                if x >= cut and not u: o.write(l)
+                if x >= cut and not u: g = l.split("\t"); g[6] = "PASS"; o.write("\t".join(g))
         n, tpc, tpt, P, R, F = G["score"](o.name, p); os.unlink(o.name)
         ok = ~d
         auc = roc_auc_score(y[ok], pr[ok]) if 0 < y[ok].sum() < ok.sum() else float("nan")
@@ -927,6 +889,75 @@ if job in ("ablation", "all"):
     rows += evaluate("seeds=1", LOPO)
     G["fitm"] = f5
     write(rows, f"{OUT}/ablation.tsv")
+if job in ("grid", "xgb"):
+    NT = int(os.environ.get("OMP_NUM_THREADS", "4")); i0, n0 = map(int, os.environ.get("SHARD", "0/1").split("/"))
+    if job == "grid":
+        AX = [("learning_rate", [0.02, 0.05, 0.1]), ("max_iter", [150, 300, 600]), ("max_leaf_nodes", [7, 15, 31]), ("min_samples_leaf", [10, 40, 160]), ("l2_regularization", [0.0, 1.0, 5.0])]
+        fitm = lambda X, y, h: [G["HistGradientBoostingClassifier"](**dict(G["HGB"], **h), random_state=s).fit(X, y) for s in range(5)]
+    else:
+        import xgboost as xgb
+        from sklearn.model_selection import train_test_split
+        AX = [("learning_rate", [0.02, 0.05, 0.1]), ("n_estimators", [150, 300, 600]), ("max_depth", [3, 4, 6]), ("min_child_weight", [1, 5, 20]), ("reg_lambda", [0.0, 1.0, 5.0])]
+        def fitm(X, y, h):
+            ms = []
+            for s in range(5):
+                a, b, ya, yb = train_test_split(X, y, test_size=0.1, random_state=s, stratify=y)
+                ms.append(xgb.XGBClassifier(**h, subsample=0.8, colsample_bytree=0.8, tree_method="hist", early_stopping_rounds=10, n_jobs=NT, random_state=s, verbosity=0).fit(a, ya, eval_set=[(b, yb)], verbose=False))
+            return ms
+    import glob, collections
+    f = f"{OUT}/{job}.{i0}.tsv"; seen = collections.Counter()
+    for g in glob.glob(f"{OUT}/{job}.*.tsv"): seen.update(l.split("\t")[0] for l in open(g).read().split("\n")[1:] if l)
+    done = {v for v, n in seen.items() if n >= len(D)}
+    out = open(f, "a")
+    if not out.tell(): out.write("variant\tpair\tsetting\tcalls\tP\tR\tF1\troc_auc\tpr_auc\tcut\tminimum\tinner_f1\n")
+    tmp = f"{OUT}/{job}.{i0}.pass.vcf"
+    def passed(ms, cuts, c0, p):
+        r = {}
+        for (q, k), (L, X, K, y, keep) in D.items():
+            if q != p: continue
+            pr = G["prob"](ms, X); m = int(round(X[0, 56])); cut = cuts.get(m, c0); d = G["mark"](K, pr)
+            with open(tmp, "w") as o:
+                for l, x, u in zip(L, pr, d):
+                    if x >= cut and not u: g = l.split("\t"); g[6] = "PASS"; o.write("\t".join(g))
+            n, tpc, tpt, P, R, F = G["score"](tmp, p); ok = ~d
+            auc = roc_auc_score(y[ok], pr[ok]) if 0 < y[ok].sum() < ok.sum() else float("nan")
+            ap = average_precision_score(y[ok], pr[ok]) if y[ok].sum() > 0 else float("nan")
+            r[k] = dict(calls=n, P=P, R=R, F1=F, roc_auc=auc, pr_auc=ap, cut=cut, minimum=m)
+        return r
+    runs = lambda tr: [k for k in D if k[0] in tr and k[1] != "100p"]
+    XY = lambda ks: (np.vstack([D[k][1][D[k][4]] for k in ks]), np.concatenate([D[k][3][D[k][4]] for k in ks]))
+    todo = [c for c in itertools.product(*[v for _, v in AX]) if ",".join(f"{a}={v}" for (a, _), v in zip(AX, c)) not in done]
+    for c in todo[i0::n0]:
+        h = dict(zip([a for a, _ in AX], c)); name = ",".join(f"{a}={v}" for a, v in h.items())
+        M = {tr: fitm(*XY(runs(tr)), h) for r in (4, 3) for tr in itertools.combinations(TRAIN, r)}
+        for p in TRAIN:
+            tr = tuple(q for q in TRAIN if q != p); oof, ys, gs = [], [], []
+            for q in tr:
+                mi = M[tuple(x for x in tr if x != q)]
+                for k in runs((q,)):
+                    Xk, yk = D[k][1][D[k][4]], D[k][3][D[k][4]]; oof.append(G["prob"](mi, Xk)); ys.append(yk); gs.append(np.round(Xk[:, 56]))
+            o, y, g = np.concatenate(oof), np.concatenate(ys), np.concatenate(gs)
+            cuts = {int(m): float(max(G["CUTS"], key=lambda t: G["f1"](o[g == m], y[g == m], t))) for m in set(g)}
+            c0 = float(max(G["CUTS"], key=lambda t: G["f1"](o, y, t)))
+            inner = float(np.mean([G["f1"](a, b, cuts.get(int(m[0]), c0)) for a, b, m in zip(oof, ys, gs)]))
+            for k, x in passed(M[tr], cuts, c0, p).items():
+                out.write("\t".join([name, p, k, str(x["calls"])] + [f"{x[v]:.4f}" for v in ("P", "R", "F1", "roc_auc", "pr_auc", "cut")] + [str(x["minimum"]), f"{inner:.4f}"]) + "\n")
+        out.flush(); print(job, name, flush=True)
+if job == "firstpass":
+    orig = dict(D); rows = []
+    for name in ("excluded", "kept"):
+        O = f"{OUT}/firstpass/{name}"; os.makedirs(O, exist_ok=True)
+        for k, v in orig.items(): D[k] = v if name == "excluded" else v[:4] + (np.ones(len(v[3]), bool),)
+        for p in TRAIN:
+            tr = tuple(q for q in TRAIN if q != p); ms, cuts, c0, ts, nt = G["fit"](tr)
+            for k, x in outcome(ms, cuts, c0, p).items(): rows.append(dict(variant=name, pair=p, setting=k, train_records=nt, **x))
+            L, X, K, y, keep = D[(p, "full")]; pr = G["prob"](ms, X); cut = cuts.get(int(round(X[0, 56])), c0); d = G["mark"](K, pr)
+            with open(f"{O}/{p}.vcf", "w") as o:
+                o.write("".join(l for l in open(G["sets"](p)["full"]) if l[0] == "#"))
+                for l, r, u in zip(L, pr, d):
+                    g = l.split("\t"); g[6] = "DUPL" if u else "PASS" if r >= cut else "LOW"; g[7] += ";VP=%.4f" % r; o.write("\t".join(g))
+    D.update(orig)
+    write(rows, f"{OUT}/firstpass.tsv")
 if job == "features":
     GROUPS = [("Tumor reads, single anchor pair", [1, 2, 3, 4, 5, 35]), ("Normal reads, single anchor pair", [6, 7, 8, 9, 10, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]),
               ("Tumor reads, anchor grid and paths", [39, 40, 49]), ("Normal reads, anchor grid and paths", [38, 41, 42, 43, 44, 45, 46, 47, 48, 50, 51, 52]),
@@ -954,13 +985,13 @@ if job == "features":
 print("done", job)
 '''
 SCRIPTS["labels"] = r'''import os, sys
-os.environ.setdefault("OUTV", "/home/yuio/janus/bench/supp/labels17")
+os.environ.setdefault("OUTV", "/home/yuio/janus/bench/supp/labels11")
 os.makedirs(os.environ["OUTV"], exist_ok=True)
 G = {"__name__": "supp", "SCRIPTS": SCRIPTS, "run_score": run_score}; sys.argv = ["supp"]
 v = G["SCRIPTS"]["verdict"]
 head, main = v.split("t0 = time.time()")
-head = head.replace('f"{TR}/castle_without_snape/{p}/None_minda_ensemble.vcf"', 'f"{H}/eval_sets/{p}/all_without/None_minda_ensemble.vcf"')
-assert "eval_sets" in head
+head = head.replace('f"{H}/eval_sets/{p}/all_without/None_minda_ensemble.vcf"', 'f"{TR}/castle_without_snape/{p}/None_minda_ensemble.vcf"')
+assert "castle_without_snape" in head
 exec(head, G)
 exec("t0 = time.time()" + main, G)
 '''
@@ -1018,7 +1049,7 @@ for x in (5, 10, 15, 20, 30):
             continue
         a, b, tot = take(cum, ln, 0, x * G)
         put(f"{O}/lists/{p}.{s}.{x}x.txt", [(s, a, b)])
-if p in ("hcc1954", "hcc1395"):
+if p in ("hcc1954", "h2009", "hcc1937", "h1437", "hcc1395"):
     nb = int(D["n"][3][-1])
     nm = min(nb - 24 * G - G // 10, 30 * G)
     a, b, tot = take(D["n"][3], D["n"][2], 0, nm)

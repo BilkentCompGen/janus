@@ -1,5 +1,5 @@
 #!/bin/bash
-D=$1; N=$(realpath $2); T=$(realpath $3); P=${4:-16}; B=/home/yuio/janus/build/janus; R=/home/yuio/janus/ref
+D=$1; N=$(realpath $2); T=$(realpath $3); P=${4:-16}; J=/home/yuio/janus; B=$J/build/janus; R=$J/ref; PY=${PY:-$J/.venv-ml/bin/python}
 mkdir -p $D; cd $D
 step() { n=$1; shift; [ -e done.$n ] && return; /usr/bin/time -f "$n %e s %M KB %U user %S sys" "$@" > log.$n 2>&1 || exit 1; tail -1 log.$n >> steps.txt; touch done.$n; }
 for s in n t; do f=$N; [ $s = t ] && f=$T; step pack_$s $B pack -i $f -o $s.svb -t $P; done
@@ -19,3 +19,4 @@ step clip $B clip -i ev -r aln.paf -o ev.gaps.fa
 step gaps minimap2 -cx sr --secondary=no -t $P -o ev.gaps.raw.paf $R/${REF:-hg38_parmask}.sr.mmi ev.gaps.fa
 step patch $B patch -i ev -r ev.gaps.raw.paf -d aln.paf -o ev.paf
 step call $B call -i ev -r n.svb,t.svb -d $R/${REF:-hg38_parmask}.fa -g graph.gph -o calls.vcf -v $R/$( [ -n "$REF" ] && echo $REF.trf.bed || echo vntr.trf.bed ) -t $P -m $MT ${GERMLINE:+-G 1}
+step classify env PYTHONPATH=$J/python $PY -m janus.classify -i calls.vcf -o janus.vcf -m $J/models/janus.pkl -H t.cnt.hist

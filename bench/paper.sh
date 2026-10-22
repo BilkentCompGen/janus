@@ -4,10 +4,10 @@
 #   fetch        download the read sets of the paper's pairs into hifi/<pair>
 #   align        minimap2 of both read sets of each CASTLE pair, measured (runs/align)
 #   full         janus on each pair, measured (runs/full)
-#   truth        the published CASTLE consensus regenerated with Minda, the training labels (hifi/truth/castle_without_snape)
+#   truth        the published CASTLE consensus regenerated with Minda, the training labels of the labels step (hifi/truth/castle_without_snape)
 #   coverage     janus at 5-30x on every pair, then verdict
 #   purity       janus on tumor/normal mixtures at 30x, then verdict
-#   verdict      one classifier over the full, coverage and purity runs, each CASTLE pair held out (verdict/)
+#   verdict      one classifier over the full, coverage and purity runs, each CASTLE pair held out, trained on the consensus of the 17 call sets other than janus (verdict/; builds that consensus first if missing)
 #   phase        Clair3 + LongPhase on each normal, haplotag both BAMs, measured (runs/phase)
 #   competitors  every other caller on the CASTLE pairs, measured (runs/competitors/<tool>/<pair>); competitors <tool> hg008 for the other pairs
 #   covcallers   Severus, SAVANA and nanomonsv on the same reads as the coverage and purity runs of janus (runs/coverage_callers)
@@ -15,11 +15,13 @@
 #   loo          every HiFi call set scored against a consensus built without it (eval_loo)
 #   external     janus and every HiFi caller on HG008 and COLO829 against their truth sets (runs/external_eval)
 #   covscore     janus, Severus, SAVANA and nanomonsv at every depth and purity (runs/coverage_eval)
-#   labels       the classifier trained on the consensus of the 17 call sets other than janus, scored (supp/labels17)
+#   labels       the classifier trained on the published CASTLE consensus of 11 call sets, scored (supp/labels11)
 #   supp         held-out AUC, all 3-train/2-test splits, the classifier ablation and the feature groups (supp)
+#   grid         full grids of the gradient-boosted trees (HistGradientBoosting) and of XGBoost, 3^5 parameter sets each, every set run like the paper's classifier with each CASTLE pair held out (supp/grid.tsv, supp/xgb.tsv)
 #   sim          the 20-tumor simulation at five normal/tumor depths: pairwise and joint runs, classified and scored (runs/sim)
 #   simmap       minimap2 on the 21 simulated read sets at 5/5 and 20/20, one at a time, measured (runs/sim/mm2)
-#   sweep        the count-stage thresholds theta0 (5, 10, 15, 20, 25) x theta_t (20, 30, 40, 50, 60) on the CASTLE full, coverage and purity runs: janus reruns only a minimum read support pair (m0, mt) not seen before, one classifier and Minda score per distinct configuration (runs/sweep)
+#   sweep        the count-stage thresholds theta0 (5, 10, 15, 20, 25) x theta_t (20, 30, 40, 50, 60), plus (70, 40), (10, 5) and (70, 5) for m0 = 2 or mt = 3 on every run, on the CASTLE full, coverage and purity runs: janus reruns only a minimum read support pair (m0, mt) not seen before, one classifier and Minda score per distinct configuration (runs/sweep)
+#   sweepscore   each sweep configuration scored like the paper: consensus with and without janus, leave-one-out, every depth and purity (runs/sweep/conf/<config>/rescore.tsv, runs/sweep/rescore.txt)
 #   timing       the CASTLE pairs and the simulated runs once more, one at a time on an otherwise idle machine, measured (runs_clean)
 #   figures      Figure 1, the other figures, the tables and the quoted numbers (bench/figures.py, bench/out), and the paper
 #   guard        memory guard, disk guard and load log (run as services)
@@ -429,6 +431,7 @@ align)
 full)
     for p in ${*:-$LABELED}; do janus_run full $R/full/$p $p ""; done ;;
 verdict)
+    for p in $CASTLE; do [ -s $H/eval_sets/$p/all_without/None_minda_ensemble.vcf ] || NOJANUS=1 bash $H/paper.sh consensus $p; done
     mkdir -p $H/verdict; ( cd $H && OMP_NUM_THREADS=16 taskset -c 0-15 $V $H/paper.py verdict > $H/verdict/stdout.txt 2>&1 ); cat $H/verdict/log.txt ;;
 truth)
     T=$S/hifi/truth/castle_without_snape; mkdir -p $T
@@ -448,7 +451,7 @@ external)
                 *) v=$R/competitors/$t/$p/calls.vcf; [ -s $v ] || v=$R/competitors/${t%_phased}/$p/calls.vcf; [ -s $v ] || continue
                    norm $v $t $d/in.vcf ;;
             esac
-            $M truthset --base ${TB[$p]} --vcfs $d/in.vcf --min_size 50 --tolerance 500 --out_dir $d/minda > $d/minda.log 2>&1
+            [ -s $d/minda/results/overall.tsv ] || $M truthset --base ${TB[$p]} --vcfs $d/in.vcf --min_size 50 --tolerance 500 --out_dir $d/minda > $d/minda.log 2>&1
             echo -e "$p\t$t\t$(awk -F'\t' 'NR==2{printf "%s\t%s\t%s\t%.3f\t%.3f\t%.3f", $8, $2, $4, $5, $6, $7}' $d/minda/results/overall.tsv)\t$(py score ${TB[$p]} $d/in.vcf)"
         done
     done > $O/scores.new; mv $O/scores.new $O/scores.tsv; column -t $O/scores.tsv ;;
@@ -537,7 +540,7 @@ sim)
         for f in n.cnt n.svb.exc; do [ -s $N/$f ] || cp $p/work/$f $N/; done
         [ -s $p/calls.vcf ] && [ -s $p/t.svb.exc ] && rm -rf $p/work
     }
-    export -f one reads; export S O E TUM
+    export -f one reads; export S O E TUM R
     for set in "5 5" "10 10" "20 10" "20 5" "20 20"; do
         set -- $set; N=$E/${1}_${2}
         [ -s $N/n.cnt ] || for t in $TUM; do [ -s $N/$t/t.cnt.hist ] && continue; one $1 $2 $t; break; done
@@ -554,17 +557,20 @@ covcallers)
         for t in severus_hp savana nanomonsv; do
             n=$t; [ $t = severus_hp ] && n=severus; th=16; [ $t = savana ] && th=8
             local D=$C/$n/$set; [ -s $D/calls.vcf ] && continue; mkdir -p $D
-            /usr/bin/time -f "%e %M %x" -o $D/time.txt taskset -c 0-15 bash $H/paper.sh caller $t $T $N $D/out $th > $D/stdout.txt 2>&1
+            /usr/bin/time -f "%e %M %x" -o $D/time.txt taskset -c ${CPUS:-0-15} bash $H/paper.sh caller $t $T $N $D/out $th > $D/stdout.txt 2>&1
             [ -s $D/out/calls.vcf ] && { cp $D/out/calls.vcf $D/out/log.txt $D/; rm -rf $D/out; }
         done
     }
+    have() { local t; for t in severus savana nanomonsv; do [ -s $C/$t/$1/calls.vcf ] || return 1; done; }
     for p in ${*:-$CASTLE}; do
         W=$C/work/$p; B=$S/hifi/$p; mkdir -p $W/30x; ln -sfn $B/clair3 $W/30x/clair3
         for s in n t; do [ -s $C/names/$p.$s.tsv ] || samtools view -@ 8 -F 0x900 $B/$s.bam | awk -F'\t' '{print $1 "\t" length($10)}' > $C/names/$p.$s.tsv; done
         py select $p $C
-        for s in n t; do [ -s $W/30x/$s.bam.bai ] || sub $C/lists/$p.$s.30x.txt $B/$s.bam $W/30x/$s.bam; done
         for x in 30 20 15 10 5; do
             [ -s $C/lists/$p.n.${x}x.txt ] || continue
+            have ${p}_${x}x && continue
+            [ -s $W/30x/t.bam.bai ] || sub $C/lists/$p.t.30x.txt $B/t.bam $W/30x/t.bam
+            [ -s $W/30x/n.bam.bai ] || sub $C/lists/$p.n.30x.txt $B/n.bam $W/30x/n.bam
             if [ $x != 30 ]; then
                 mkdir -p $W/${x}x; ln -sfn $B/clair3 $W/${x}x/clair3
                 for s in n t; do [ -s $W/${x}x/$s.bam.bai ] || sub $C/lists/$p.$s.${x}x.txt $W/30x/$s.bam $W/${x}x/$s.bam; done
@@ -576,16 +582,21 @@ covcallers)
         [ -s $C/lists/$p.n.purity.txt ] && { [ -s $W/pn/n.bam.bai ] || sub $C/lists/$p.n.purity.txt $B/n.bam $W/pn/n.bam; }
         for q in 100 80 60 40 20; do
             [ -s $C/lists/$p.t.${q}p.tumor_part.txt ] || continue
+            have ${p}_${q}p && continue
+            [ $q = 100 ] && { [ -s $W/30x/t.bam.bai ] || sub $C/lists/$p.t.30x.txt $B/t.bam $W/30x/t.bam; }
+            while [ $(jobs -rp | wc -l) -ge ${MIXJOBS:-1} ]; do wait -n; done
+            (
             D=$W/p$q; mkdir -p $D
             if [ $q = 100 ]; then ln -sfn $W/30x/t.bam $D/t.bam; ln -sfn $W/30x/t.bam.bai $D/t.bam.bai
             else
-                sub $C/lists/$p.t.${q}p.tumor_part.txt $W/30x/t.bam $D/a.bam; sub $C/lists/$p.t.${q}p.normal_part.txt $B/n.bam $D/b.bam
-                samtools merge -@ 12 -f -o $D/t.bam $D/a.bam $D/b.bam && samtools index -@ 12 $D/t.bam
+                samtools merge -@ 8 -l 1 -f -o $D/t.bam <(samtools view -@ 4 -u -N $C/lists/$p.t.${q}p.tumor_part.txt $B/t.bam) <(samtools view -@ 4 -u -N $C/lists/$p.t.${q}p.normal_part.txt $B/n.bam) && samtools index -@ 8 $D/t.bam
             fi
             ln -sfn $W/pn/n.bam $D/n.bam; ln -sfn $W/pn/n.bam.bai $D/n.bam.bai; ln -sfn $B/clair3 $D/clair3
             calls ${p}_${q}p $D/t.bam $D/n.bam
             rm -rf $D
+            ) &
         done
+        wait
         rm -rf $W
     done ;;
 consensus)
@@ -596,9 +607,10 @@ consensus)
             v=$R/competitors/$t/$p/calls.vcf; [ -s $v ] || v=$R/competitors/${t%_phased}/$p/calls.vcf; echo "$t $v" >> $W/in/SOURCES
             norm $v $t $W/in/$t.vcf; hifi="$hifi $W/in/$t.vcf"
         done
-        grep -E '^#|PASS' $H/verdict/$p.vcf > $W/in/snape.vcf
+        [ -s $W/all_without/None_minda_ensemble.vcf ] || ens $W/all_without 10 $hifi $ONT $SR
+        [ -n "$NOJANUS" ] && return
+        grep -E '^#|PASS' ${VD:-$H/verdict}/$p.vcf > $W/in/snape.vcf
         ens $W/all_with 11 $hifi $W/in/snape.vcf $ONT $SR
-        ens $W/all_without 10 $hifi $ONT $SR
         tset $W/all_without/None_minda_ensemble.vcf $W/in/snape.vcf $W/all_without_snape
         for t in sniffles2_mosaic delly; do
             [ -s $R/competitors/$t/$p/calls.vcf ] || continue
@@ -608,20 +620,20 @@ consensus)
     }
     for p in ${*:-$CASTLE}; do one $p & done; wait ;;
 loo)
-    E=$H/eval_sets; LO=${LOO:-$H/eval_loo}
+    E=${E:-$H/eval_sets}; LO=${LOO:-$H/eval_loo}
     one() {
         local p=$1 x t W hifi; castle $p
         for x in $HIFI snape; do
             W=$LO/$p/$x; hifi=""; mkdir -p $W; [ -s $W/score/results/overall.tsv ] && continue
             for t in $HIFI snape; do [ $t = $x ] || hifi="$hifi $E/$p/in/$t.vcf"; done
-            ens $W/cons 10 $hifi $ONT $SR
+            [ -s $W/cons/None_minda_ensemble.vcf ] || ens $W/cons 10 $hifi $ONT $SR
             tset $W/cons/None_minda_ensemble.vcf $E/$p/in/$x.vcf $W/score
         done
     }
     for p in ${*:-$CASTLE}; do one $p & done; wait ;;
 covscore)
     C=$R/coverage_callers; O=${O:-$R/coverage_eval}; mkdir -p $O
-    base() { case $1 in hg008) echo $S/hifi/truth/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar_PASS.draftbenchmark.vcf.gz ;; colo829) echo $S/hifi/truth/colo829/truth.vcf ;; *) echo $H/eval_sets/$1/all_with/None_minda_ensemble.vcf ;; esac; }
+    base() { case $1 in hg008) echo $S/hifi/truth/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar_PASS.draftbenchmark.vcf.gz ;; colo829) echo $S/hifi/truth/colo829/truth.vcf ;; *) echo ${E:-$H/eval_sets}/$1/all_with/None_minda_ensemble.vcf ;; esac; }
     one() {
         local d=$O/$2/$3; [ -s $d/minda/results/overall.tsv ] && return; mkdir -p $d
         case $3 in snape) grep -E '^#|	PASS	' $4 > $d/in.vcf ;; *) cp $4 $d/in.vcf ;; esac
@@ -629,7 +641,7 @@ covscore)
     }
     for p in ${*:-$LABELED}; do
         for s in ${p}_30x ${p}_20x ${p}_15x ${p}_10x ${p}_5x ${p}_100p ${p}_80p ${p}_60p ${p}_40p ${p}_20p; do
-            v=$H/verdict/coverage_matched/$s.vcf; [ ${s: -1} = p ] && v=$H/verdict/purity_matched/$s.vcf
+            v=${VD:-$H/verdict}/coverage_matched/$s.vcf; [ ${s: -1} = p ] && v=${VD:-$H/verdict}/purity_matched/$s.vcf
             [ -s $v ] && one $p $s snape $v &
             for t in severus savana nanomonsv; do [ -s $C/$t/$s/calls.vcf ] && one $p $s $t $C/$t/$s/calls.vcf & done
         done
@@ -640,30 +652,34 @@ covscore)
         awk -F'\t' -v s=$s -v t=$t 'NR==2{printf "%s\t%s\t%s\t%.4f\t%.4f\t%.4f\n", s, t, $8, $5, $6, $7}' $f
     done | sort > $O/scores.tsv ;;
 labels)
-    V17=${V17:-$H/supp/labels17}; O=$V17/minda; E=$H/eval_sets; mkdir -p $O
-    ( cd $H && OUTV=$V17 OMP_NUM_THREADS=16 taskset -c 0-15 $V $H/paper.py labels > $V17/stdout.txt 2>&1 )
+    V11=${V11:-$H/supp/labels11}; O=$V11/minda; E=$H/eval_sets; mkdir -p $O
+    ( cd $H && OUTV=$V11 OMP_NUM_THREADS=16 taskset -c 0-15 $V $H/paper.py labels > $V11/stdout.txt 2>&1 )
     row() { awk -F'\t' -v k="$2" 'NR>1 && (k == "" || $1 == k) {printf "%.4f\t%.4f\t%.4f\n", $5, $6, $7; exit}' $1; }
     pair() {
         local p=$1 W=$O/$1 hifi="" t x; castle $p; mkdir -p $W
-        grep -E '^#|	PASS	' $V17/$p.vcf > $W/snape.vcf
+        grep -E '^#|	PASS	' $V11/$p.vcf > $W/snape.vcf
         for t in $HIFI; do hifi="$hifi $E/$p/in/$t.vcf"; done
         ens $W/with 11 $hifi $W/snape.vcf $ONT $SR
         tset $E/$p/all_without/None_minda_ensemble.vcf $W/snape.vcf $W/without
-        for x in 30 20 15 10 5; do grep -E '^#|	PASS	' $V17/coverage_matched/${p}_${x}x.vcf > $W/d$x.vcf; tset $E/$p/all_with/None_minda_ensemble.vcf $W/d$x.vcf $W/d$x; done
+        for x in 30 20 15 10 5; do grep -E '^#|	PASS	' $V11/coverage_matched/${p}_${x}x.vcf > $W/d$x.vcf; tset $E/$p/all_with/None_minda_ensemble.vcf $W/d$x.vcf $W/d$x; done
         echo -e "$p\twith\t$(awk -F'\t' '$1 ~ /^K_/ {printf "%.4f\t%.4f\t%.4f", $5, $6, $7}' $W/with/results/overall.tsv)"
         echo -e "$p\twithout\t$(row $W/without/results/overall.tsv)"
         for x in 30 20 15 10 5; do echo -e "$p\t${x}x\t$(row $W/d$x/results/overall.tsv)"; done
     }
     ext() {
-        local W=$O/$1; mkdir -p $W; grep -E '^#|	PASS	' $V17/$1.vcf > $W/snape.vcf; tset $2 $W/snape.vcf $W/truth
+        local W=$O/$1; mkdir -p $W; grep -E '^#|	PASS	' $V11/$1.vcf > $W/snape.vcf; tset $2 $W/snape.vcf $W/truth
         echo -e "$1\ttruth\t$(row $W/truth/results/overall.tsv)\t$(grep -vc '^#' $W/snape.vcf)"
     }
     for p in $CASTLE; do pair $p > $O/$p.tsv & done
     ext hg008 $S/hifi/truth/nist_hg008/GRCh38_HG008-T-V0.5_somatic-stvar_PASS.draftbenchmark.vcf.gz > $O/hg008.tsv &
     ext colo829 $S/hifi/truth/colo829/truth.vcf > $O/colo829.tsv &
-    wait; cat $O/*.tsv > $V17/scores.tsv; cat $V17/scores.tsv ;;
+    wait; cat $O/*.tsv > $V11/scores.tsv; cat $V11/scores.tsv ;;
 supp)
     for j in auc splits ablation features; do ( cd $H && $V $H/paper.py supp $j ) & done; wait ;;
+grid)
+    O=${SUPPOUT:-$H/supp}; mkdir -p $O
+    for j in grid xgb; do for i in 0 1 2 3; do ( cd $H && SHARD=$i/4 OMP_NUM_THREADS=4 $V $H/paper.py supp $j > $O/$j.$i.log 2>&1 ) & done; done; wait
+    for j in grid xgb; do awk 'FNR == 1 && NR != 1 {next} !s[$0]++' $O/$j.[0-9].tsv > $O/$j.tsv; done ;;
 simmap)
     O=$R/sim; MMI=$S/simulation/phylo/ref/chm13.map-hifi.mmi; TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' '); simreads
     [ -s $MMI ] || minimap2 -x map-hifi -d $MMI $S/ref/chm13v2.fa
@@ -726,6 +742,24 @@ sweep)
         done
     done
     py sweep table > $W/summary.txt; log "sweep done" ;;
+sweepscore)
+    W=$R/sweep
+    ev() {
+        local k=$1 C=$W/conf/$1; log "[config $k] start"
+        E=$C/eval_sets VD=$C/verdict bash $H/paper.sh consensus
+        E=$C/eval_sets LOO=$C/eval_loo bash $H/paper.sh loo
+        E=$C/eval_sets VD=$C/verdict O=$C/coverage_eval bash $H/paper.sh covscore $CASTLE
+        py sweep rescore $C > $C/rescore.tsv; log "[config $k] done"
+    }
+    while :; do
+        a=$(systemctl --user is-active janus-sweep)
+        for k in $(printf '%s\n' $* $(cat $W/configs.txt) | awk '!s[$0]++'); do
+            [ -s $W/conf/$k/rescore.tsv ] || [ ! -s $W/conf/$k/verdict/folds.json ] && continue
+            while [ $(jobs -rp | wc -l) -ge 2 ]; do wait -n; done; ev $k &
+        done; wait
+        [ "$a" = active ] || break; sleep 600
+    done
+    py sweep rescores > $W/rescore.txt ;;
 timing)
     RC=$H/runs_clean; Q=$RC/queue.log; mkdir -p $RC; B=$S/build/janus; TUM=$(seq -f "T%02g" 1 20 | tr '\n' ' ')
     for p in $CASTLE; do janus_run full $RC/full/$p $p ""; done
