@@ -762,8 +762,8 @@ def fig3(main=False):
         w = json.load(open(f"{R}/competitors/{t}/hcc1954/run.json"))["total"]["wall_s"]; p_ = phase if ph else 0
         d.barh(k, ALN / 3600, color="#b9b9b9", height=0.66); d.barh(k, p_ / 3600, left=ALN / 3600, color="#e0a030", height=0.66); d.barh(k, w / 3600, left=(ALN + p_) / 3600, color="#3f6ea5", height=0.66)
         tot = (ALN + p_ + w) / 3600; SD += [["a", n, x_, v, "h"] for x_, v in (("mapping", ALN / 3600), ("phasing", p_ / 3600), ("caller", w / 3600), ("total", tot))] + [["a", n, "factor over janus", tot * 3600 / sn, "x"]]; d.annotate(f"{int(tot)}:{int(round((tot - int(tot)) * 60)):02d} h", (tot, k), fontsize=FS - 0.4, **pad); d.text(0.07, k, f"{tot * 3600 / sn:.0f}×", va="center", ha="left", fontsize=FS - 0.8, color=C["ink"], fontweight="bold")
-    fig.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
-               loc="lower center", bbox_to_anchor=((19 + 109.5) / 2 / 160, (Y1 + 36 + 0.8) / 104), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0)
+    d.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
+             loc="lower left", bbox_to_anchor=(-0.05, 1.0), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0.3)
     d.set_xlim(0, 7); d.set_xticks(range(8)); d.set_yticks(range(len(ROWS) + 1)); d.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); d.get_yticklabels()[0].set_fontweight("bold"); d.get_yticklabels()[0].set_color(JANUS)
     d.set_ylim(len(ROWS) + 0.6, -0.6); d.set_xlabel("Wall clock on HCC1954, 16 threads (h)"); d.tick_params(axis="y", length=0); tag(d, "a", 2, 4.6)
     # b: memory trace
