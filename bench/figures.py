@@ -144,8 +144,10 @@ PUR, PL = ["100p", "80p", "60p", "40p", "20p"], ["100%", "80%", "60%", "40%", "2
 TYPES = ["BND", "DEL", "DUP", "INS", "INV"]
 SIZES = [("BND", "no length"), ("50-100", "50–100 bp"), ("100-1k", "0.1–1 kb"), ("1k-10k", "1–10 kb"), ("10k-100k", "10–100 kb"), (">100k", ">100 kb")]
 CAL5 = ["janus", "Severus", "SAVANA", "nanomonsv", "Sniffles2"]
-LBL = {"colo829": {"janus": (0.86, 0.96, "center"), "SAVANA": (0.50, 0.93, "center"), "Severus": (0.40, 0.78, "right"), "nanomonsv": (0.99, 0.60, "right"), "dysgu": (0.99, 0.48, "right")},
-       "hg008": {"janus": (0.99, 0.97, "right"), "Severus": (0.70, 0.92, "right"), "nanomonsv": (0.66, 0.78, "right"), "dysgu": (0.64, 0.56, "right"), "SAVANA": (0.99, 0.56, "right")}}
+NUM = {"colo829": {"janus": (4, 0, "left"), "SAVANA": (-1, 5, "center"), "nanomonsv": (3.5, 1.5, "left"), "dysgu": (3, -2, "left"), "Severus": (-3.5, 0, "right"),
+                   "SVision-pro": (3.2, 0, "left"), "DeBreak": (0, 4.5, "center"), "Sniffles2": (-3.2, 0, "right"), "kled": (3.2, 0, "left"), "cuteSV": (3.2, -4.5, "left"), "SVDSS": (3.2, 0, "left")},
+       "hg008": {"janus": (0, 5.5, "center"), "Severus": (-3.5, 0, "right"), "nanomonsv": (-3, -5, "center"), "SAVANA": (3.5, 0, "left"), "dysgu": (-3.2, 0, "right"),
+                 "Sniffles2": (-3.2, 0, "right"), "DeBreak": (3.2, 0, "left"), "kled": (3.2, 0, "left"), "SVision-pro": (3.2, 0, "left"), "cuteSV": (3.2, 0, "left"), "SVDSS": (3.2, 0, "left")}}
 ROWS = P5 + ["hg008", "colo829"]
 
 
@@ -582,10 +584,8 @@ def ext_scatter(ax, E, sample, ttl):
     for n, (p, r, f1) in sorted(E.items(), key=lambda x: x[1][2]):
         c = color(n); top = n == "janus"
         ax.scatter([p], [r], s=46 if top else 24, marker=MARK.get(n, "o"), facecolor=c, edgecolor="#333333" if c in ("#d0d0d0", "#b0b0b0") else c, lw=0.5, zorder=5 if top else 4)
-        if n not in ["janus"] + COV + ["dysgu"]: continue  # the other callers keep their colour and marker; the legend names them
-        lx, ly, ha = LBL[sample][n]
-        ax.annotate(f"{n} {f1:.2f}", (p, r), xytext=(lx, ly), fontsize=FS - 0.5, ha=ha, va="center", color=JANUS if top else "#333333", fontweight="bold" if top else "normal",
-                    bbox=dict(boxstyle="square,pad=0.12", fc="white", ec="none"), arrowprops=dict(arrowstyle="-", color="#9a9a9a", lw=0.4, shrinkA=0, shrinkB=2.5), zorder=3)
+        dx, dy, ha = NUM[sample].get(n, (3.2, 0, "left"))  # the F1 score in the caller's colour next to its marker; the legend names the callers
+        ax.annotate(f"{f1:.2f}", (p, r), xytext=(dx, dy), textcoords="offset points", fontsize=FS - 0.8, ha=ha, va="center", color=c if c not in ("#d0d0d0", "#b0b0b0") else "#555555", fontweight="bold" if top else "normal", zorder=6)
     ax.set_xlim(0, 1.0); ax.set_ylim(0, 1.02); fticks(ax, "x"); fticks(ax, "y"); ax.set_xlabel("Precision"); ax.set_ylabel("Recall")
     title(ax, ttl, 1.05)
 
@@ -838,7 +838,7 @@ def fig3(main=False):
     c.text(0, bot + 3, f"{bot:.0f}", ha="center", fontsize=FS - 0.4)
     SD += [["c", "janus", lab, v, "GB"] for (lab, _), v in zip(KIND, SZ)] + [["c", "janus", "Total", bot, "GB"], ["c", "BAM", "normal", BAMS[0], "GB"], ["c", "BAM", "tumor", BAMS[1], "GB"], ["c", "BAM", "Total", BAMS.sum(), "GB"]]
     c.bar(1, BAMS[0], color="#b9b9b9", width=0.62, label="BAM, normal"); c.bar(1, BAMS[1], bottom=BAMS[0], color="#d6d6d6", width=0.62, label="BAM, tumor"); c.text(1, BAMS.sum() + 3, f"{BAMS.sum():.0f}", ha="center", fontsize=FS - 0.4)
-    c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean of pairs (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
+    c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
     fig.legend(handles=c.get_legend_handles_labels()[0], loc="lower center", bbox_to_anchor=((114 + 159) / 2 / 160, 52.8 / 104), ncol=2, fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, columnspacing=0.9, labelspacing=0.4, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "b", 114.5, 3.6)
     # d: stage times per pair
     a = ax(74.5, Y2, 35, 27); rows = P5 + ["mean"]; tot = []
