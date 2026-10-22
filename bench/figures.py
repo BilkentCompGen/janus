@@ -106,6 +106,24 @@ def box(fig, x0, y0, x1, y1):
     w, h = fig.get_size_inches() / MM
     fig.add_artist(FancyBboxPatch((x0 / w, y0 / h), (x1 - x0) / w, (y1 - y0) / h, boxstyle="round,pad=0,rounding_size=0.008", transform=fig.transFigure,
                                   fill=False, ec="#c4c4c4", lw=0.6, zorder=0))
+    fig._boxes = getattr(fig, "_boxes", []) + [(x0, y0, x1, y1)]
+
+
+def boxcheck(fig, name):
+    """Print every text whose extent crosses the edge of a frame drawn with box()."""
+    import matplotlib.text
+    fig.canvas.draw(); rd = fig.canvas.get_renderer(); w, h = fig.get_size_inches() / MM; dpi = fig.dpi / 25.4
+    bad = 0
+    for t in fig.findobj(matplotlib.text.Text):
+        if not t.get_visible() or not t.get_text().strip(): continue
+        bb = t.get_window_extent(rd); tx0, ty0, tx1, ty1 = bb.x0 / dpi, bb.y0 / dpi, bb.x1 / dpi, bb.y1 / dpi
+        for x0, y0, x1, y1 in getattr(fig, "_boxes", []):
+            inside = tx0 >= x0 and tx1 <= x1 and ty0 >= y0 and ty1 <= y1
+            apart = tx1 <= x0 or tx0 >= x1 or ty1 <= y0 or ty0 >= y1
+            if not inside and not apart:
+                bad += 1; print(f"BOXCHECK {name}: '{t.get_text()[:40]}' at x {tx0:.1f}-{tx1:.1f} y {ty0:.1f}-{ty1:.1f} crosses frame {x0, y0, x1, y1}")
+        if tx0 < 0 or ty0 < 0 or tx1 > w or ty1 > h: bad += 1; print(f"BOXCHECK {name}: '{t.get_text()[:40]}' outside the page")
+    print(f"BOXCHECK {name}: {bad} problems")
 
 
 def title(ax, s, y=1.03, fs=0.8):
@@ -126,12 +144,12 @@ PUR, PL = ["100p", "80p", "60p", "40p", "20p"], ["100%", "80%", "60%", "40%", "2
 TYPES = ["BND", "DEL", "DUP", "INS", "INV"]
 SIZES = [("BND", "no length"), ("50-100", "50–100 bp"), ("100-1k", "0.1–1 kb"), ("1k-10k", "1–10 kb"), ("10k-100k", "10–100 kb"), (">100k", ">100 kb")]
 CAL5 = ["janus", "Severus", "SAVANA", "nanomonsv", "Sniffles2"]
-LBL = {"colo829": {"janus": (0.86, 0.96, "center"), "SAVANA": (0.66, 0.86, "center"), "Severus": (0.46, 0.84, "right"), "nanomonsv": (0.78, 0.71, "left"),
-                   "dysgu": (0.775, 0.635, "left"), "SVision-pro": (0.30, 0.80, "left"), "DeBreak": (0.30, 0.715, "left"), "Sniffles2": (0.30, 0.63, "left"),
-                   "kled": (0.30, 0.545, "left"), "cuteSV": (0.30, 0.46, "left"), "SVDSS": (0.075, 0.226, "left")},
-       "hg008": {"janus": (0.99, 0.96, "right"), "Severus": (0.74, 0.905, "right"), "nanomonsv": (0.84, 0.76, "right"), "SAVANA": (0.99, 0.545, "right"),
-                 "dysgu": (0.815, 0.69, "right"), "Sniffles2": (0.17, 0.83, "left"), "DeBreak": (0.16, 0.655, "left"), "kled": (0.315, 0.59, "left"),
-                 "SVision-pro": (0.29, 0.475, "left"), "cuteSV": (0.13, 0.405, "left"), "SVDSS": (0.15, 0.337, "left")}}
+LBL = {"colo829": {"janus": (0.86, 0.96, "center"), "SAVANA": (0.62, 0.90, "center"), "Severus": (0.44, 0.84, "right"), "nanomonsv": (0.99, 0.57, "right"),
+                   "dysgu": (0.99, 0.47, "right"), "SVision-pro": (0.40, 0.60, "left"), "DeBreak": (0.40, 0.50, "left"), "Sniffles2": (0.40, 0.40, "left"),
+                   "kled": (0.40, 0.30, "left"), "cuteSV": (0.40, 0.20, "left"), "SVDSS": (0.40, 0.10, "left")},
+       "hg008": {"janus": (0.99, 0.97, "right"), "Severus": (0.72, 0.92, "right"), "nanomonsv": (0.70, 0.78, "right"), "SAVANA": (0.99, 0.60, "right"),
+                 "dysgu": (0.76, 0.68, "right"), "Sniffles2": (0.34, 0.62, "left"), "DeBreak": (0.34, 0.52, "left"), "kled": (0.34, 0.42, "left"),
+                 "SVision-pro": (0.34, 0.32, "left"), "cuteSV": (0.34, 0.22, "left"), "SVDSS": (0.34, 0.12, "left")}}
 ROWS = P5 + ["hg008", "colo829"]
 
 
@@ -566,9 +584,8 @@ def ext_scatter(ax, E, sample, ttl):
         ax.plot(x[m], y[m], color="#d8d8d8", lw=0.5, zorder=0)
         if f < 0.7: ax.text(0.995, f / (2 - f) - 0.012, f"F1 {f:.1f}", fontsize=FS - 1.4, color="#9a9a9a", ha="right", va="top")
     for n, (p, r, f1) in sorted(E.items(), key=lambda x: x[1][2]):
-        c = color(n); top = n == "janus"; named = n in ["janus"] + COV
-        ax.scatter([p], [r], s=46 if top else 24, marker=MARK.get(n, "o"), facecolor=c if named else "white", edgecolor=c if named else "#8a8a8a", lw=0.5 if named else 0.7, zorder=5 if top else 4 if named else 3)
-        if not named: continue
+        c = color(n); top = n == "janus"
+        ax.scatter([p], [r], s=46 if top else 24, marker=MARK.get(n, "o"), facecolor=c, edgecolor="#333333" if c in ("#d0d0d0", "#b0b0b0") else c, lw=0.5, zorder=5 if top else 4)
         lx, ly, ha = LBL[sample][n]
         ax.annotate(f"{n} {f1:.2f}", (p, r), xytext=(lx, ly), fontsize=FS - 0.5, ha=ha, va="center", color=JANUS if top else "#333333", fontweight="bold" if top else "normal",
                     bbox=dict(boxstyle="square,pad=0.12", fc="white", ec="none"), arrowprops=dict(arrowstyle="-", color="#9a9a9a", lw=0.4, shrinkA=0, shrinkB=2.5), zorder=3)
@@ -640,29 +657,30 @@ def pr_lines(axp, axr, S, keys, labs, pairs):
 
 def fig2():
     S = cov(); E = external()
-    H = 150; T1 = H - 8.5; T2 = T1 - 65.5; T3 = T2 - 43.5
+    H = 153; T1 = H - 8.5; T2 = T1 - 65.5; T3 = T2 - 43.5
     fig, ax = page(160, H)
     order = [n for n in sorted(D["all_with"]["hcc1954"], key=lambda n: -mean("all_with", n, "F1")) if tech(n) == "HiFi"]
-    # box A: consensus dots with the pairs legend
+    # a: consensus dots with the pairs legend
     a1 = ax(22, T1 - 31, 32, 31); f1_dots(a1, "all_with", order, "", True); title(a1, "Consensus of all 18 call sets", 1.03, 0.0); tag(a1, "a", 2.5, 4.8)
     ph = [Line2D([], [], ls="", marker="o", color=PAIRCOL[p], ms=3.4, label=PAIRNAME[p]) for p in P5] + [Line2D([], [], ls="", marker="|", color="black", ms=6, mew=0.9, label="mean of five pairs")]
     fig.legend(handles=ph, loc="lower left", bbox_to_anchor=(3 / 160, (T1 - 31 - 17) / H), ncol=3, fontsize=FS - 0.7, handletextpad=0.4, columnspacing=1.0, frameon=False, borderaxespad=0)
     box(fig, 1, T1 - 50, 79, T1 + 7.5)
-    # box B: depth and purity with the caller legend
-    f = ax(88, T1 - 31, 34, 31); f1_lines(f, S, DEP, ["full", "30", "20", "15", "10", "5"], P5, "Depth, five pairs", pvals=False, band=False); f.set_xlabel("Depth of both samples (×)"); tag(f, "b", 82.5, 4.8)
-    h = ax(124, T1 - 31, 34, 31); f1_lines(h, S, PUR, ["100", "80", "60", "40", "20"], P5, "Purity at 30×", pvals=False, band=False); h.set_ylabel(""); h.set_yticklabels([]); h.set_xlabel("Tumor purity (%)"); tag(h, "c", 118, 4.8)
-    lh = [Line2D([], [], color=color(n), marker=MARK[n], ms=3.4, mec="white", lw=1.1 if n == "janus" else 1.0, label=n) for n in ["janus"] + COV]
-    fig.legend(handles=lh, loc="lower center", bbox_to_anchor=((81 + 159) / 2 / 160, (T1 - 31 - 17) / H), ncol=4, fontsize=FS - 0.7, handletextpad=0.4, columnspacing=1.2, frameon=False, borderaxespad=0)
+    # b: depth (left) and purity (right), one panel with a shared y axis
+    f = ax(91, T1 - 31, 33.5, 31); f1_lines(f, S, DEP, ["full", "30", "20", "15", "10", "5"], P5, "Depth, five pairs", pvals=False, band=False); f.set_xlabel("Depth of both samples (×)"); tag(f, "b", 82.5, 4.8)
+    h = ax(124.5, T1 - 31, 33.5, 31); f1_lines(h, S, PUR, ["100", "80", "60", "40", "20"], P5, "Purity at 30×", pvals=False, band=False); h.set_ylabel(""); h.set_yticklabels([]); h.tick_params(axis="y", length=0); h.set_xlabel("Tumor purity (%)"); h.set_xlim(-0.75, 4.3); f.set_xlim(-0.3, 5.4)
     box(fig, 81, T1 - 50, 159, T1 + 7.5)
-    # box C: external benchmarks, full width
-    b = ax(14, T2 - 26, 60, 26); ext_scatter(b, E["colo829"], "colo829", "COLO829, 62 truth SVs"); tag(b, "d", 2.5, 9.6)
-    c = ax(97, T2 - 26, 60, 26); ext_scatter(c, E["hg008"], "hg008", "HG008, 172 truth SVs"); tag(c, "e", 84, 9.6)
+    # c: COLO829 (left) and HG008 (right), one panel with a shared y axis
+    b = ax(14, T2 - 26, 71, 26); ext_scatter(b, E["colo829"], "colo829", "COLO829, 62 truth SVs"); tag(b, "c", 2.5, 9.6)
+    c = ax(85, T2 - 26, 71, 26); ext_scatter(c, E["hg008"], "hg008", "HG008, 172 truth SVs"); c.set_ylabel(""); c.set_yticklabels([]); c.tick_params(axis="y", length=0); c.set_xticklabels([""] + [t.get_text() for t in c.get_xticklabels()][1:])
     box(fig, 1, T2 - 35, 159, T2 + 13.5)
-    # box D: by type and size with the bar legend
-    d = ax(13, T3 - 18, 58, 18); fbars(d, "all_with", "type", TYPES, TYPES, "F1 by SV type, five CASTLE pairs pooled"); tag(d, "f", 2.5, 4.0)
-    e = ax(88, T3 - 18, 70, 18); fbars(e, "all_with", "size", [k for k, _ in SIZES], [l for _, l in SIZES], "F1 by SV size (consensus SVs in parentheses)"); tag(e, "g", 84, 4.0)
-    fig.legend(handles=[Patch(color=color(n), label=n) for n in CAL5], loc="lower center", bbox_to_anchor=(0.5, 1.0 / H), ncol=5, fontsize=FS - 0.7, handletextpad=0.4, columnspacing=1.2, frameon=False, borderaxespad=0)
-    box(fig, 1, 0.5, 159, T3 + 6.5)
+    # d: by type (left) and size (right), one panel with a shared y axis
+    d = ax(13, T3 - 18, 60, 18); fbars(d, "all_with", "type", TYPES, TYPES, "F1 by SV type, five CASTLE pairs pooled"); tag(d, "d", 2.5, 4.0)
+    e = ax(73, T3 - 18, 85, 18); fbars(e, "all_with", "size", [k for k, _ in SIZES], [l for _, l in SIZES], "F1 by SV size (consensus SVs in parentheses)"); e.set_ylabel(""); e.set_yticklabels([]); e.tick_params(axis="y", length=0)
+    box(fig, 1, 9.5, 159, T3 + 7)
+    # one legend for all callers
+    lh = [Line2D([], [], color=color(n), marker=MARK.get(n, "o"), ms=3.4, mec="#333333" if color(n) in ("#d0d0d0", "#b0b0b0") else "white", lw=1.1 if n == "janus" else 1.0, label=n) for n in order]
+    fig.legend(handles=lh, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=6, fontsize=FS - 0.7, handletextpad=0.4, columnspacing=1.1, labelspacing=0.35, frameon=False, borderaxespad=0.3)
+    boxcheck(fig, "fig2")
     fig.savefig(f"{OUT}/fig_accuracy.pdf", facecolor="white"); plt.close(fig)
     sg = SIG["settings"]; rows = [r + ["", ""] for r in dotrows("a", "all_with", order)]
     for pn, keys, labs in (("b", DEP, DL), ("c", PUR, PL)):
@@ -773,7 +791,7 @@ def fig3(main=False):
     # a: pipelines on HCC1954
     ALN = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["wall_s"] for x in "nt")
     PH = {l.split("\t")[0]: float(l.split("\t")[1]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")}; phase = sum(PH.values())
-    d = ax(19, Y1, 34, 34); sn = sum(T["hcc1954"].values()); pad = dict(xytext=(2.8, 0), textcoords="offset points", va="center")
+    d = ax(19, Y1, 38, 34); sn = sum(T["hcc1954"].values()); pad = dict(xytext=(2.8, 0), textcoords="offset points", va="center")
     SD.append(["a", "janus", "total", sn / 3600, "h"]); d.barh(0, sn / 3600, color=JANUS, height=0.66); d.annotate(f"{sn / 60:.0f} min", (sn / 3600, 0), fontsize=FS, fontweight="bold", **pad)
     for k, (n, t, ph) in enumerate(ROWS, 1):
         w = json.load(open(f"{R}/competitors/{t}/hcc1954/run.json"))["total"]["wall_s"]; p_ = phase if ph else 0
@@ -781,7 +799,7 @@ def fig3(main=False):
         tot = (ALN + p_ + w) / 3600; SD += [["a", n, x_, v, "h"] for x_, v in (("mapping", ALN / 3600), ("phasing", p_ / 3600), ("caller", w / 3600), ("total", tot))] + [["a", n, "factor over janus", tot * 3600 / sn, "x"]]; d.annotate(f"{int(tot)}:{int(round((tot - int(tot)) * 60)):02d} h", (tot, k), fontsize=FS - 0.4, **pad); d.text(0.07, k, f"{tot * 3600 / sn:.0f}×", va="center", ha="left", fontsize=FS - 0.8, color=C["ink"], fontweight="bold")
     d.legend(handles=[Patch(color="#b9b9b9", label="mapping"), Patch(color="#e0a030", label="phasing"), Patch(color="#3f6ea5", label="caller")],
              loc="lower left", bbox_to_anchor=(-0.05, 1.0), ncol=3, fontsize=FS - 0.6, handlelength=1, handletextpad=0.4, columnspacing=0.8, frameon=False, borderaxespad=0.3)
-    d.set_xlim(0, 7); d.set_xticks(range(8)); d.set_yticks(range(len(ROWS) + 1)); d.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); d.get_yticklabels()[0].set_fontweight("bold"); d.get_yticklabels()[0].set_color(JANUS)
+    d.set_xlim(0, 8); d.set_xticks(range(8)); d.set_yticks(range(len(ROWS) + 1)); d.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); d.get_yticklabels()[0].set_fontweight("bold"); d.get_yticklabels()[0].set_color(JANUS)
     d.set_ylim(len(ROWS) + 0.6, -0.6); d.set_xlabel("Wall clock on HCC1954, 16 threads (h)"); d.tick_params(axis="y", length=0); tag(d, "a", 2, 4.6)
     # b: memory trace
     TR = {p: trace(p) for p in P5}
@@ -789,7 +807,7 @@ def fig3(main=False):
     for g, ks in GROUP:
         ks = [k for k in ks if k in width]; tot = sum(width[k] for k in ks); tgt = st.median(T[p][g] for p in P5) / 60
         for k in ks: width[k] *= tgt / tot
-    b = ax(19, Y2, 34, 27); x0 = 0
+    b = ax(19, Y2, 36, 27); x0 = 0
     for k in ORDER:
         w = width[k]; n = max(4, int(round(w * 30))); u = np.linspace(0.02, 0.98, n); Y = []
         for p in P5:
@@ -803,7 +821,7 @@ def fig3(main=False):
     MAP = max(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["peak_rss_kib"] for x in "nt") / 2**20
     SD.append(["b", "minimap2 mapping HCC1954, peak", "", "", MAP, "", ""]); b.axhline(MAP, color="#444444", ls=(0, (4, 3)), lw=0.9); b.text(x0 * 0.985, MAP - 0.6, f"minimap2,\nHCC1954: {MAP:.1f} GB", ha="right", va="top", fontsize=FS - 1.2, zorder=6)
     b.set_xlim(0, x0); b.set_ylim(0, 22); b.set_yticks([0, 5, 10, 15, 20]); b.set_ylabel("Resident memory (GB)"); b.set_xlabel("Wall clock of the run (min)")
-    tag(b, "d", 2, 4.0)
+    tag(b, "c", 2, 4.0)
     fig.legend(handles=[Patch(color=STAGE[g], label=g) for g, _ in GROUP], loc="lower center", bbox_to_anchor=((19 + 109.5) / 2 / 160, 1.0 / 103), ncol=4, fontsize=FS - 1.0,
                handlelength=0.9, handletextpad=0.35, columnspacing=1.0, labelspacing=0.3, borderaxespad=0.3, frameon=False)
     # c: disk
@@ -823,9 +841,9 @@ def fig3(main=False):
     SD += [["c", "janus", lab, v, "GB"] for (lab, _), v in zip(KIND, SZ)] + [["c", "janus", "Total", bot, "GB"], ["c", "BAM", "normal", BAMS[0], "GB"], ["c", "BAM", "tumor", BAMS[1], "GB"], ["c", "BAM", "Total", BAMS.sum(), "GB"]]
     c.bar(1, BAMS[0], color="#b9b9b9", width=0.62, label="BAM, normal"); c.bar(1, BAMS[1], bottom=BAMS[0], color="#d6d6d6", width=0.62, label="BAM, tumor"); c.text(1, BAMS.sum() + 3, f"{BAMS.sum():.0f}", ha="center", fontsize=FS - 0.4)
     c.set_xticks([0, 1]); c.set_xticklabels(["janus", "BAM"]); c.set_xlim(-0.6, 1.6); c.set_ylim(0, 180); c.set_ylabel("Disk space, mean of pairs (GB)"); c.grid(axis="y", **GRID); c.set_axisbelow(True)
-    c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "c", 114.5, 4.6)
+    c.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=FS - 1.3, handlelength=1, handletextpad=0.4, labelspacing=0.5, frameon=False, borderaxespad=0); c.tick_params(axis="x", length=0); tag(c, "b", 114.5, 4.6)
     # d: stage times per pair
-    a = ax(74.5, Y2, 35, 27); rows = P5 + ["mean"]; tot = []
+    a = ax(75, Y2, 33, 27); rows = P5 + ["mean"]; tot = []
     for i, p in enumerate(rows):
         left = 0
         for g, _ in GROUP:
@@ -834,7 +852,7 @@ def fig3(main=False):
         a.text(left + 0.15, i, f"{left:.1f}", va="center", fontsize=FS - 0.4, fontweight="bold" if p == "mean" else "normal"); tot.append(left); SD.append(["d", PAIRNAME.get(p, "mean of five pairs"), "Total", left, "min"])
     a.set_yticks(range(len(rows))); a.set_yticklabels([PAIRNAME.get(p, "mean") for p in rows], fontsize=FS)
     a.get_yticklabels()[-1].set_fontweight("bold"); a.set_ylim(len(rows) - 0.4, -0.6); a.set_xlim(0, 16); a.set_xticks([0, 5, 10, 15]); a.set_xlabel("Wall clock, 16 threads (min)")
-    a.tick_params(axis="y", length=0); tag(a, "e", 63.5, 4.0)
+    a.tick_params(axis="y", length=0); None
     # e: sequence aligned
     e = ax(127, Y2, 29, 27); X = np.arange(5)
     rb = [sum(json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bases"] for x in "nt") / 1e9 for p in P5]
@@ -845,9 +863,9 @@ def fig3(main=False):
     for i in range(5): e.text(i + 0.19, pb[i] * 1.5, f"{rb[i] / pb[i]:,.0f}×", ha="center", va="bottom", rotation=90, fontsize=FS - 1.2, color=JANUS)
     e.set_yscale("log"); e.set_ylim(0.1, 30000); e.set_yticks([0.1, 1, 10, 100, 1000]); e.set_yticklabels(["0.1", "1", "10", "100", "1,000"]); e.set_ylabel("Sequence aligned (Gbp)")
     e.set_xticks(X); e.set_xticklabels([PAIRNAME[p] for p in P5], rotation=30, ha="right", rotation_mode="anchor", fontsize=FS - 0.6); e.tick_params(axis="x", length=0); e.grid(axis="y", **GRID)
-    e.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False); e.yaxis.set_minor_locator(matplotlib.ticker.NullLocator()); tag(e, "f", 114.5, 4.0)
+    e.legend(loc="upper left", fontsize=FS - 1.0, handlelength=1.0, handletextpad=0.4, borderaxespad=0.3, frameon=False); e.yaxis.set_minor_locator(matplotlib.ticker.NullLocator()); tag(e, "d", 114.5, 4.0)
     # f: CPU time
-    f = ax(74.5, Y1, 35, 34); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
+    f = ax(61, Y1, 45, 34); ACPU = sum(json.load(open(f"{R}/align/hcc1954/{x}/run.json"))["total"]["cpu_s"] for x in "nt") / 3600
     PCPU = sum(float(l.split("\t")[2]) for l in open(f"{R}/phase/hcc1954/times.tsv") if not l.startswith("step")) / 3600
     sc = (sum(x["cpu_s"] for x in json.load(open(f"{R}/full/hcc1954/run.json"))["steps"] if x["step"].startswith("pack")) + json.load(open(f"{RC}/full/hcc1954/run.json"))["total"]["cpu_s"]) / 3600
     SD.append(["f", "janus", "total", sc, "h"]); f.barh(0, sc, color=JANUS, height=0.66); f.text(sc + 1.5, 0, f"{sc:.1f} h", va="center", fontsize=FS - 0.4, fontweight="bold")
@@ -856,12 +874,13 @@ def fig3(main=False):
         f.barh(k, ACPU, color="#b9b9b9", height=0.66); f.barh(k, pc, left=ACPU, color="#e0a030", height=0.66); f.barh(k, cc, left=ACPU + pc, color="#3f6ea5", height=0.66)
         SD += [["f", n, x_, v, "h"] for x_, v in (("mapping", ACPU), ("phasing", pc), ("caller", cc), ("total", ACPU + pc + cc))]
         f.text(ACPU + pc + cc + 1.5, k, f"{ACPU + pc + cc:.0f} h", va="center", fontsize=FS - 0.4)
-    f.set_xlim(0, 105); f.set_xticks([0, 25, 50, 75, 100]); f.set_yticks(range(len(ROWS) + 1)); f.set_yticklabels(["janus"] + [r[0] for r in ROWS], fontsize=FS); f.get_yticklabels()[0].set_fontweight("bold"); f.get_yticklabels()[0].set_color(JANUS)
-    f.set_ylim(len(ROWS) + 0.6, -0.6); f.set_xlabel("CPU time on HCC1954 (h)"); f.tick_params(axis="y", length=0); f.grid(axis="x", **GRID); f.set_axisbelow(True); tag(f, "b", 63.5, 4.6)
+    f.set_xlim(0, 105); f.set_xticks([0, 25, 50, 75, 100]); f.set_yticks(range(len(ROWS) + 1)); f.set_yticklabels([]); f.tick_params(axis="y", length=0)
+    f.set_ylim(len(ROWS) + 0.6, -0.6); f.set_xlabel("CPU time on HCC1954 (h)"); f.tick_params(axis="y", length=0); f.grid(axis="x", **GRID); f.set_axisbelow(True); None
     for x0, x1 in ((1, 112.5), (114, 159)): box(fig, x0, 52, x1, 102.5)
     for x0, x1 in ((1, 112.5), (114, 159)): box(fig, x0, 0.4, x1, 50)
+    boxcheck(fig, "fig4")
     fig.savefig(f"{OUT}/fig_runtime.pdf", facecolor="white"); plt.close(fig)
-    LET = {"b": "d", "d": "e", "e": "f", "f": "b"}
+    LET = {"f": "a", "c": "b", "b": "c", "d": "c", "e": "d"}
     src("fig_runtime", ["panel", "series", "item", "x_min", "value", "low", "high", "unit"], [[LET.get(r[0], r[0])] + (r[1:3] + ["", r[3], "", "", r[4]] if len(r) == 5 else r[1:] + ["GB"]) for r in SD])
 
 
@@ -902,7 +921,7 @@ def fig4():
     def leaves(n): return {int(n[1:]) - 1} if n.startswith("T") else set().union(*(leaves(k) for k in kids[n]))
 
     miss55 = {frozenset(leaves(n)) for n in MP["5-5"].get("missing", [])}
-    at = ax(70, 2, 40, 42); tree(at, true, set(), "Simulated tree", mark=miss55); tag(at, "d", 64, 2.5)
+    at = ax(70, 2, 40, 42); tree(at, true, set(), "Simulated tree", mark=miss55); tag(at, "d", 68.5, 2.5)
     ar = ax(116, 2, 40, 42); tree(ar, rec["clades"], {frozenset(c) for c in rec["wrong"]}, f"Reconstructed at {BASE.replace('-', '/')}")
     if miss55: at.plot([], [], color=JANUS, lw=1.3, label="the one split missed at 5/5"); at.legend(loc="upper left", bbox_to_anchor=(0.0, 0.0), fontsize=FS - 0.8, handlelength=1.5, frameon=False)
     ab = ax(14, 10, 50, 32); PO = json.load(open(f"{R}/sim/pooled/scores.json"))[BASE.replace("-", "/").replace("/", "-")]; CL = list(PO["joint"]["classes"]); w = 0.26
@@ -941,11 +960,12 @@ def fig4():
     aw.set_ylim(-0.75, 4.75); aw.set_xlim(-24 * KM, 76); aw.set_ylabel("Depth, normal/tumor (×)"); aw.grid(axis="x", **GRID)
     aw.text(-12 * KM, 5.0, "Peak memory (GB)", ha="center", va="bottom", fontsize=FS); aw.text(38, 5.0, "Wall clock, 16 threads (min)", ha="center", va="bottom", fontsize=FS)
     if "5-5" in M2: aw.text(76, -0.72, f"minimap2, 21 read sets at 5/5: {M2['5-5']['wall_min']:.0f} min, {M2['5-5']['peak_gb']:.1f} GB", ha="right", va="bottom", fontsize=FS - 1.2, color="#555555")
-    aw.legend(handles=[Patch(color=ONE, label="20 pairwise runs (sum of times, largest memory)"), Patch(color=ALL, label="joint run")], loc="upper center", bbox_to_anchor=(0.45, -0.1), ncol=2, fontsize=FS - 0.8, handlelength=1.0, handletextpad=0.4, columnspacing=1.0, frameon=False, borderaxespad=0)
+    aw.legend(handles=[Patch(color=ONE, label="20 pairwise runs (sum of times, largest memory)"), Patch(color=ALL, label="joint run")], loc="upper center", bbox_to_anchor=(0.40, -0.1), ncol=2, fontsize=FS - 0.8, handlelength=1.0, handletextpad=0.4, columnspacing=1.0, frameon=False, borderaxespad=0)
     for sp in ("left",): aw.spines[sp].set_visible(False)
     tag(aw, "b", 80, 6.0)
-    for x0, x1 in ((1, 77), (79, 159)): box(fig, x0, 53, x1, 115.5)
+    for x0, x1 in ((1, 77), (79, 159.5)): box(fig, x0, 53, x1, 115.5)
     for x0, x1 in ((1, 66), (68, 159)): box(fig, x0, 0.5, x1, 51)
+    boxcheck(fig, "fig3")
     fig.savefig(f"{OUT}/fig_sim.pdf", facecolor="white"); plt.close(fig)
     SD = []
     for s, l in zip(SETS, LAB):
