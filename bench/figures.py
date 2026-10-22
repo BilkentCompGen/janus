@@ -790,13 +790,13 @@ def fig3(main=False):
                handlelength=0.9, handletextpad=0.35, columnspacing=0.9, borderaxespad=0.3)
     # c: disk
     GBY = 2.0**30
-    KIND = [("Packed reads", "#3f6ea5"), ("Core positions", "#86a8cc"), ("Counts", "#e0a030"), ("Graph", "#5fa37a"), ("Snippets, other", "#7e6bb0")]
+    KIND = [("Packed reads", "#5b4a8a"), ("Core positions", "#9f93c9"), ("Others", "#d5cfe8")]  # own palette: the stage colours of b and d mean steps, not files
     SZ, BAMS = [], []
     for p in P5:
         f = {x["file"]: x["bytes"] for x in json.load(open(f"{RC}/full/{p}/run.json"))["files"] if not x["file"].startswith(("log.", "steps", "calls.vcf"))}
         pk = sum(v for k, v in f.items() if k in ("n.svb", "t.svb", "n.svb.idx", "t.svb.idx")); ex = sum(v for k, v in f.items() if k.endswith(".exc"))
         cn = sum(v for k, v in f.items() if k.endswith(".cnt")); gr = f.get("graph.gph", 0)
-        SZ.append([x / GBY for x in (pk, ex, cn, gr, sum(f.values()) - pk - ex - cn - gr)])
+        SZ.append([x / GBY for x in (pk, ex, sum(f.values()) - pk - ex)])
         BAMS.append([json.load(open(f"{R}/full/{p}/run.json"))["reads"][x]["bytes"] / GBY for x in "nt"])
     SZ = np.array(SZ).mean(0); BAMS = np.array(BAMS).mean(0)
     c = ax(125.5, Y1, 13, 36); bot = 0
