@@ -144,7 +144,7 @@ PUR, PL = ["100p", "80p", "60p", "40p", "20p"], ["100%", "80%", "60%", "40%", "2
 TYPES = ["BND", "DEL", "DUP", "INS", "INV"]
 SIZES = [("BND", "no length"), ("50-100", "50–100 bp"), ("100-1k", "0.1–1 kb"), ("1k-10k", "1–10 kb"), ("10k-100k", "10–100 kb"), (">100k", ">100 kb")]
 CAL5 = ["janus", "Severus", "SAVANA", "nanomonsv", "Sniffles2"]
-LBL = {"colo829": {"janus": (0.86, 0.96, "center"), "SAVANA": (0.60, 0.90, "center"), "Severus": (0.42, 0.80, "right"), "nanomonsv": (0.80, 0.60, "left")},
+LBL = {"colo829": {"janus": (0.86, 0.96, "center"), "SAVANA": (0.50, 0.93, "center"), "Severus": (0.40, 0.78, "right"), "nanomonsv": (0.80, 0.60, "left")},
        "hg008": {"janus": (0.99, 0.97, "right"), "Severus": (0.70, 0.92, "right"), "nanomonsv": (0.66, 0.78, "right"), "SAVANA": (0.99, 0.58, "right")}}
 ROWS = P5 + ["hg008", "colo829"]
 
@@ -587,9 +587,7 @@ def ext_scatter(ax, E, sample, ttl):
         ax.annotate(f"{n} {f1:.2f}", (p, r), xytext=(lx, ly), fontsize=FS - 0.5, ha=ha, va="center", color=JANUS if top else "#333333", fontweight="bold" if top else "normal",
                     bbox=dict(boxstyle="square,pad=0.12", fc="white", ec="none"), arrowprops=dict(arrowstyle="-", color="#9a9a9a", lw=0.4, shrinkA=0, shrinkB=2.5), zorder=3)
     ax.set_xlim(0, 1.0); ax.set_ylim(0, 1.02); fticks(ax, "x"); fticks(ax, "y"); ax.set_xlabel("Precision"); ax.set_ylabel("Recall")
-    g = SIG["external"][sample]; best = [k for k, v in TOOLKEY.items() if v == g["best"]][0]
-    ax.text(0, 1.03, f"janus − {best}, F1: {g['diff']:+.3f} [{g['lo']:+.3f}, {g['hi']:+.3f}]", fontsize=FS - 0.8, color="#555555", va="bottom", transform=ax.transAxes)
-    title(ax, ttl, 1.17)
+    title(ax, ttl, 1.05)
 
 
 def heat(ax, s, kind, cls, labs, cal, ttl):
@@ -654,7 +652,7 @@ def pr_lines(axp, axr, S, keys, labs, pairs):
 
 def fig2():
     S = cov(); E = external()
-    H = 153; T1 = H - 8.5; T2 = T1 - 65.5; T3 = T2 - 43.5
+    H = 156; T1 = 148; T2 = 86.5; T3 = 37.5
     fig, ax = page(160, H)
     order = [n for n in sorted(D["all_with"]["hcc1954"], key=lambda n: -mean("all_with", n, "F1")) if tech(n) == "HiFi"]
     # a: consensus dots with the pairs legend
@@ -667,12 +665,12 @@ def fig2():
     h = ax(126, T1 - 31, 32, 31); f1_lines(h, S, PUR, ["100", "80", "60", "40", "20"], P5, "Purity at 30×", pvals=False, band=False); h.set_ylabel(""); h.set_yticklabels([]); h.set_xlabel("Tumor purity (%)")
     box(fig, 81, T1 - 50, 159, T1 + 7.5)
     # c: COLO829 (left) and HG008 (right), one panel with a shared y axis
-    b = ax(14, T2 - 26, 60, 26); ext_scatter(b, E["colo829"], "colo829", "COLO829, 62 truth SVs"); tag(b, "c", 2.5, 9.6)
-    c = ax(97, T2 - 26, 60, 26); ext_scatter(c, E["hg008"], "hg008", "HG008, 172 truth SVs")
-    box(fig, 1, T2 - 35, 159, T2 + 13.5)
+    b = ax(17, T2 - 31, 48, 31); ext_scatter(b, E["colo829"], "colo829", "COLO829, 62 truth SVs"); tag(b, "c", 2.5, 5.5)
+    c = ax(97, T2 - 31, 48, 31); ext_scatter(c, E["hg008"], "hg008", "HG008, 172 truth SVs")
+    box(fig, 1, T2 - 40, 159, T2 + 9.5)
     # d: by type (left) and size (right), one panel with a shared y axis
-    d = ax(13, T3 - 18, 58, 18); fbars(d, "all_with", "type", TYPES, TYPES, "F1 by SV type, five CASTLE pairs pooled"); tag(d, "d", 2.5, 4.0)
-    e = ax(88, T3 - 18, 70, 18); fbars(e, "all_with", "size", [k for k, _ in SIZES], [l for _, l in SIZES], "F1 by SV size (consensus SVs in parentheses)")
+    d = ax(13, T3 - 20, 58, 20); fbars(d, "all_with", "type", TYPES, TYPES, "F1 by SV type, five CASTLE pairs pooled"); tag(d, "d", 2.5, 4.0)
+    e = ax(88, T3 - 20, 70, 20); fbars(e, "all_with", "size", [k for k, _ in SIZES], [l for _, l in SIZES], "F1 by SV size (consensus SVs in parentheses)")
     box(fig, 1, 9.5, 159, T3 + 7)
     # one legend for all callers
     lh = [Line2D([], [], ls="", color=color(n), marker=MARK.get(n, "o"), ms=5.5 if n == "janus" else 5, mfc=color(n), mec="#333333" if color(n) in ("#d0d0d0", "#b0b0b0") else color(n), mew=0.5, label=n) for n in order]
@@ -910,7 +908,7 @@ def fig4():
     S = simdata(); TR, MP = simtrees(); M2 = mm2()
     SETS = ["20-20", "20-10", "20-5", "10-10", "5-5"]; LAB = [s.replace("-", "/") for s in SETS]; BASE = "20-5"
     ONE, ALL = "#8c8c8c", JANUS
-    fig, ax = page(160, 116)
+    fig, ax = page(160, 112)
     true = [frozenset(c) for c in TR["true"]]; rec = MP[BASE]
     kids = collections.defaultdict(list)
     for n, q in TR["parent"].items(): kids[q].append(n)
@@ -931,7 +929,7 @@ def fig4():
 
     def f1(d): return [2 * p * r / (p + r) for p, r in zip(d["P"], d["R"])]
 
-    ax = [ax(12, 62, 60, 44)]
+    ax = [ax(12, 62, 60, 40)]
     for a, get, lab in zip(ax, (f1,), ("F1 score",)):
         for i, s in enumerate(SETS):
             u, v = get(S[s]["pair"]), get(S[s]["joint"])
@@ -945,7 +943,7 @@ def fig4():
                           Line2D([], [], color="#3a3a3a", lw=2.0, label="median, pairwise"), Line2D([], [], color="#7d1631", lw=2.0, label="median, joint")],
                  loc="lower left", bbox_to_anchor=(0.0, 0.1), handlelength=1.2, borderaxespad=0.2, fontsize=FS - 0.6, ncol=2, columnspacing=1.0)
     tag(ax[0], "a", 2, 2.5)
-    aw = fig.add_axes([92 / 160, 62 / 116, 66 / 160, 44 / 116]); y = np.arange(5)[::-1]; KM = 3.2
+    aw = fig.add_axes([92 / 160, 62 / 112, 66 / 160, 40 / 112]); y = np.arange(5)[::-1]; KM = 3.2
     for i, (s_, l) in enumerate(zip(SETS, LAB)):
         t = S[s_]["time"]; x0, y0, x1, y1 = sum(t["pair_wall"]) / 60, max(t["pair_peak_kb"]) / 2**20, t["joint_wall"] / 60, t["joint_peak_kb"] / 2**20
         aw.barh(y[i] + 0.19, x0, 0.34, color="#c4c4c4", lw=0); aw.barh(y[i] - 0.19, x1, 0.34, color="#f2b8c1", lw=0)
@@ -960,7 +958,7 @@ def fig4():
     aw.legend(handles=[Patch(color=ONE, label="20 pairwise runs (sum of times, largest memory)"), Patch(color=ALL, label="joint run")], loc="upper center", bbox_to_anchor=(0.40, -0.1), ncol=2, fontsize=FS - 0.8, handlelength=1.0, handletextpad=0.4, columnspacing=1.0, frameon=False, borderaxespad=0)
     for sp in ("left",): aw.spines[sp].set_visible(False)
     tag(aw, "b", 80, 6.0)
-    for x0, x1 in ((1, 77), (79, 159.5)): box(fig, x0, 53, x1, 115.5)
+    for x0, x1 in ((1, 77), (79, 159.5)): box(fig, x0, 53, x1, 111.5)
     for x0, x1 in ((1, 66), (68, 159)): box(fig, x0, 0.5, x1, 51)
     boxcheck(fig, "fig3")
     fig.savefig(f"{OUT}/fig_sim.pdf", facecolor="white"); plt.close(fig)
