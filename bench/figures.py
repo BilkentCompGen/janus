@@ -652,7 +652,7 @@ def pr_lines(axp, axr, S, keys, labs, pairs):
 
 def fig2():
     S = cov(); E = external()
-    H = 156; T1 = 148; T2 = 86.5; T3 = 37.5
+    H = 161; T1 = 152.5; T2 = 91; T3 = 33.5
     fig, ax = page(160, H)
     order = [n for n in sorted(D["all_with"]["hcc1954"], key=lambda n: -mean("all_with", n, "F1")) if tech(n) == "HiFi"]
     # a: consensus dots with the pairs legend
@@ -663,18 +663,21 @@ def fig2():
     # b: depth (left) and purity (right), one panel with a shared y axis
     f = ax(91, T1 - 31, 33, 31); f1_lines(f, S, DEP, ["full", "30", "20", "15", "10", "5"], P5, "Depth, five pairs", pvals=False, band=False); f.set_xlabel("Depth of both samples (×)"); tag(f, "b", 82.5, 4.8)
     h = ax(126, T1 - 31, 32, 31); f1_lines(h, S, PUR, ["100", "80", "60", "40", "20"], P5, "Purity at 30×", pvals=False, band=False); h.set_ylabel(""); h.set_yticklabels([]); h.set_xlabel("Tumor purity (%)")
+    lb = [Line2D([], [], color=color(n), marker=MARK[n], ms=3.4, mec="white", lw=1.1 if n == "janus" else 1.0, label=n) for n in ["janus"] + COV]
+    fig.legend(handles=lb, loc="lower center", bbox_to_anchor=((81 + 159) / 2 / 160, (T1 - 31 - 17) / H), ncol=4, fontsize=FS - 0.7, handletextpad=0.4, columnspacing=1.2, frameon=False, borderaxespad=0)
     box(fig, 81, T1 - 50, 159, T1 + 7.5)
     # c: COLO829 (left) and HG008 (right), one panel with a shared y axis
     b = ax(17, T2 - 31, 48, 31); ext_scatter(b, E["colo829"], "colo829", "COLO829, 62 truth SVs"); tag(b, "c", 2.5, 5.5)
     c = ax(97, T2 - 31, 48, 31); ext_scatter(c, E["hg008"], "hg008", "HG008, 172 truth SVs")
-    box(fig, 1, T2 - 40, 159, T2 + 9.5)
+    box(fig, 1, T2 - 48.5, 159, T2 + 9.5)
     # d: by type (left) and size (right), one panel with a shared y axis
     d = ax(13, T3 - 20, 58, 20); fbars(d, "all_with", "type", TYPES, TYPES, "F1 by SV type, five CASTLE pairs pooled"); tag(d, "d", 2.5, 4.0)
     e = ax(88, T3 - 20, 70, 20); fbars(e, "all_with", "size", [k for k, _ in SIZES], [l for _, l in SIZES], "F1 by SV size (consensus SVs in parentheses)")
-    box(fig, 1, 9.5, 159, T3 + 7)
+    box(fig, 1, 0.5, 159, T3 + 7)
     # one legend for all callers
     lh = [Line2D([], [], ls="", color=color(n), marker=MARK.get(n, "o"), ms=5.5 if n == "janus" else 5, mfc=color(n), mec="#333333" if color(n) in ("#d0d0d0", "#b0b0b0") else color(n), mew=0.5, label=n) for n in order]
-    fig.legend(handles=lh, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=6, fontsize=FS - 0.5, handlelength=1.0, handletextpad=0.5, columnspacing=1.4, labelspacing=0.4, frameon=False, borderaxespad=0.3)
+    fig.legend(handles=lh, loc="lower center", bbox_to_anchor=(0.5, (T2 - 47) / H), ncol=6, fontsize=FS - 0.5, handlelength=1.0, handletextpad=0.5, columnspacing=1.4, labelspacing=0.4, frameon=False, borderaxespad=0)
+    fig.legend(handles=[Patch(color=color(n), label=n) for n in CAL5], loc="lower center", bbox_to_anchor=(0.5, 1.5 / H), ncol=5, fontsize=FS - 0.7, handlelength=1.2, handletextpad=0.4, columnspacing=1.4, frameon=False, borderaxespad=0)
     boxcheck(fig, "fig2")
     fig.savefig(f"{OUT}/fig_accuracy.pdf", facecolor="white"); plt.close(fig)
     sg = SIG["settings"]; rows = [r + ["", ""] for r in dotrows("a", "all_with", order)]
