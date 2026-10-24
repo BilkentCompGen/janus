@@ -262,8 +262,8 @@ private:
     void shuffle();
 };
 
-Pack::Pack(const Args& a) : a(a), t(std::max(1, a.threads)), encoders(std::max(2, t / 5)), src(a.in, t), chunks(encoders + 4), fed(false), made(0), reads(0), total(0), longest(0), pos(sizeof(Header)) {
-    std::string in(a.in);
+Pack::Pack(const Args& a) : a(a), t(std::max(1, a.threads)), encoders(std::max(2, t / 5)), src(a.reads, t), chunks(encoders + 4), fed(false), made(0), reads(0), total(0), longest(0), pos(sizeof(Header)) {
+    std::string in(a.reads);
     bam = in.size() > 4 && in.compare(in.size() - 4, 4, ".bam") == 0;
     for (Chunk& c : chunks) { c.bam = bam; pool.push_back(&c); }
 }
@@ -396,5 +396,7 @@ int Pack::run() {
 }
 
 int cmd_pack(const Args& a) {
+    a.need(a.reads, "--reads");
+    a.need(a.out, "--out");
     return Pack(a).run();
 }

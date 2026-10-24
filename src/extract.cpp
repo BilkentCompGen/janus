@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdlib>
+#include <string>
 #include "cmd.h"
 #include "core.h"
 #include "io.h"
@@ -72,8 +73,8 @@ void Extract::block(Block& b) {
 }
 
 int Extract::run() {
-    Output out(a.out);
-    Input in(a.in);
+    Output out((std::string(a.need(a.reads, "--reads")) + ".exc").c_str());
+    Input in(a.reads);
     Header h('X', 3, pass(in.f, nullptr, out.f, a.threads), 0);
     h.resv[0] = LEV;
     h.resv[1] = W;

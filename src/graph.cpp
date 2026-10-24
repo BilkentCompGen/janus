@@ -118,7 +118,8 @@ static void unite(std::vector<uint64_t>& a, const std::vector<uint64_t>& b, std:
 }
 
 int MakeGraph::run() {
-    std::vector<std::string> ps = split(a.in);
+    std::vector<std::string> ps = split(a.need(a.counts, "--counts"));
+    a.need(a.out, "--out");
     std::vector<uint64_t> t;
     Counts s;
     o.S = ps.size();

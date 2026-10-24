@@ -1,0 +1,633 @@
+\clearpage
+\setcounter{topnumber}{2}
+\setcounter{totalnumber}{3}
+\setcounter{figure}{0}
+\setcounter{table}{0}
+\setcounter{section}{0}
+
+\renewcommand{\thesection}{S\arabic{section}}
+\renewcommand{\theHsection}{S\arabic{section}}
+\makeatletter
+\def\@seccntformat#1{%
+  \expandafter\ifx\csname @#1cntformat\endcsname\relax
+    \csname the#1\endcsname\quad
+  \else
+    \csname @#1cntformat\endcsname
+  \fi}
+\newcommand{\@sectioncntformat}{Supplementary Section \thesection:\quad }
+\makeatother
+
+\renewcommand{\figurename}{Supplementary Figure}
+\renewcommand{\tablename}{Supplementary Table}
+\renewcommand{\thefigure}{S\arabic{figure}}
+\renewcommand{\thetable}{S\arabic{table}}
+\renewcommand{\theHfigure}{S\arabic{figure}}
+\renewcommand{\theHtable}{S\arabic{table}}
+
+\section*{Supplementary Information}
+
+\subsection*{Contents}
+
+\medskip\noindent\textbf{\ref{supsec:method}\quad Details of \tool{}}\dotfill\pageref{supsec:method}\par
+\noindent\hspace{1.5em}\ref{supsec:thresholds}\quad Choice of the depth thresholds\dotfill\pageref{supsec:thresholds}\par
+\noindent\hspace{1.5em}\ref{supsec:errors}\quad Removal of sequencing errors and small variants\dotfill\pageref{supsec:errors}\par
+\noindent\hspace{1.5em}\ref{supsec:align}\quad Placement and alignment of the snippets\dotfill\pageref{supsec:align}\par
+\noindent\hspace{1.5em}\ref{supsec:signatures}\quad SV signatures\dotfill\pageref{supsec:signatures}\par
+\noindent\hspace{1.5em}\ref{supsec:records}\quad Records, features, and output\dotfill\pageref{supsec:records}\par
+\noindent\hspace{1.5em}\ref{supsec:evidence}\quad Read-level evidence\dotfill\pageref{supsec:evidence}\par
+\noindent\hspace{1.5em}\ref{supsec:classifier}\quad Training and application of the classifier\dotfill\pageref{supsec:classifier}\par
+\noindent\hspace{1.5em}\ref{supsec:clseval}\quad Evaluation of the classifier\dotfill\pageref{supsec:clseval}\par
+\noindent\hspace{1.5em}\ref{supsec:joint}\quad Acceptance rule of the joint runs\dotfill\pageref{supsec:joint}\par
+\medskip\noindent\textbf{\ref{supsec:benchmarking}\quad Datasets and benchmarking}\dotfill\pageref{supsec:benchmarking}\par
+\noindent\hspace{1.5em}\ref{supsec:datasets}\quad Datasets\dotfill\pageref{supsec:datasets}\par
+\noindent\hspace{1.5em}\ref{supsec:tools}\quad Running the SV detection tools\dotfill\pageref{supsec:tools}\par
+\noindent\hspace{1.5em}\ref{supsec:consensus}\quad Consensus sets and matching criteria\dotfill\pageref{supsec:consensus}\par
+\noindent\hspace{1.5em}\ref{supsec:simgen}\quad Generation of the simulated dataset\dotfill\pageref{supsec:simgen}\par
+\noindent\hspace{1.5em}\ref{supsec:simeval}\quad Evaluation of the simulated dataset\dotfill\pageref{supsec:simeval}\par
+\medskip\noindent\textbf{\ref{supsec:pairs}\quad Accuracy on the tumor--normal pairs}\dotfill\pageref{supsec:pairs}\par
+\noindent\hspace{1.5em}\ref{supsec:missed}\quad Consensus SVs that were not called\dotfill\pageref{supsec:missed}\par
+\noindent\hspace{1.5em}\ref{supsec:loo}\quad Other consensus sets\dotfill\pageref{supsec:loo}\par
+\noindent\hspace{1.5em}\ref{supsec:depth}\quad Reduced sequencing depth and tumor purity\dotfill\pageref{supsec:depth}\par
+\noindent\hspace{1.5em}\ref{supsec:extbench}\quad COLO829, HG008, and SV types\dotfill\pageref{supsec:extbench}\par
+\medskip\noindent\textbf{\ref{supsec:runtime}\quad Runtime and memory}\dotfill\pageref{supsec:runtime}\par
+\noindent\hspace{1.5em}\ref{supsec:compute}\quad Computational requirements\dotfill\pageref{supsec:compute}\par
+\noindent\hspace{1.5em}\ref{supsec:files}\quad Intermediate files\dotfill\pageref{supsec:files}\par
+\medskip\noindent\textbf{Supplementary Tables}\dotfill\pageref{supsec:tables}\par
+\medskip\noindent\textbf{Supplementary Figures}\dotfill\pageref{supsec:figures}\par
+
+\medskip\noindent The data shown in every figure are provided as Supplementary Data~1, one table per figure.
+
+\bigskip
+
+\supsec{Details of \tool{}}{supsec:method}
+
+\supnote{Choice of the depth thresholds}{supsec:thresholds}
+% Parameter sweep (bench/paper.sh sweep, runs/sweep): tau_normal in {5, 10, 15, 20, 25} x tau_tumor in {20, 30, 40, 50, 60} on the CASTLE full, coverage and purity runs; janus rerun only for (m_0, m_t) pairs not seen before; F1 per combination in runs/sweep/summary.tsv.
+We tested $\tau_{\mathrm{normal}}\in\{5,10,15,20,25\}$ and $\tau_{\mathrm{tumor}}\in\{20,30,40,50,60\}$ (Methods) on all CASTLE runs at full depth, reduced depth, and reduced purity (Fig.~\ref{supfig:sweep}).
+Since $m_0$ and $m_t$ change only when a threshold crosses the statistic of a sample, each tested value stands for a range of thresholds with the same result on these runs: $\tau_{\mathrm{normal}}\leq 5$, 10--13, 14--15, and 19--26; and $\tau_{\mathrm{tumor}}=20$, 29--32, 35--42, 43--53, and 54--60 (at $\tau_{\mathrm{normal}}=20$).
+We set $\tau_{\mathrm{normal}}=20$ and $\tau_{\mathrm{tumor}}=20$ from the ranges 19--26 and 20; across the grid, the mean F1 score of \tool{} at full depth against the consensus of 18 call sets ranged from 0.884 to 0.888 (0.887 at 20/20), and 20/20 lay within 0.003 of the best combination at reduced depth and purity.
+The threshold affects only samples whose statistic lies near it.
+Depending on the sample, 56--85\% of the tumor-only cores occur in only two or three reads at full depth (Fig.~\ref{supfig:spectra}).
+For these statistics, \tool{} assumes the worst case of the filter, $m_s=3$, and uses only cores with $c_s(x)\geq 3$, so that the statistics do not depend on the $m_s$ it chooses.
+
+\supnote{Removal of sequencing errors and small variants}{supsec:errors}
+
+\tool{} identifies tips and bubbles (Methods) on the initial graph.
+To find tips, \tool{} follows each branch of a node with more than one outgoing edge for at most 12 nodes, as long as each node has a single incoming edge and all nodes occur in the same proper subset of the samples.
+If the branch ends at a node without outgoing edges, \tool{} removes its nodes.
+\tool{} does the same in the reverse direction.
+
+To find bubbles, \tool{} follows each branch of a node with at least two outgoing edges through nodes with a single outgoing edge until it reaches a node with at least two incoming edges; it follows a branch for at most 5 nodes, or for at most 41 nodes if its first node is missing from a sample.
+Two branches that end at the same node form a bubble if all nodes of one branch occur in the same proper subset of the samples and no node of the other branch occurs in exactly this subset.
+\tool{} matches a sample-specific branch without such a counterpart with an alternative path between the same two nodes through nodes observed in all samples, which it finds by breadth-first search (depth at most the branch length plus 8, at most 256 visited nodes).
+\tool{} extracts the sequences of both branches from reads that contain them and trims their common prefix and suffix; if the rest differs in length by less than 20\,bp and has an edit distance below 20, it removes the inner nodes of the sample-specific branch as an error or a small variant (Table~\ref{suptab:steps}).
+
+\supnote{Placement and alignment of the snippets}{supsec:align}
+
+Given outermost anchor coordinates $p^-$ and $p^+$, and an innermost anchor span $g$, \tool{} extracts the snippet $[p^- - e,\, p^+ + e]$ with padding $e=\max(1\,\text{kb},\,3g)$, bounded by the read ends and merging any overlapping intervals.
+To capture distinct alleles, such as heterozygous tandem repeats, \tool{} clusters supporting tumor reads by their innermost anchor distances $\delta_1 \le \dots \le \delta_k$, splitting groups where $\delta_i - \delta_{i-1} > 20$\,bp.
+From each of the three largest clusters with at least three reads, \tool{} extracts an additional snippet from its most central read.
+
+\tool{} computes the LCP cores of the reference as for the reads and indexes them by position.
+To define each window, \tool{} requires at least three snippet cores that map uniquely to the same chromosome and strand in the reference, with diagonals of consecutive cores agreeing within 500\,bp; it discards any snippet lacking an eligible window.
+The window spans the reference cores that define it, extended on both sides by the snippet length plus 2\,kb; \tool{} merges overlapping windows and aligns the snippets to them with minimap2 (v2.31; \texttt{-cx map-hifi --secondary=no}).
+\tool{} then aligns the remaining unaligned parts of 50\,bp to 20\,kb to the entire reference with the short-read preset (\texttt{-cx sr --secondary=no}).
+
+\supnote{SV signatures}{supsec:signatures}
+
+A signature consists of two breakpoints, each a reference position with a direction; a deletion of length $L$ at position $P$, for example, is the signature $(P,+)\!:\!(P+L,-)$.
+For split alignments, \tool{} sorts the alignments of a snippet by their start on the snippet, and each consecutive pair yields a breakend if they lie on different chromosomes and an inversion if they lie on the same chromosome but on different strands.
+On the same chromosome and strand, the pair yields a deletion if its reference distance exceeds its distance on the snippet by at least 50\,bp, an insertion if the snippet distance exceeds the reference distance by at least 50\,bp and the alignments overlap by less than 50\,bp on the reference, and a duplication if the second alignment starts at least 50\,bp before the end of the first on the reference.
+Except for insertions, \tool{} discards signatures with breakpoints less than 50\,bp apart.
+
+Within an alignment, \tool{} takes insertions and deletions of at least 50\,bp from the CIGAR string and combines those of the same type separated by fewer than 100 aligned bases.
+As aligners may report a tandem duplication as an insertion, an insertion of length $L\geq 500$\,bp becomes a tandem duplication if the fractions $u$ and $d$ of its 15-mers found in the reference sequence of length $L$ upstream and downstream of the insertion point satisfy $0.8\leq u+d\leq 1.25$; the duplication then starts $L\,u/(u+d)$ bases upstream of the insertion point.
+\tool{} applies this conversion after it computes the feature values.
+
+\supnote{Records, features, and output}{supsec:records}
+
+\tool{} assigns a signature to a site of its snippet whose interval between the innermost anchors lies within 200\,bp of the signature; if several sites qualify, it chooses the one with the most tumor reads.
+\tool{} discards signatures without a site, on contigs other than chromosomes 1--22, X, and Y, or at sites with fewer than $m$ tumor reads.
+For merging (Methods), \tool{} processes signatures in sorted order and compares each with the representative of the most recently formed record (Fig.~\ref{supfig:signatures}).
+\tool{} represents a record by its snippet with the most tumor reads and takes the maxima over the merged snippets as its numbers of matching and spanning normal reads.
+
+Each record has 56 feature values, two of which are constant.
+They describe the tumor read support and depth at the site, normal-read evidence (the $D$ values and their dispersion), agreement of the measured distances with the event length, tumor-specific and branching nodes around the site, mapping quality and divergence of the alignment, repeat content within 150\,bp of the first breakpoint, overlap of the breakpoints with annotated tandem repeats, type and size of the event, and the measurements with the second set of anchors (Fig.~\ref{supfig:features}).
+\tool{} writes all records to one VCF file, one record per row, with the feature values in the INFO field.
+Each sample, the normal sample included, has one column with a genotype and the number of reads of the sample with the site; the genotype is 0/1 for the tumor sample of the record and 0/0 for the other samples, whose own records are separate rows.
+With several tumor samples, an SV has a separate record for each tumor sample with at least $m$ reads at its site.
+
+\supnote{Read-level evidence}{supsec:evidence}
+
+\tool{} computes $D$ (Methods) for each read with an anchor on both sides of a site, using on each side the innermost of the up to three anchors present in the read, which also measures reads without the innermost anchor.
+The other anchors detect reads in which an anchor comes from a different locus: a read is consistent if it contains all three anchors on both sides and, on each side, the distances from the innermost anchor to the other two differ by at most 20\,bp from those on the central read.
+The numbers of consistent tumor and normal reads, and of consistent normal reads with $|D|<20$\,bp, are features in addition to the counts over all measured reads.
+
+\tool{} also measures each signature with a second set of up to three anchors per side, which it selects on the central read before the pass: cores within 15\,kb of the event and at least 20\,bp outside it that occur once on the read, are present in the tumor sample, and have a normal count above zero and at most twice the median normal count.
+For insertions, deletions, and duplications that start within 50\,bp of an annotated tandem repeat, \tool{} moves these anchors to the repeat boundaries; if the total shift would exceed 10\,kb, it moves each side by at most 1\,kb.
+For duplications of at most 2\,kb, it also moves them outward by the duplication length.
+If no anchors exist at the shifted positions, \tool{} uses the unshifted ones.
+Each read that contains such anchors yields $D$ and the number of cores between the anchors that occur in only one of the two sequences, the read or the snippet.
+
+The three anchors per side of the second set give up to nine anchor pairs.
+For each pair, \tool{} compares the measured numbers of normal and of tumor reads with the largest such numbers over all pairs.
+Among the pairs that reach at least 80\% of both maxima, the features use the pair closest to the event; if no pair qualifies, they use the pair measured in the most reads.
+
+Among the records of the five CASTLE pairs, 56\% of those that do not match the training labels have at least one normal read with $|D|<20$\,bp, compared with 1\% of those that match it (Fig.~\ref{supfig:evidence}).
+
+\supnote{Training and application of the classifier}{supsec:classifier}
+
+We used the HistGradientBoostingClassifier of scikit-learn~\cite{sklearn} (v1.9.1; learning rate 0.05, at most 300 iterations with the default early stopping, at most 15 leaves per tree, at least 40 records per leaf, L2 regularization 1.0).
+The probability of a record is the mean of five models trained with different random seeds.
+We labeled a record true if both of its breakpoints are within 500\,bp of those of an SV in the truth set, or, for insertions, if the positions are within 500\,bp.
+The truth set for training is the Minda consensus of the 17 call sets other than \tool{} (Section~\ref{sec:accuracy}); the consensus of all 18 call sets was used only for evaluation.
+For the CASTLE benchmark, we evaluated each pair with a model trained on the other four pairs, whereas the models for HG008, COLO829, and the simulated dataset were trained on all five pairs.
+
+The minimum read support (Methods) was $m_0=3$ in the full-depth, 30$\times$, and purity runs, except the purity runs of HCC1395, and $m_0=2$ in all other real runs.
+It was $m_t=3$ in all full-depth runs, in the 30$\times$ and 100\% purity runs except those of HCC1954, in the 80\% purity runs of the four other CASTLE pairs, and in the 20$\times$ and 60\% purity runs of NCI-H2009 and HCC1395, and $m_t=2$ in all other real runs.
+In the simulated runs, $m_t$ was 3 for 19 of the 20 tumors at 20/20 and 2 otherwise.
+
+For each value of $m$, we selected a probability threshold on held-out predictions that exclude the records the threshold applies to: a nested leave-one-out split classifies each training pair with a model trained on the other training pairs, and we chose the threshold from 0.20 to 0.80 (step 0.05) that maximizes the F1 score on these predictions.
+\tool{} marks records at or above the threshold of their run as PASS and the others as LOW (Fig.~\ref{supfig:classifier}).
+For an insertion, the second breakpoint used for the duplicate rule (Methods) is its position plus its length.
+
+\supnote{Evaluation of the classifier}{supsec:clseval}
+
+We scored the held-out probabilities with the area under the ROC curve (ROC-AUC) and the average precision for each CASTLE pair at every depth and purity (DUPL records excluded, training labels; Table~\ref{suptab:auc}).
+At full depth, the ROC-AUC ranged from 0.970 (HCC1954) to 0.993 (NCI-H1437) and the average precision from 0.949 to 0.970 (Fig.~\ref{supfig:auc}).
+The mean ROC-AUC stayed at 0.980 or above down to 15$\times$ and at all purities and was 0.977 at 10$\times$ and 0.962 at 5$\times$, where the mean average precision dropped to 0.783.
+
+We repeated the training with every choice of three CASTLE pairs (10 splits), selecting thresholds within the training pairs, and classified the two held-out pairs at all depths and purities.
+Each pair was among the held-out pairs in four splits, and at full depth its F1 score against the training labels varied by at most 0.049 across them: 0.874--0.882 for HCC1954, 0.914--0.929 for NCI-H2009, 0.830--0.846 for HCC1937, 0.780--0.829 for NCI-H1437, and 0.835--0.857 for HCC1395 (Fig.~\ref{supfig:splits}).
+With four training pairs, the F1 scores of HCC1954, NCI-H2009, HCC1937, and HCC1395 lay within their three-pair ranges, and that of NCI-H1437 lay above its range (0.841).
+At every depth and purity, the F1 score of the held-out pairs, averaged over the 10 splits, was within 0.008 of that obtained with four training pairs (Table~\ref{suptab:splits}).
+
+We ran a full grid over five parameters of the gradient-boosted trees, with three values each and 243 parameter sets in total: a learning rate of 0.02, 0.05, or 0.1; at most 150, 300, or 600 iterations; at most 7, 15, or 31 leaves per tree; at least 10, 40, or 160 records per leaf; and an L2 regularization of 0, 1, or 5.
+We trained and evaluated every parameter set in the same way as the classifier: as the mean of five models with different random seeds, with leave-one-out cross-validation over the five CASTLE pairs, and with thresholds chosen on the nested leave-one-out split.
+We averaged the F1 scores over all depths and purities except 100\% purity, whose runs use the same reads as the 30$\times$ runs for four of the five pairs.
+The best set of the grid, chosen on the held-out pairs, reached 0.780, compared with 0.777 for the chosen parameters (Table~\ref{suptab:grid}, Fig.~\ref{supfig:params}).
+We also chose a parameter set for each held-out pair by nested cross-validation, using only its four training pairs: we classified each training pair with a model trained on the other three, chose the set with the highest mean F1 score over the same depths and purities, and scored this set on the held-out pair.
+With these sets, the mean F1 score was 0.774, compared with 0.777 for the chosen parameters (0.866 and 0.869 at full depth).
+A single model instead of the mean of five changed the mean F1 score at full depth from 0.869 to 0.866.
+
+\supnote{Acceptance rule of the joint runs}{supsec:joint}
+
+In joint runs (Methods), \tool{} places and aligns snippets separately for each tumor sample.
+For internal branching nodes, \tool{} tallies reads toward $n_s(\sigma)$ only if the node also branches within the restricted subgraph $V_0 \cup V_s$, ignoring branches induced solely by other tumor samples.
+We classified the simulated records with the model trained on all five CASTLE pairs and compared each record with the probability threshold that corresponds to the minimum read support of its own tumor sample.
+We applied the same acceptance rule and carrier conditions (Methods) at all five depths.
+Varying the margin above the threshold from 0 to 0.3 and the minimum probability of a supported record from 0.05 to 0.3 changed the median F1 score of the first pass from 0.841 to 0.858 at 20/20 and from 0.787 to 0.798 at 20/5 (Fig.~\ref{supfig:joint}a,b).
+
+The clade pass (Methods) builds the tree from the carrier sets of the first pass as in Section~\ref{supsec:simeval}, by neighbor joining on the Manhattan distances between the presence/absence vectors of the SVs over the tumor samples.
+The candidate carrier sets are the two sides of every edge of the unrooted tree and the set of all tumors, 75 sets for 20 tumors.
+A candidate $K$ scores $\sum_{k\in K} e_k + \ln\frac{n_K+1}{N+M} + \ln M$, where $e_k$ is the evidence of tumor $k$ (Methods), $n_K$ the number of SVs whose first-pass carriers are exactly $K$, $N$ the number of SVs with an accepted record, and $M$ the number of candidates; the prior is zero for a set that carries an average share of the SVs, positive for a long branch, and negative for an empty one.
+A tumor with several records of one SV contributes its highest probability, and the carriers of an SV are attached to its accepted record with the highest probability.
+Varying $\mu$ from 0.3 to 2 changed the median F1 score of the clade pass from 0.854 to 0.860 at 20/20 and from 0.800 to 0.841 at 20/5 (Fig.~\ref{supfig:joint}c, Table~\ref{suptab:clade}).
+
+\FloatBarrier
+\supsec{Datasets and benchmarking}{supsec:benchmarking}
+
+\supnote{Datasets}{supsec:datasets}
+
+{\sloppy We downloaded the PacBio HiFi reads of HCC1954, NCI-H2009, HCC1937, NCI-H1437, and their matched normal cell lines from the SRA (tumor: SRR28305163, SRR28305172, SRR28305185, SRR28305179; normal: SRR28305160, SRR28305169, SRR28305182, SRR28305175).
+We obtained the PacBio Revio reads of HCC1395/HCC1395BL and COLO829/COLO829BL from the PacBio public datasets (\url{https://www.pacb.com/connect/datasets/}) and those of HG008-T and HG008-N-D from the Genome in a Bottle FTP site~\cite{hg008}.
+The published call sets of the CASTLE panel were those released with Severus~\cite{severus}.
+The reference genome was GRCh38 with the pseudo-autosomal regions of chromosome Y masked.
+Fig.~\ref{supfig:datasets} gives the depth and the mean read length of the 14 read sets.\par}
+
+\supnote{Running the SV detection tools}{supsec:tools}
+
+We mapped the reads with minimap2 (v2.31; \texttt{-ax map-hifi -Y --secondary=no}) and sorted the alignments with SAMtools~\cite{samtools} (v1.21).
+We called small variants of the normal sample with Clair3~\cite{clair3} (v2.0.3, Revio model) and phased them with LongPhase~\cite{longphase}, which also haplotagged the tumor and normal alignment files.
+We ran Severus (v1.7) with default parameters, the phased VCF file, and the tandem repeat annotation.
+We ran SAVANA (v1.3.8) on the haplotagged alignments with \texttt{--pb}.
+For nanomonsv (v0.9.0), we ran \texttt{nanomonsv parse} with default parameters and \texttt{nanomonsv get} with \texttt{--qv25} and the tandem repeat annotation.
+We ran Sniffles2 (v2.8.0) on each sample with the tandem repeat annotation, merged the two SNF files, and kept the calls supported only by the tumor.
+We also ran its mosaic mode on the tumor and removed calls that start within 1\,kb of a call of the same type in a normal call set made with \texttt{--minsupport 1}.
+This gave a mean F1 score of 0.138 on the five CASTLE pairs, compared with 0.425 in tumor--normal mode, so we did not use the mosaic mode further.
+We ran SVision-pro (v2.5) in its somatic mode with the HiFi preset.
+We ran dysgu (v1.8.8) with \texttt{--mode pacbio-revio} on both samples (\texttt{--diploid False} for the tumor), filtered the tumor calls against the normal sample with \texttt{dysgu filter}, and kept breakends and calls of at least 50\,bp.
+For all callers, we used only PASS calls.
+
+{\sloppy cuteSV (v2.1.4), DeBreak (v1.3), kled (v1.2.11), and SVDSS (v2.1.1) have no tumor--normal mode, and we ran them on each sample separately, with a minimum SV length of 50\,bp where the tool offers this option.
+We ran cuteSV with \texttt{--max\_cluster\_bias\_INS 1000 --diff\_ratio\_merging\_INS 0.9 --max\_cluster\_bias\_DEL 1000 --diff\_ratio\_merging\_DEL 0.5}.
+For the normal sample we used a minimum support of 2 in cuteSV and DeBreak, a minimum cluster weight of 2 in SVDSS (4 for the tumor), and \texttt{--F2} in kled.
+We ran SVDSS on alignments processed by its smoothing step.
+We removed a tumor call if a normal call of the same type and at least 50\,bp started within 500\,bp (1\,kb for kled) on the same chromosome.
+We ran Delly (v2.6.0; \texttt{delly lr -y pb}, then \texttt{delly filter -f somatic}) only on HCC1954 (F1 score 0.746); it is not one of the 18 call sets.\par}
+
+\supnote{Consensus sets and matching criteria}{supsec:consensus}
+
+We built the consensus of each CASTLE pair with \texttt{minda ensemble} (\texttt{--tolerance 500 --min\_size 50}) from the 10 PacBio HiFi call sets of Section~\ref{supsec:tools}, the PASS calls of \tool{}, and the seven published ONT and Illumina call sets, keeping calls supported by at least two technologies and at least six call sets (Fig.~\ref{supfig:consensus}).
+The other evaluations used \texttt{minda truthset} with the same parameters: we scored HG008 against the draft benchmark, COLO829 against the validated set (62 of its 68 SVs are at least 50\,bp long), and the depth and purity runs against the consensus of the full-depth pair.
+Minda assigns the type of a consensus call by majority vote and labels most junctions that join two positions of one chromosome in inverted orientation as breakends.
+For the comparison by type, we counted all such junctions as inversions in the consensus and in the call sets.
+
+\supnote{Generation of the simulated dataset}{supsec:simgen}
+
+We derived the simulated genomes from chromosomes 1--22 and X of T2T-CHM13v2.0 with insilicoSV~\cite{Battistella_2025} (v0.1.9 with local modifications).
+The diploid normal genome carries the phased variants of HG00733 from the HGSVC3 call set on CHM13~\cite{hgsvc3}, inserted into two copies of the reference, one per haplotype: 22,303 germline SVs (11,378 insertions and 10,925 deletions), 990,336 small indels, and 3,765,908 SNVs, about two thirds of them heterozygous.
+For the simulated data, we ran \tool{} against CHM13, so the normal genome differs from the reference by the germline variants of one individual.
+
+We generated a tree with 39 nodes using msprime~\cite{msprime}.
+Its 20 leaves are the tumor genomes, and its root, the most recent common ancestor of the tumors, descends from the normal genome.
+We introduced somatic variants along the branches, and each node inherits the variants of its parent.
+We placed each variant on a single haplotype, and the variant was heterozygous when it arose.
+The simulation contains 5,147 somatic SVs (1,864 deletions, 1,450 dispersed duplications, 605 tandem duplications, 581 translocations, 493 insertions, and 154 inversions), two whole-genome duplications, a cluster of complex events, 5,603 somatic small indels, and 55,320 somatic SNVs (Fig.~\ref{supfig:simgen}).
+Afterward, we applied copy-number gains and losses of chromosome segments to each tumor genome, including the loss of one haplotype in some regions.
+
+We simulated PacBio HiFi reads with Badread~\cite{badread} at 20$\times$ per genome (2021 PacBio error and quality models, mean read length 17\,kb), trimmed the adapters, and removed reads shorter than 100\,bp; we downsampled the 10$\times$ and 5$\times$ read sets from these.
+
+\supnote{Evaluation of the simulated dataset}{supsec:simeval}
+
+insilicoSV reports the SVs of each genome of the simulated tree in the coordinates of its parent genome; we converted all 5,147 SVs to reference coordinates and derived the junctions each creates.
+We excluded SVs shorter than 50\,bp, except dispersed duplications and translocations, from the truth sets and ignored calls shorter than 50\,bp.
+A call is a true positive if both breakpoints lie within 500\,bp of the two ends of a junction; precision is the fraction of calls matching a junction, and recall the fraction of SVs with at least one matched junction.
+In the pairwise runs at 20/20, recall was 0.72--0.76 for all SV types except translocations (0.89; Fig.~\ref{supfig:simeval}).
+
+For the phylogenetic analysis, we transitively merged records of different tumor samples within 500\,bp into SVs.
+Each SV with an accepted record became a presence/absence vector over the 20 tumors, in which a tumor is present if it has an accepted record or \tool{} reports it as a carrier.
+We built the tree from the Manhattan distances between these vectors with the neighbor-joining function of the R package ape~\cite{ape}.
+A second reconstruction, which builds the tree directly from the most frequent compatible carrier sets, recovered 16 of the 17 splits at 20/5 (Robinson--Foulds distance 2).
+
+For the run-time comparison, minimap2 mapped the 21 read sets one after the other, reading FASTQ streams decoded from the packed files; the time includes sorting and indexing with SAMtools.
+
+For the pooled run, we concatenated the packed reads of the 20 tumors at 5$\times$ into one tumor sample of 98$\times$ and ran the pairwise pipeline on it with the normal sample at 20$\times$ and the same model (14.5 min on 16 threads).
+We scored the pooled run, the joint run, and the union of the 20 pairwise runs against the union of the 20 truth sets, after merging the accepted records within 500\,bp into one call per SV; a call is true if it matches a junction of any tumor, and an SV is found if any call matches one of its junctions (Table~\ref{suptab:pooled}).
+
+\FloatBarrier
+\supsec{Accuracy on the tumor--normal pairs}{supsec:pairs}
+
+On ONT data, Severus reached a mean F1 score of 0.841, whereas SAVANA and nanomonsv had lower F1 scores and precision than on HiFi (Table~\ref{suptab:allwith}, Fig.~\ref{supfig:allsets}a).
+Among the Illumina call sets, Manta and GRIPSS had higher F1 scores than the ONT call set of Sniffles2 and five HiFi call sets, while SvABA had higher F1 scores only than kled and SVDSS.
+
+\supnote{Consensus SVs that were not called}{supsec:missed}
+
+Of the 4,140 SVs in the five consensus sets, 474 had no PASS call of \tool{} under the matching criterion of the training labels (Section~\ref{supsec:classifier}; Minda counted 456 false negatives).
+Of these 474 SVs, 256 had a record marked LOW or DUPL, and for the remaining 218 \tool{} wrote no record (Fig.~\ref{supfig:missed}).
+
+\supnote{Other consensus sets}{supsec:loo}
+
+The consensus of the 17 call sets other than \tool{}, built with the same criteria, contains 989, 887, 675, 215, and 1,262 SVs for HCC1954, NCI-H2009, HCC1937, NCI-H1437, and HCC1395.
+Against it, \tool{} had a mean F1 score of 0.866, compared with 0.859 for Severus and 0.847 for SAVANA (Table~\ref{suptab:loo}, Fig.~\ref{supfig:allsets}b).
+We also scored each of the 11 PacBio HiFi call sets against a consensus of the other 17 call sets, which for \tool{} is the consensus above; these consensus sets had 988--1,044 SVs for HCC1954 and 211--221 for NCI-H1437.
+\tool{} led all five pairs, and Severus and SAVANA reached mean F1 scores of 0.833 and 0.825 (Table~\ref{suptab:loo}, Fig.~\ref{supfig:allsets}c).
+By SV type and size, \tool{} led against the consensus without \tool{} on breakends, inversions, SVs without length, and 1--10\,kb SVs (Fig.~\ref{supfig:without}).
+
+\supnote{Reduced sequencing depth and tumor purity}{supsec:depth}
+
+To downsample a read set, we shuffled its reads and took them in this order until we reached the target number of bases, calculated for a genome size of 3.1\,Gbp.
+A purity mixture combined tumor and normal reads in the target proportion to 30$\times$, with a separate matched normal read set of 30$\times$, except for HCC1395, where only 17$\times$ remained because the mixtures needed the other normal reads.
+We downsampled and mixed HG008 and COLO829 in the same way (Fig.~\ref{supfig:grid}).
+At 20\% purity, \tool{} reached F1 scores of 0.650--0.749 in the five pairs, compared with 0.473--0.562 for Severus (Table~\ref{suptab:depth}).
+
+\supnote{COLO829, HG008, and SV types}{supsec:extbench}
+
+On HG008, \tool{} had the highest recall of the PacBio HiFi call sets but a lower precision than SAVANA (0.915 and 0.932; Table~\ref{suptab:external}), and Table~\ref{suptab:types} gives the F1 score by SV type and size.
+
+\FloatBarrier
+\supsec{Runtime and memory}{supsec:runtime}
+
+\supnote{Computational requirements}{supsec:compute}
+
+All tools ran on a workstation with an AMD Ryzen 9 9950X CPU (16 cores) and 196\,GB of memory, using 16 threads (SAVANA on 8, as 16 threads exceeded the memory).
+Memory values are peak resident set sizes (RSS); we give memory and file sizes in GB.
+
+Most of the run time of \tool{}, 4.7--7.9 min per pair, went into packing the reads and extracting the cores (Table~\ref{suptab:time}).
+Building the graph and detecting the sites took less than 2 min, and selecting, placing, and aligning the snippets took 1--3 min.
+Training one classifier model took 4--5 s, and the complete classification step for all 77 runs on real data (the full-depth, downsampled, and mixed read sets of the seven pairs), including the threshold selection, took 3.4 min.
+From 11.6--12.7 million tumor reads per pair, \tool{} detected 90,000--304,000 sites, cut 26,000--75,000 snippets, and wrote 2,300--5,000 records (Fig.~\ref{supfig:cost}).
+
+\supnote{Intermediate files}{supsec:files}
+
+Each step of \tool{} reads the files of the previous steps from disk.
+The packed reads and their index take most of the space, with 72--98\,GB per pair, followed by the core positions on the reads with 13--18\,GB, which later steps reuse instead of partitioning the reads again.
+The core and edge counts (one file per sample), the graph (one file for all samples, with the count of every node in every sample), and the files of the later steps (sites, snippets, reference windows, alignments) take 4--6\,GB together.
+In total, the intermediate files of a pair are 68--77\% of the size of the two sorted BAM files that the alignment-based callers require (Table~\ref{suptab:files}).
+
+\clearpage
+\section*{Supplementary Tables}\label{supsec:tables}
+
+\begin{table}[htbp]
+\centering
+\caption{Number of objects at each step of \tool{}}
+\label{suptab:steps}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/steps}}
+\tabnotes{Full-depth runs of the five CASTLE pairs. A snippet can contain several sites, and several snippets can carry the same event.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Accuracy of \tool{} on the five CASTLE pairs}
+\label{suptab:castle}
+\small
+\input{tables/castle}
+\tabnotes{Precision, recall, and F1 score of \tool{} against the consensus of 18 call sets.
+A model trained on the other four pairs classifies each pair. n/t, normal/tumor; TP, true positives; FP, false positives; FN, false negatives.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{F1 score of the 18 call sets on the five CASTLE pairs}
+\label{suptab:allwith}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/allwith}}
+\tabnotes{F1 score per pair against the consensus of 18 call sets, and mean precision, recall, and F1 score over the five pairs, ordered by mean F1 score.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{The PacBio HiFi call sets against the consensus of the 17 call sets other than \tool{} and against the consensus of the other 17 call sets}
+\label{suptab:loo}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/loo}}
+\tabnotes{Mean precision, recall, and F1 score over the five CASTLE pairs.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Accuracy at reduced sequencing depth and tumor purity}
+\label{suptab:depth}
+\small
+\resizebox{\textwidth}{!}{\input{tables/depth}}
+\tabnotes{Mean over the five CASTLE pairs against the consensus of 18 call sets of the full-depth pair.
+95\% interval: bootstrap interval of the mean F1 score of \tool{}; \tool{} $-$ best other: difference from the caller with the highest mean F1 score, with its bootstrap 95\% interval (2,000 resamples).}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Accuracy on COLO829 and HG008}
+\label{suptab:external}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/external}}
+\tabnotes{COLO829 (62 validated somatic SVs of at least 50\,bp) and HG008 (draft benchmark v0.5), scored with Minda; neither pair was part of the training data.
+Rows ordered by F1 score on COLO829; bold: highest F1 score. Last row: difference from the call set with the next highest F1 score, with its bootstrap 95\% interval.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{F1 score by SV type and size on the five CASTLE pairs}
+\label{suptab:types}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/types}}
+\tabnotes{Five pairs pooled, consensus of 18 call sets; bold: highest of each row.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Pairwise and joint runs on the simulated case}
+\label{suptab:sim}
+\small
+\resizebox{\textwidth}{!}{\input{tables/sim}}
+\tabnotes{Precision, recall, and F1 score: medians over the 20 tumors.
+First pass: records and read-supported carriers; clade pass: carriers re-decided with the tree (Methods).
+Splits: splits of the simulated tree found in the tree reconstructed from the first-pass calls; RF: Robinson--Foulds distance.
+Wall-clock time and peak memory on 16 threads from the packed reads (pairwise: sum of the times, largest memory).
+minimap2 mapped the 21 read sets at 5/5 in 117.6 min with 19.0\,GB.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{F1 score of each simulated tumor in the pairwise runs and the two passes of the joint run}
+\label{suptab:simtumor}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/simtumor}}
+\tabnotes{Columns give the normal/tumor depth.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Carriers reported by the first pass and the clade pass of the joint run}
+\label{suptab:clade}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/clade}}
+\tabnotes{Carriers: tumor samples without an accepted record that are reported for an SV, summed over the 20 tumors; True: carriers that match a simulated SV of that tumor.
+Right: median F1 score over the 20 tumors of the clade pass for each value of the penalty $\mu$; the paper uses 0.5.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{The 20 tumors pooled into one sample, the pairwise runs, and the joint run against the SVs of the whole cohort at 20/5}
+\label{suptab:pooled}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/pooled}}
+\tabnotes{Accepted records merged within 500\,bp into one call per SV and scored against the union of the 20 truth sets (5,147 distinct SVs; Section~\ref{supsec:simeval}). SVs found: distinct SVs with a matching call. Right: recall of the SVs carried by the given number of tumors (number of such SVs in parentheses).}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Mapping time of the two read sets of each pair}
+\label{suptab:mapping}
+\small
+\input{tables/map}
+\tabnotes{minimap2 on 16 threads, including sorting. $^\dagger$Estimated from the amount of sequence at the mean throughput of HCC1954 and COLO829 (39.6 and 42.8\,s per Gbp).
+Snippets: sequence of the snippets aligned by \tool{}, and the ratio of the reads to it; the second ratio is the mapping time divided by the run time of \tool{} (Table~\ref{suptab:time}).}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Run time and memory of the pipelines on HCC1954}
+\label{suptab:pipelines}
+\small
+\input{tables/pipelines}
+\tabnotes{Wall clock (h:mm) from the read sets to the calls on 16 threads (SAVANA on 8). Factor: total time relative to \tool{}.
+Peak RSS: largest over mapping, phasing, and calling.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Run time and peak memory of \tool{} per stage}
+\label{suptab:time}
+\small
+\input{tables/time}
+\tabnotes{Wall-clock time (m:ss) per stage on 16 threads and range of peak resident memory over the five pairs.
+RSS, resident set size.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Size of the intermediate files of \tool{}}
+\label{suptab:files}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/files}}
+\tabnotes{Intermediate files of \tool{} per pair and the two sorted BAM files that an alignment-based caller needs, in GB ($2^{30}$ bytes).
+Packed reads include their index.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Threshold-free evaluation of the classifier}
+\label{suptab:auc}
+\small
+\input{tables/auc}
+\tabnotes{Mean over the five CASTLE pairs of the held-out probabilities, each pair classified by the model trained on the other four (DUPL records excluded, training labels).
+ROC-AUC, area under the receiver operating characteristic curve.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Training on three instead of four CASTLE pairs}
+\label{suptab:splits}
+\small
+\resizebox{\textwidth}{!}{\input{tables/splits}}
+\tabnotes{Mean F1 score of the held-out CASTLE pairs (training labels) with four training pairs (leave-one-out) and with three (all 10 splits).
+The range is that of the mean of the two held-out pairs over the 10 splits.}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Full parameter grid of the gradient-boosted trees}
+\label{suptab:grid}
+\small
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\input{tables/grid}}
+\tabnotes{Mean F1 score of the five CASTLE pairs (training labels) at full depth, at 20$\times$, at 5$\times$, at 20\% purity, and over all depths and purities except 100\% purity (All).
+Nested cross-validation chooses a set for each held-out pair on its four training pairs and can therefore combine up to five sets.}
+\end{table}
+
+\clearpage
+\section*{Supplementary Figures}\label{supsec:figures}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_allsets.pdf}
+\caption{F1 score of the call sets in each CASTLE pair (dots) and its mean (bar); columns: mean F1 score, precision (P), recall (R). (a) All 18 call sets against the consensus of 18 call sets and (b) of the 17 call sets other than \tool{}; name colors give the sequencing technology. (c) Each PacBio HiFi call set against the consensus of the other 17 call sets.}
+\label{supfig:allsets}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_simgen.pdf}
+\caption{The simulated dataset. (a) SVs of each tumor by type (DUP, tandem duplication; dDUP, dispersed duplication; rTRA, translocation). (b) Size distribution of the 5,147 simulated SVs by type. (c) Number of SVs by the number of tumors that carry them.}
+\label{supfig:simgen}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_sweep.pdf}
+\caption{Mean F1 score of \tool{} on the five CASTLE pairs for each combination of depth thresholds, against the consensus of 18 call sets of the full-depth pair: at full depth (a), averaged over the reduced depths from 30$\times$ to 5$\times$ (b), and averaged over the tumor purities from 100\% to 20\% (c).
+The chosen thresholds, $\tau_{\mathrm{normal}}=\tau_{\mathrm{tumor}}=20$, are outlined; each panel has its own color scale.}
+\label{supfig:sweep}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_spectra.pdf}
+\caption{Count spectra of the cores in the tumor samples of the CASTLE pairs at full depth: tumor-only cores (a) and cores shared with the normal sample (b), by the number of tumor reads that contain the core (at least two).}
+\label{supfig:spectra}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_signatures.pdf}
+\caption{Records of the five CASTLE pairs. (a) PASS records of each pair by SV type. (b) Records by SV type and by the filter assigned after classification, pairs pooled.}
+\label{supfig:signatures}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_features.pdf}
+\caption{Drop in F1 score (training labels) when the features of one group are permuted among the full-depth records of a pair, which is classified again with the same models.
+Bars show the mean over the seven pairs, dots the individual pairs, and parentheses the number of features.
+The minimum read support and the four depth and purity values are constant within a run and not shown.}
+\label{supfig:features}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_evidence.pdf}
+\caption{Records of the five CASTLE pairs that match the training labels (3,828) and that do not (8,559), duplicates excluded. (a) Fraction of records by the number of normal reads with $|D|<20$\,bp. (b) Fraction of records by the number of supporting tumor reads.}
+\label{supfig:evidence}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_classifier.pdf}
+\caption{(a) Held-out probabilities of the records of the five CASTLE pairs that match the training labels and that do not (duplicates excluded). (b) F1 score of each of the seven pairs on its training labels as a function of the threshold.
+The dot marks the threshold selected for the full-depth run.}
+\label{supfig:classifier}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_auc.pdf}
+\caption{Held-out probabilities of the records of the five CASTLE pairs at full depth, each pair classified by the model trained on the other four (DUPL records excluded, training labels): ROC curves (a) and precision--recall curves (b), with the ROC-AUC and the average precision in parentheses; axes zoomed to the curves.}
+\label{supfig:auc}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_splits.pdf}
+\caption{Training on three instead of four CASTLE pairs (training labels).
+(a) F1 score of each pair at full depth with the four models trained on three of the other four pairs (gray) and with the model trained on the other four pairs (red).
+(b) Mean F1 score of the held-out pairs at each depth and purity, with the mean and range over the 10 three-pair splits.}
+\label{supfig:splits}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_params.pdf}
+\caption{F1 score of each of the 243 parameter sets minus that of the chosen parameters, as the mean of the five CASTLE pairs on the training labels at full depth, at 20$\times$, at 5$\times$, at 20\% purity, and over all depths and purities except 100\% purity (all).}
+\label{supfig:params}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_joint.pdf}
+\caption{Median F1 score of the 20 simulated tumors in the joint run. (a, b) First pass at 20/20 (a) and 20/5 (b) for different constants of the acceptance rule; rows give the margin above the threshold required without support from another tumor, and columns the lowest probability accepted with such support; the chosen values are outlined. (c) Clade pass for different values of the penalty $\mu$ of a tumor without a record, at the five depths; the chosen value is marked.}
+\label{supfig:joint}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_datasets.pdf}
+\caption{The read sets of the seven tumor--normal pairs. (a) Sequencing depth (sequenced bases divided by 3.1\,Gbp). (b) Mean read length.}
+\label{supfig:datasets}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_consensus.pdf}
+\caption{Consensus of 18 call sets. (a) SVs by the number of call sets that contain them. (b) SVs by the technologies of these call sets, with the pair colors of (a).}
+\label{supfig:consensus}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_simeval.pdf}
+\caption{Recall of the 20 pairwise runs on the simulated dataset at 20/20, tumors pooled, by SV type (a) and size (b).
+The number of simulated SVs, summed over the tumors, is given below each bar.}
+\label{supfig:simeval}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_missed.pdf}
+\caption{Consensus SVs without a PASS call of \tool{} (both breakpoints within 500\,bp), split into SVs with a record that is not PASS and SVs without a record, by pair (a) and by SV type, pairs pooled, with inverted junctions counted as inversions (b); numbers in parentheses are the consensus SVs of the pair or type.}
+\label{supfig:missed}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_accuracy_without.pdf}
+\caption{F1 score by SV type (a) and size (b) against the consensus of the 17 call sets other than \tool{}, five pairs pooled, with inverted junctions counted as inversions.
+The highest value of each column is in bold and the number of consensus SVs in parentheses.}
+\label{supfig:without}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/fig_grid.pdf}
+\caption{F1 score of \tool{} per pair and setting against the consensus of 18 call sets of the full-depth pair (HG008 and COLO829 against their truth sets), and below it, as color, its difference from the highest F1 score of Severus, SAVANA, and nanomonsv.
+Upward and downward triangles mark differences whose bootstrap 95\% interval lies above or below zero, and = an interval that contains zero; the color scale runs from $-0.05$ to $+0.25$.
+Hatched cells have no runs of the other callers.}
+\label{supfig:grid}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=80mm]{figures/fig_cost.pdf}
+\caption{Tumor reads, sites, snippets, records, and PASS calls per pair.}
+\label{supfig:cost}
+\end{figure}
+

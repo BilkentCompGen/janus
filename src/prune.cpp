@@ -236,7 +236,7 @@ private:
     std::vector<uint8_t> seeds(const std::vector<uint8_t>& drop) const;
 };
 
-Prune::Prune(const Args& a) : Walker(a.threads), a(a), g(a.in), adj(g), bubbles(g, adj, a.threads), combos(g, adj) {}
+Prune::Prune(const Args& a) : Walker(a.threads), a(a), g(a.need(a.graph, "--graph")), adj(g), bubbles(g, adj, a.threads), combos(g, adj) {}
 
 std::vector<uint8_t> Prune::seeds(const std::vector<uint8_t>& drop) const {
     std::vector<uint8_t> sd(g.K, 0);
@@ -285,7 +285,8 @@ int Prune::run() {
     bubbles.find();
     combos.table(combos.keep(seeds(std::vector<uint8_t>(g.K, 0))));
     index(g.hashes);
-    std::vector<std::string> f = split(a.reads), tumors(f.begin() + 1, f.end());
+    std::vector<std::string> f = split(a.need(a.reads, "--reads")), tumors(f.begin() + 1, f.end());
+    a.need(a.out, "--out");
     stream(std::vector<std::string>(1, f[0]), 0);
     for (;;) {
         stream(tumors, 1);

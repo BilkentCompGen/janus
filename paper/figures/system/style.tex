@@ -1,0 +1,168 @@
+% style.tex: THE one place for every colour, font and line width of the system-figure pieces (\input{style} in each
+% piece). Pieces never define colours or fonts of their own; they only use the names below.
+%
+% Colour theme: one line. \palette names one of the themes defined below (tol, current, okabe, teal, slate).
+% A single piece can be previewed in another theme with a one-line file:  \def\palette{okabe}\input{04_graph.tex}
+\providecommand\palette{tol}
+
+\usetikzlibrary{arrows.meta,calc,positioning,decorations.pathreplacing,shapes.misc,fit,backgrounds,patterns}
+
+% ---- fonts: one family, four sizes (use the tikz styles at the end: labelfont, italicfont, smallfont, badgefont,
+%      stagefont)
+\usepackage[scaled]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\newcommand{\fontlabel}{\sffamily\fontsize{7}{8.4}\selectfont}             % letters, numbers, ticks
+\newcommand{\fontsmall}{\sffamily\fontsize{8}{9}\selectfont}               % larger symbols (+, ...)
+\newcommand{\fontbadge}{\sffamily\bfseries\fontsize{7}{8}\selectfont}      % PASS / LOW / DUPL, type names
+\newcommand{\fontstage}{\sffamily\bfseries\fontsize{8.5}{9}\selectfont}    % stage numbers 1-5
+
+% ---- colour themes: each sets the sample colours (normal only, tumor only, in both) and the inks; the rest is derived
+%                        normal  tumor   ink     ink2    muted   shared (in both samples)
+\newcommand\themetol    {\settheme{4477AA}{CC3355}{1A1A1A}{55565A}{8E8E93}{3A3A3C}}  % Paul Tol bright (colour-blind safe)
+\newcommand\themecurrent{\settheme{2A78D6}{D9541F}{0B0B0B}{52514E}{8A8A86}{2CA02C}}  % the earlier figures
+\newcommand\themeokabe  {\settheme{0072B2}{D55E00}{111111}{4D4D4D}{8C8C8C}{009E73}}  % Okabe-Ito (colour-blind safe)
+\newcommand\themeteal   {\settheme{2E7D86}{E0654A}{1C2321}{4F5755}{8D9592}{7A9A3A}}  % muted teal / coral
+\newcommand\themeslate  {\settheme{6E7781}{E4572E}{15171A}{4E545B}{9AA0A6}{3E8E6E}}  % normal grey, only the tumor in colour
+\newcommand\settheme[6]{%
+  \definecolor{normal}{HTML}{#1}\definecolor{tumor}{HTML}{#2}%
+  \definecolor{ink}{HTML}{#3}\definecolor{ink2}{HTML}{#4}\definecolor{muted}{HTML}{#5}\definecolor{shared}{HTML}{#6}}
+\csname theme\palette\endcsname
+\ifdefined\sharedhex \definecolor{shared}{HTML}{\sharedhex}\fi
+
+% ---- fixed colours (the same in every theme)
+\colorlet{paper}{white}                       % background of shapes (cores, cards, white edges)
+\definecolor{grid}{HTML}{E7E6E2}               % shaded regions (repeat zone)
+\definecolor{guide}{HTML}{B9B8B3}              % guide and drop lines
+\definecolor{frame}{HTML}{C4C4C4}              % panel frames, same grey as the matplotlib figures
+\definecolor{passgreen}{HTML}{1BAF7A}          % PASS, type-and-size group, positive leaves
+\definecolor{hatch}{HTML}{CFCEC9}              % DUPL hatching
+% feature-group colours of the verdict figures (tumor support = tumor, normal evidence = normal,
+% type and size = passgreen, constant = ink2)
+\definecolor{gconsist}{HTML}{4A3AA7}
+\definecolor{ggraph}{HTML}{EDA100}
+\definecolor{galign}{HTML}{E87BA4}
+\definecolor{gref}{HTML}{008300}
+\definecolor{gmeasure}{HTML}{9A6324}
+
+% ---- derived colours: tints of the theme colours
+\colorlet{normalfill}{normal!18!paper}
+\colorlet{tumorfill}{tumor!25!paper}
+\colorlet{sharedfill}{shared!20!paper}
+\colorlet{mutedfill}{muted!22!paper}
+\colorlet{piecefill}{tumor!22!paper}
+\colorlet{reffill}{ink2!16!paper}
+\colorlet{ribbon}{ink2!30!paper}
+\colorlet{tumorribbon}{tumor!35!paper}
+
+% ---- plots (matplotlib reads this file too: paper/figures/plots/style.py). Categories: SV types and size classes.
+\definecolor{svDEL}{HTML}{332288}
+\definecolor{svINS}{HTML}{44AA99}
+\definecolor{svDUP}{HTML}{DDAA33}
+\definecolor{svINV}{HTML}{AA4499}
+\definecolor{svBND}{HTML}{882255}
+\definecolor{size1}{HTML}{B3CDE3}             % 50 bp - 500 bp     (light to dark: small to large)
+\definecolor{size2}{HTML}{6497B1}             % 500 bp - 5 kb
+\definecolor{size3}{HTML}{005B96}             % 5 kb - 50 kb
+\definecolor{size4}{HTML}{03396C}             % 50 kb and more
+% pipeline stages (time, CPU, memory plots): pack, extract, count, graph + prune, place .. patch (alignment), call, verdict
+\definecolor{stPack}{HTML}{BBBBBB}
+\definecolor{stExtract}{HTML}{99DDFF}
+\definecolor{stCount}{HTML}{44BB99}
+\definecolor{stGraph}{HTML}{EEDD88}
+\definecolor{stAlign}{HTML}{EE8866}
+\definecolor{stCall}{HTML}{77AADD}
+\definecolor{stVerdict}{HTML}{AA4499}
+% file groups (disk plots): reads (svb), extracted cores (exc), counts, graph, pieces and sites, alignments, calls
+\definecolor{fReads}{HTML}{77AADD}
+\definecolor{fExtract}{HTML}{99DDFF}
+\definecolor{fCounts}{HTML}{44BB99}
+\definecolor{fGraph}{HTML}{EEDD88}
+\definecolor{fPieces}{HTML}{EE8866}
+\definecolor{fAlign}{HTML}{FFAABB}
+\definecolor{fCalls}{HTML}{1A1A1A}
+\definecolor{fInput}{HTML}{DDDDDD}           % the fastq.gz input
+\definecolor{fBAM}{HTML}{AAAAAA}             % aligned reads (BAM) the other callers need
+% sequencing technologies of the compared callers; janus itself uses `tumor`
+\definecolor{techHiFi}{HTML}{4477AA}
+\definecolor{techONT}{HTML}{228833}
+\definecolor{techSR}{HTML}{BBBBBB}
+% pairs (Tol muted; same order everywhere)
+\definecolor{pHCC1954}{HTML}{332288}
+\definecolor{pH2009}{HTML}{88CCEE}
+\definecolor{pHCC1937}{HTML}{44AA99}
+\definecolor{pH1437}{HTML}{117733}
+\definecolor{pHG008}{HTML}{999933}
+\definecolor{pCOLO829}{HTML}{DDCC77}
+\definecolor{pHCC1395}{HTML}{CC6677}
+\definecolor{pHG009}{HTML}{882255}
+\definecolor{pH209}{HTML}{AA4499}
+\definecolor{pH2126}{HTML}{DDDDDD}
+% other callers in comparisons (janus itself is `tumor`)
+\definecolor{clSeverus}{HTML}{4477AA}
+\definecolor{clSniffles}{HTML}{66CCEE}
+\definecolor{clSavana}{HTML}{228833}
+\definecolor{clNanomonsv}{HTML}{CCBB44}
+\definecolor{clSvision}{HTML}{AA3377}
+\definecolor{clDelly}{HTML}{BBBBBB}
+\definecolor{clMinisv}{HTML}{332288}
+\definecolor{clSomasv}{HTML}{999933}
+\definecolor{clLongcalld}{HTML}{882255}
+\definecolor{clSvscope}{HTML}{EE7733}
+% a record matching the truth set or not
+\definecolor{match}{HTML}{228833}
+\definecolor{nomatch}{HTML}{BBBBBB}
+% colour scales: sequential (light to dark) and diverging (low, middle, high)
+\definecolor{seq1}{HTML}{F7FBFF}
+\definecolor{seq2}{HTML}{C6DBEF}
+\definecolor{seq3}{HTML}{6BAED6}
+\definecolor{seq4}{HTML}{2171B5}
+\definecolor{seq5}{HTML}{08306B}
+\definecolor{divLow}{HTML}{2166AC}
+\definecolor{divMid}{HTML}{F7F7F7}
+\definecolor{divHigh}{HTML}{B2182B}
+
+% plot geometry (mm, pt): one plot's width and height (89 mm = one journal column), curve, axis and grid line widths,
+% marker size, and the plots' text: tick labels and legend entries, axis labels
+\newcommand{\plotw}{89}
+\newcommand{\ploth}{70}
+\newcommand{\plotlw}{0.75}
+\newcommand{\plotaxislw}{0.45}
+\newcommand{\plotgridlw}{0.3}
+\newcommand{\plotms}{3}
+\newcommand{\plotticks}{6}
+\newcommand{\plotlabels}{7}
+
+% ---- line widths (pt)
+\newcommand{\lw}{0.8pt}
+\newcommand{\lwread}{1.5pt}
+\tikzset{
+  every picture/.style={line cap=round, line join=round, font=\fontlabel, text=ink},
+  labelfont/.style={font=\fontlabel},
+  smallfont/.style={font=\fontsmall},
+  badgefont/.style={font=\fontbadge},
+  stagefont/.style={font=\fontstage},
+  italicfont/.style={font=\fontlabel\itshape},             % variable names (D, L)
+  % reads
+  read/.style={line width=\lwread},
+  normalread/.style={read, draw=normal},
+  tumorread/.style={read, draw=tumor},
+  % graph
+  gnode/.style={circle, draw=normal, fill=normalfill, line width=\lw, minimum size=2.9mm, inner sep=0pt},
+  tnode/.style={gnode, draw=tumor, fill=tumorfill},
+  xnode/.style={gnode, draw=muted, fill=mutedfill},
+  snode/.style={gnode, draw=shared, fill=sharedfill},                          % node in both samples
+  gedge/.style={-{Stealth[length=1.6mm]}, line width=\lw, draw=ink2},
+  novel/.style={gedge, draw=tumor},
+  % cores on a read
+  core/.style={rounded corners=0.6mm, draw=ink2, fill=paper, line width=0.6pt, minimum height=1.6mm, inner sep=0pt},
+  ncore/.style={core, draw=normal, fill=normalfill},
+  anchorcore/.style={core, draw=ink, line width=1.1pt},
+  % pieces, reference, alignment ribbons
+  piece/.style={draw=tumor, fill=piecefill, line width=\lw},
+  ref/.style={draw=ink2, fill=reffill, line width=\lw},
+  ribbonfill/.style={fill=ribbon, draw=none},
+  siteblock/.style={fill=ink, draw=none},
+  % flow between steps
+  flow/.style={-{Stealth[length=2.2mm]}, line width=0.9pt, draw=ink2},
+  bracketdown/.style={decorate, decoration={brace, amplitude=1.2mm, mirror}, line width=0.6pt, draw=ink2},
+}

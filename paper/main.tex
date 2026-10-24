@@ -1,0 +1,77 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage{authblk}
+\usepackage{tabularx,booktabs}
+\usepackage{graphicx}
+\usepackage[letterpaper,margin=1.0in]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+\usepackage{placeins}
+\usepackage{url}
+\usepackage{todonotes}
+\usepackage[labelfont=bf,font=small,skip=5pt]{caption}
+\captionsetup[table]{position=top}
+\newcommand{\tabnotes}[1]{\par\smallskip\begin{minipage}{\linewidth}\small #1\end{minipage}}
+\usepackage{xspace}
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\bottomfraction}{0.70}
+\renewcommand{\textfraction}{0.06}
+\renewcommand{\floatpagefraction}{0.70}
+\setcounter{topnumber}{1}
+\setcounter{bottomnumber}{1}
+\setcounter{totalnumber}{2}
+\setlength{\emergencystretch}{1.5em}
+
+\newcommand{\junk}[1]{}
+%\newcommand{\tool}{\textsc{snape}}
+\newcommand{\tool}{\textsc{janus}\xspace}
+%Joint Alignment-free Network for Uncovering Somatic SVs
+\newcommand{\TODO}[1]{\textcolor{red}{[TODO: #1]}}
+
+\newcounter{supsec}
+\newcounter{supnote}[supsec]
+\renewcommand{\thesupsec}{S\arabic{supsec}}
+\renewcommand{\thesupnote}{S\arabic{supsec}.\arabic{supnote}}
+\newcommand{\supsec}[2]{\refstepcounter{supsec}\section*{\thesupsec\quad #1}\label{#2}}
+\newcommand{\supnote}[2]{\refstepcounter{supnote}\subsection*{\thesupnote\quad #1}\label{#2}}
+
+\begin{document}
+\thispagestyle{empty}
+
+\title{Somatic structural variation discovery on cancer pangenome graphs}
+
+\setcounter{Maxaffil}{2}
+\author[1]{Muti Kara}
+\author[1]{Akmuhammet Ashyralyyev}
+\author[1\thanks{Corresponding author. Email: \href{calkan@cs.bilkent.edu.tr}{calkan@cs.bilkent.edu.tr}}]{Can Alkan}
+\affil[1]{\small Dept. of Computer Engineering, Bilkent University, Ankara 06800, Turkey}
+
+\date{}
+
+\maketitle
+
+\input{abstract}
+
+\clearpage
+\input{introduction}
+
+\input{methods}
+
+\input{results}
+
+\input{discussion}
+
+\input{acknowledgments}
+\input{llmstatement}
+
+\clearpage
+\bibliographystyle{myrecomb}
+\bibliography{refs}
+
+
+\input{supplementary}
+
+\end{document}

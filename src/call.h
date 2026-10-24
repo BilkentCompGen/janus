@@ -42,9 +42,9 @@ struct Probe {
     uint8_t lk, set;
 };
 
-std::vector<Event> events(std::vector<Align>& sg, bool germ);
+std::vector<Event> events(std::vector<Align>& sg);
 
-static const uint32_t NF = 57;
+static const uint32_t NF = 56;
 static const uint32_t NEAR = 500;
 
 struct Row {
@@ -60,7 +60,7 @@ struct Record {
     std::string nm;
     uint32_t pc;
     Row r;
-    uint32_t nf, ms, mn, far;
+    uint32_t nf, ms, mn;
 };
 
 uint32_t misfit(const Row& r, const Event& e);
@@ -79,7 +79,7 @@ private:
 
 class Call {
 public:
-    explicit Call(const Args& a) : a(a), pre(a.in), bed(a.vntr) {}
+    explicit Call(const Args& a) : a(a), pre(a.need(a.pieces, "--pieces")), bed(a.need(a.vntr, "--vntr")) {}
     int run();
 
 private:

@@ -1,0 +1,71 @@
+panel,series,bin,bin_low,bin_high,records,fraction
+a,Match the training labels,0,,,3775,0.9861546499
+a,Match the training labels,1,,,24,0.0062695925
+a,Match the training labels,2,,,4,0.0010449321
+a,Match the training labels,3+,,,25,0.0065308255
+a,Do not match,0,,,3725,0.4352143942
+a,Do not match,1,,,329,0.03843907
+a,Do not match,2,,,156,0.0182264283
+a,Do not match,3+,,,4349,0.5081201075
+b,Match the training labels,1-2,0.5,2.5,0,0.0
+b,Match the training labels,3-4,2.5,4.5,52,0.013584117
+b,Match the training labels,5-6,4.5,6.5,84,0.0219435737
+b,Match the training labels,7-8,6.5,8.5,130,0.0339602926
+b,Match the training labels,9-10,8.5,10.5,152,0.039707419
+b,Match the training labels,11-12,10.5,12.5,184,0.0480668757
+b,Match the training labels,13-14,12.5,14.5,199,0.051985371
+b,Match the training labels,15-16,14.5,16.5,186,0.0485893417
+b,Match the training labels,17-18,16.5,18.5,222,0.0579937304
+b,Match the training labels,19-20,18.5,20.5,202,0.05276907
+b,Match the training labels,21-22,20.5,22.5,236,0.0616509927
+b,Match the training labels,23-24,22.5,24.5,237,0.0619122257
+b,Match the training labels,25-26,24.5,26.5,210,0.0548589342
+b,Match the training labels,27-28,26.5,28.5,223,0.0582549634
+b,Match the training labels,29-30,28.5,30.5,162,0.0423197492
+b,Match the training labels,31-32,30.5,32.5,160,0.0417972832
+b,Match the training labels,33-34,32.5,34.5,134,0.0350052247
+b,Match the training labels,35-36,34.5,36.5,85,0.0222048067
+b,Match the training labels,37-38,36.5,38.5,80,0.0208986416
+b,Match the training labels,39-40,38.5,40.5,85,0.0222048067
+b,Match the training labels,41-42,40.5,42.5,78,0.0203761755
+b,Match the training labels,43-44,42.5,44.5,81,0.0211598746
+b,Match the training labels,45-46,44.5,46.5,62,0.0161964472
+b,Match the training labels,47-48,46.5,48.5,55,0.0143678161
+b,Match the training labels,49-50,48.5,50.5,53,0.0138453501
+b,Match the training labels,51-52,50.5,52.5,69,0.0180250784
+b,Match the training labels,53-54,52.5,54.5,63,0.0164576803
+b,Match the training labels,55-56,54.5,56.5,29,0.0075757576
+b,Match the training labels,57-58,56.5,58.5,20,0.0052246604
+b,Match the training labels,59-60,58.5,60.5,34,0.0088819227
+b,Match the training labels,>=61,60.5,62.5,261,0.0681818182
+b,Do not match,1-2,0.5,2.5,0,0.0
+b,Do not match,3-4,2.5,4.5,2450,0.2862483935
+b,Do not match,5-6,4.5,6.5,733,0.0856408459
+b,Do not match,7-8,6.5,8.5,461,0.0538614324
+b,Do not match,9-10,8.5,10.5,430,0.050239514
+b,Do not match,11-12,10.5,12.5,338,0.0394905947
+b,Do not match,13-14,12.5,14.5,295,0.0344666433
+b,Do not match,15-16,14.5,16.5,300,0.0350508237
+b,Do not match,17-18,16.5,18.5,320,0.0373875453
+b,Do not match,19-20,18.5,20.5,327,0.0382053978
+b,Do not match,21-22,20.5,22.5,298,0.0348171515
+b,Do not match,23-24,22.5,24.5,248,0.0289753476
+b,Do not match,25-26,24.5,26.5,245,0.0286248394
+b,Do not match,27-28,26.5,28.5,208,0.0243019044
+b,Do not match,29-30,28.5,30.5,175,0.0204463138
+b,Do not match,31-32,30.5,32.5,177,0.020679986
+b,Do not match,33-34,32.5,34.5,138,0.0161233789
+b,Do not match,35-36,34.5,36.5,132,0.0154223624
+b,Do not match,37-38,36.5,38.5,117,0.0136698212
+b,Do not match,39-40,38.5,40.5,124,0.0144876738
+b,Do not match,41-42,40.5,42.5,123,0.0143708377
+b,Do not match,43-44,42.5,44.5,92,0.0107489193
+b,Do not match,45-46,44.5,46.5,67,0.0078280173
+b,Do not match,47-48,46.5,48.5,79,0.0092300502
+b,Do not match,49-50,48.5,50.5,75,0.0087627059
+b,Do not match,51-52,50.5,52.5,65,0.0075943451
+b,Do not match,53-54,52.5,54.5,55,0.0064259843
+b,Do not match,55-56,54.5,56.5,46,0.0053744596
+b,Do not match,57-58,56.5,58.5,24,0.0028040659
+b,Do not match,59-60,58.5,60.5,25,0.002920902
+b,Do not match,>=61,60.5,62.5,392,0.045799743

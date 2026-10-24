@@ -1,0 +1,28 @@
+# ESKIMIS -- KAPILAR BU DOSYAYI KULLANMIYOR.  Yerine: spec/measured_real_chm13.tsv
+# ------------------------------------------------------------------------------------
+# Bu tablo GRCh38 uzerinden olculmustu; simulasyon 2026-08-18'de T2T-CHM13v2.0'a gecti ve
+# bantlar AYNI BIREYIN gercek CHM13 callset'inden yeniden turetildi. Iki build'in degerleri
+# ayni degil: GRCh38'den gelen eski het/hom ve SV ins:del bantlari, dogru CHM13 verisini
+# YANLISLIKLA FAIL ettiriyordu. Dosya yalnizca tarihsel karsilastirma icin duruyor.
+#
+# Kaynak: /home/datasets/variants-population/1000genome/phased/ (1kGP high-coverage NYGC paneli,
+#         shapeit4 fazli, GRCh38, chr1-22). Cikarim: scripts/extract_real_sample.sh
+# Iki bagimsiz sayici (bcftools stats 1.21 + scripts/vcf_realism_report.py) ayni degerleri verdi.
+# Tarih: 2026-08-18
+metric	NA12878	HG00733	note
+records_autosomal	4301910	4371232	chr1-22, chrX/Y panelde yok
+snv	3523843	3578790	
+indel	773739	788036	
+sv_symbolic	4328	4406	kisa-okuma kaynakli; uzun-okuma callsetlerinde ~5-6x fazlasi beklenir
+het_all_classes	2679023	2742284	
+hom_alt_all_classes	1622887	1628948	
+het_hom_ratio_all	1.6508	1.6835	
+het_hom_ratio_snv_only	1.5747	1.6029	bcftools PSC nHets/nNonRefHom
+ti	2373370	2411694	
+tv	1150473	1167096	
+ti_tv	2.0630	2.0664	
+ins	379072	386277	
+del	394667	401759	
+ins_del_ratio	0.9605	0.9615	
+phased_fraction	1.0000	1.0000	
+hapA_share_of_het	0.5027	0.4992	haplotip dengesi ~%50, beklendigi gibi

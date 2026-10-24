@@ -1,0 +1,1361 @@
+# =====================================================================================
+# spec/parameters.yaml — RECONCILED PARAMETER SPECIFICATION
+# 21-genome phylogenetic tumour simulation (1 germline root + 20 tumour leaves), HiFi reads.
+#
+# Written 2026-08-18 by the chief architect, from docs/01..06 INCLUDING their round-1
+# referee critiques. This file supersedes spec/somatic.yaml where the two disagree
+# (differences are listed under `risks.superseded`).
+#
+# CONTRACT OF THIS FILE
+#   1. Every leaf value carries a sibling `source:` key. No number appears here that does
+#      not appear in docs/01..06 (or is arithmetic on such numbers, tagged [COMPUTED]).
+#   2. Where a referee corrected a number, the CORRECTED value is used and the correction
+#      is named in the sibling `correction:` key.
+#   3. Where sources disagree, the pick is stated with `range:` + `why:`.
+#   4. Counts are either a distribution spec ({dist:, median:, iqr:}) or a fixed value
+#      carrying `fixed_because:`.
+#   5. Anything needed but unsourced is NOT guessed — it is in `risks.unknowns`.
+#
+# TAGS used in `source:`
+#   [DOC n §x]      = docs/0n_*.md section x
+#   [REF n Rx]      = docs/0n referee critique, item Rx / Bx / Mx
+#   [MEASURED]      = measured on this box, file named
+#   [COMPUTED]      = arithmetic on values above it, formula given
+# =====================================================================================
+
+meta:
+  spec_version:
+    value: "1.0"
+    source: "this file, 2026-08-18"
+
+  cancer_type:
+    value: breast_carcinoma
+    source: "[DOC 3 §1] chosen over HGSOC / melanoma / colorectal / GBM"
+    why: |
+      Breast is the only type where (a) the SV process is described down to the modal
+      duplication/deletion size with a named mechanism, (b) three independent WGS cohorts
+      of >=500 genomes exist to cross-check every number (Nik-Zainal 560; CUBRICS 1,364;
+      PCAWG/Hartwig re-processed 201+776), and (c) burdens are mid-range.
+      Operational bonus: snape's real-data arm is breast cell lines (HCC1395/1937/1954/HS578T).
+
+  subtype:
+    value: HRD_deletion_dominant_BRCA2_PALB2_like
+    source: "[REF 3 R1.1] corrected"
+    correction: |
+      docs/03 §12 column A labelled this 'BRCA1-type HRD / TDP group 1 (~11 kb tandem dups)'
+      while pairing it with a class mix that is 45.4% deletions <10 kb and only 14.3%
+      duplications <10 kb. The referee measured the split per sample: only 16/55 (29%) of
+      PCAWG HRD breast genomes are TD-dominant, and only 6/30 (20%) in the HRD-and-WGD
+      stratum. The measured mix therefore describes the deletion-dominant ~71-80% majority.
+      DECISION: keep the measured mix, relabel the phenotype to match it, and DROP the
+      three TDP modal spans (11 kb / 231 kb / 1.7 Mb) — [REF 3 R1.2]: those define three
+      mutually exclusive TDP groups with three different drivers and cannot coexist in one
+      genome, and Li 2020's own finding is that TD size is unimodal WITHIN a patient.
+    consequence: "somatic tandem-duplication length spectrum is now unsourced -> risks.unknowns.somatic_sv_length_spectrum"
+
+  driver_context:
+    value: TP53_mutant
+    source: "[DOC 3 §6] Bielski 2018: WGD followed TP53 mutation in 97.3% of timeable cases"
+
+  hr_wgd_stratum:
+    value: "PCAWG breast, hr_status == HR_deficient AND whole_genome_duplication == True"
+    n: 30
+    source: "[REF 3 R2.2] re-derived from Martinez-Jimenez 2023 Suppl. T1+T5"
+    correction: "docs/03 §12 quoted HRD-only medians (n=55), 45% of which are WGD-negative at median ploidy 1.74; pooling inflated every IQR"
+    prevalence_note:
+      value: "30/201 = 15% of PCAWG breast"
+      source: "[REF 3 R3.4]"
+      why: "this is a deliberately SV-rich 15% corner, NOT 'mid-range'. Stated, not hidden."
+
+  germline_individual:
+    id:
+      value: HG00733
+      source: "[MEASURED] activity_log 05:18:19; present in BOTH the 1kGP phased panel and the HGSVC3 65-sample callset"
+      correction: "docs/02 §9.4/§11 were written for HG00096 (EUR/GBR, male); [REF 2 M8] required re-issue for the donor actually built"
+    population:
+      value: AMR / PUR
+      source: "1kGP panel metadata [DOC 2 §0]"
+    sex:
+      value: female
+      source: "[MEASURED] activity_log 05:18:19 — chrX het/nonref 0.87 vs father HG00731 0.00; chrY 0/128"
+      consequence: "chrX is diploid; chrY is ABSENT from the reference and from every node"
+
+  reference:
+    build:
+      value: T2T-CHM13v2.0 primary, chr1-22 + chrX
+      path: /home/yuio/snape/simulation/phylo/ref/chm13.primary.fa
+      source: "scripts/make_ref_chm13.sh, switched 2026-08-18; built from
+                /home/datasets/references/genomes/chm13v2/chm13v2.0.nochr.fa"
+      why: |
+        SUPERSEDES the 2026-08-18 05:17 hg38 decision. That decision was made on ecosystem
+        grounds (dbSNP/gnomAD/PCAWG/1kGP are hg38-native) and it was WRONG for a read
+        simulator, because the simulated genome carries hg38's N blocks PHYSICALLY and
+        badread reads from them. MEASURED on the hg38 build before the switch:
+          - 86% of unmapped reads were poly-N
+          - chr21: 15% of reads did not align (chr21 is 14.18% N)
+          - non-N mean depth 18.57x against a 20x target
+        Real sequencing produces no poly-N reads, so the artifact had no counterpart in
+        the data being imitated. CHM13v2.0 is gapless (N = 0, measured), which removes it
+        at the root. Centromere positions now come from the real censat v2.1 HOR
+        annotation instead of hand-rounded coordinates.
+      cost_accepted: |
+        No CHM13 liftover chain in /home/datasets/references/liftover and no CHM13 build in
+        SigProfilerMatrixGenerator. Neither is load-bearing here: signature work uses the
+        COSMIC 96-channel probability matrices (channels, not coordinates) and the donor
+        callset is taken from the HGSVC3 v1.0 T2T-CHM13 release, which publishes the same
+        donor on both references.
+    total_length_bp:
+      value: 3054815472
+      source: "[MEASURED] ref/chm13.primary.fa.fai, 23 contigs summed"
+    n_bases:
+      value: 0
+      pct: 0.0
+      source: "[MEASURED] 2026-08-20, N/n count over ref/chm13.primary.fa = 0"
+    callable_length_bp:
+      value: 3054815472
+      source: "[COMPUTED] 3054815472 - 0 — gapless, so callable == total"
+      used_for: "every fraction-of-genome quantity (LOH, density, depth gates) — [REF 2 B3], [REF 3 R2.8]"
+      note: "scripts/refinfo.py is the single source of truth; nothing hardcodes this number"
+    contigs_excluded:
+      chrY:
+        reason: "donor is female"
+        source: "[REF 5 R10]"
+      chrM:
+        reason: "absent from ref/chm13.primary.fa.fai (23 contigs, chr1-22+chrX)"
+        source: "[REF 2 R4.1], [REF 5 R9], [REF 6 R4.8] all flag this as a realism gap"
+        status: "ACCEPTED DEVIATION -> risks.accepted_deviations.no_mitochondrion"
+      alt_and_unplaced:
+        reason: "primary-only subset; avoids the 170 non-primary contigs that accumulate _hapA suffixes and break UCSC-convention BEDs"
+        source: "[REF 4 X7]"
+
+  build_mode_germline:
+    value: real_donor_copy
+    source: "[DOC 2 §9.4] tiers 1-2; activity_log 05:39:02 (HGSVC3 build running)"
+    why: |
+      Copying a real individual's real phased calls makes every marginal AND every
+      correlation (LD, ROH, recombination-linked density, repeat-context indel clustering,
+      per-chromosome density) real by construction. Everything docs/02 §7-§8 proposes to
+      MODEL (recombination-weighted intensity, ROH segment laydown) becomes unnecessary —
+      and [REF 2 B4] and [REF 2 m4] showed both of those models were wrong as written.
+    consequence: |
+      Validation consequence [REF 6 R3.5]: G03/G04/G07/G08/G12 become SELF-CONSISTENCY
+      checks (they catch a broken sampler, not an unrealistic model). Realism evidence must
+      come from the independent axes: a HELD-OUT 1kGP sample comparison, ROH structure,
+      and the HGSVC3-vs-panel cross-check. Labelled as such in `validation`.
+
+# =====================================================================================
+germline:
+# =====================================================================================
+  source_callset:
+    primary:
+      value: "HGSVC3 release 1.0, PAV 2.4.0.1, T2T-CHM13, sample HG00733 — snv + indel + sv_insdel(_alt) + sv_inv"
+      files: "variants_T2T-CHM13_{snv_snv,indel_insdel,sv_insdel}_alt_HGSVC2024v1.0.vcf.gz
+              (/home/yuio/tmp/hgsvc3-chm13) — HGSVC3 publishes the same donor on both
+              references; the CHM13 flavour is the one imported, matching ref.build"
+      source: "[DOC 2 §9.2] (file list + sizes HTTP-verified 2026-08-18); activity_log 05:18:19, 05:39:02"
+      why: |
+        [DOC 2 §3.1] the technology ladder is SENSITIVITY, not disagreement: the same samples
+        give 19,297-23,969 SVs by long read and 8,540-9,963 by short read. Phase E emits HiFi
+        reads, so the germline truth must be built at the long-read/assembly tier or the
+        dataset is detectably unreal the moment a HiFi SV caller touches it.
+        [REF 2 B2] additionally forbids mixing assembly-tier COUNTS with panel-tier SIZES —
+        so the sizes come from the same file as the counts.
+    cross_check:
+      value: "[SUPERSEDED — GRCh38] /home/datasets/variants-population/1000genome/phased/ (1kGP high-coverage NYGC, shapeit4, GRCh38, chr1-22)"
+      source: "[MEASURED] spec/measured_real_germline.tsv; two independent counters agreed (bcftools stats 1.21 + scripts/vcf_realism_report.py)"
+      role: "cross-validation and the fallback if an HGSVC3 chromosome fails to import; NOT the primary truth"
+      superseded_by:
+        value: "[MEASURED] spec/measured_real_chm13.tsv — the SAME individual's real T2T-CHM13
+                callset: SNV 3,761,943 + indel 993,207 + SV 22,589 = 4,777,739; het/hom 2.1782;
+                Ti/Tv 2.0076; indel ins:del 0.9732; SV ins:del 1.0265"
+        why: "the gates must ask 'does this match THIS individual on THIS build', not 'does it
+              match a GRCh38 literature number'. The GRCh38-derived het/hom and SV ins:del bands
+              were FAILING correct CHM13 data until they were re-derived (2026-08-19)."
+    chrX:
+      value: "1kGP panel chrX .v2 file (2.5 G) must be downloaded — chrX is ABSENT from the on-disk phased folder"
+      source: "[DOC 2 §9.1] (URL HTTP-verified 2026-08-18); [DOC 2 §13.4]"
+      status: "REQUIRED INPUT, not yet on disk -> risks.blockers.chrx_missing"
+
+  measured_donor_baseline:      # what HG00733 actually carries in the 1kGP panel (tier-1 measurement)
+    note: "these are MEASURED facts about the donor, not targets; the HGSVC3 build will exceed them (chr20: 110,313 vs 92,321 records = +19.5%)"
+    source_all: "[MEASURED] source/HG00733.realism.json + spec/measured_real_germline.tsv, autosomes chr1-22"
+    records:      {value: 4371232, source: "[MEASURED]"}
+    snv:          {value: 3578790, source: "[MEASURED]"}
+    indel:        {value: 788036,  source: "[MEASURED]"}
+    sv_symbolic:  {value: 4406,    source: "[MEASURED]", note: "short-read tier; upgraded by the HGSVC3 layer below"}
+    het_hom_all_classes: {value: 1.6835, source: "[MEASURED]"}
+    het_hom_snv_only:    {value: 1.6029, source: "[MEASURED] bcftools PSC nHets/nNonRefHom"}
+    ti_tv:        {value: 2.0664, source: "[MEASURED]"}
+    ins_del_indel: {value: 0.9615, source: "[MEASURED]"}
+    phased_fraction: {value: 1.0, source: "[MEASURED]"}
+    hapA_share_of_het: {value: 0.4992, source: "[MEASURED]"}
+
+  snv:
+    count:
+      dist: fixed_from_donor
+      expected_band: [3400000, 4100000]
+      fixed_because: "the donor's own callset is copied verbatim; the count is a measurement of HG00733, not a draw"
+      source: "band from [DOC 2 §1.1] BB22 T1 AMR = 3,911,413 and [MEASURED] panel 3,578,790 (91.5% of BB22 — the panel retains 91.8-93.4% of SNVs, [DOC 2 §0])"
+    zygosity_het_hom:
+      value: 1.60
+      band: [1.40, 1.85]
+      source: "[MEASURED] HG00733 SNV-only 1.6029; [DOC 2 §1.2] range across 5 superpopulations 1.35-2.02, AMR 1.666"
+      why_it_matters: "this is the user's stated #1 failure mode ('hepsi homozigot olmus')"
+    ti_tv_genome_wide:
+      value: 2.066
+      band: [1.95, 2.20]
+      source: "[MEASURED] HG00733 2.0664; [DOC 2 §1.3] GATK WGS expectation 2.0-2.1"
+    ti_tv_per_chromosome:
+      band: [1.95, 2.40]
+      source: "[REF 6 R2.1] corrected"
+      correction: "docs/02 §1.3 / docs/06 §2.2 quoted a ceiling of 2.131 (chr1); the referee measured chr19 2.23, chr20 2.19, chr22 2.32 on the same panel. The old band rejects the real human it was calibrated against."
+    spectrum:
+      value: "carried verbatim from the donor callset (real trinucleotide/CpG context)"
+      source: "[DOC 2 §1.3] Ti/Tv alone does not pin a spectrum; [REF 2 R4.5] flags the missing CpG>TpG term — copying the donor closes it for free"
+      measured_class_counts:
+        source: "[MEASURED] source/HG00733.realism.json snv_context"
+        C_to_T_plus_G_to_A: 1235653
+        pct_of_substitutions: 34.5
+        note: "vs 16.7% under a uniform model — the germline/somatic separability the benchmark depends on"
+    private_non_dbsnp_topup:
+      condition: "ONLY if the donor callset's measured novel-vs-dbSNP-b156 fraction is < 0.05%"
+      value: 2500
+      dist: {dist: fixed, n: 2500}
+      source: "[REF 2 M1] corrected"
+      correction: |
+        docs/02 §1.4 said '+8,600' (prose) and §11 row 1e said '+7,215' (table), both traced
+        to TEL16's 8,579 novel-vs-a-2016-catalogue-across-all-classes. The right arithmetic is
+        BB22's own: 7,473,575 novel-vs-dbSNP-b155 alleles x 92.7% singletons / 3,202 samples
+        = 2,164 novel singletons per genome, plus a share of the 545,571 non-singleton novel
+        alleles -> ~2,200-3,500. dbSNP b156 (the build on disk) is larger, so the true figure
+        is at or below that.
+      placement: "het only, same trinucleotide spectrum as the donor's own SNVs"
+
+  small_indels:
+    count:
+      dist: fixed_from_donor
+      expected_band: [700000, 900000]
+      fixed_because: "copied from the donor"
+      source: "[MEASURED] panel 788,036; [DOC 2 §2.1] BB22 T1 AMR 843,404 (435,976 del + 407,428 ins)"
+    zygosity_het_hom:
+      value: 2.08
+      band: [1.80, 2.86]
+      source: "[DOC 2 §2.1] measured across 5 samples; HG00096 2.078"
+      why: "indel het/hom is systematically 25-40% HIGHER than SNV het/hom — one global ratio for both classes is wrong"
+    ins_del:
+      value: 0.96
+      band: [0.93, 0.97]
+      source: "[MEASURED] HG00733 0.9615; BB22 0.932; [DOC 2 §2.3]"
+      why: "the short-indel regime is genuinely deletion-biased; do NOT apply the SV ins:del here"
+      chm13_recheck: "[MEASURED] the same donor's real T2T-CHM13 callset gives 0.9732 — the
+                      deletion bias survives the build change, so this value stands"
+    length_spectrum:
+      dist: empirical_from_donor
+      shape_gates:
+        one_bp_share:  {value: 0.499, band: [0.47, 0.52], source: "[MEASURED] HG00733 393,184/788,036 = 49.9%; [DOC 2 §2.2] pooled 49.74%"}
+        le_2bp:        {value: 0.679, source: "[DOC 2 §2.2]"}
+        le_4bp:        {value: 0.843, source: "[DOC 2 §2.2]"}
+        le_10bp:       {value: 0.945, source: "[DOC 2 §2.2]"}
+        le_20bp:       {value: 0.985, source: "[DOC 2 §2.2]"}
+        str_bumps_must_hold:
+          value: "4bp > 3bp AND 8bp > 7bp AND 12bp > 11bp"
+          source: "[DOC 2 §2.2]; independently reproduced by [REF 2 R5] on HG00733 with a different tool (4bp 9.67% > 3bp 6.74%; 8bp 2.22% > 7bp 0.85%)"
+          why: "the STR-unit signature; a geometric/exponential length model produces a smooth curve and fails instantly"
+    sequence_context:
+      homopolymer_ge5: {value: 0.53, band: [0.50, 0.56], source: "[DOC 2 §2.4] 52.5-53.4% across 5 samples"}
+      any_repeat:      {value: 0.68, band: [0.66, 0.70], source: "[DOC 2 §2.4] 67.9-68.1%, strikingly ancestry-invariant"}
+    import_constraint:
+      value: "74.8% of the donor's indels (589,012 of 788,036) CRASH insilicoSV import in plain VCF form and must be rewritten to symbolic <DEL>/<INS> with SVTYPE/END/SVLEN (+INSSEQ for insertions, [TCGA]+ only)"
+      source: "[REF 4 B3] measured: REF=T ALT=TG imports; REF=T ALT=TGC and REF=AAAT ALT=A both exit 1 on the FIRST offending record"
+      handled_by: "scripts/vcf_to_insilicosv.py (exists; also does the REF-vs-reference check that prevents a silently lying truth VCF — experiments/04)"
+
+  structural_variants:
+    tier:
+      value: assembly / long-read
+      source: "[DOC 2 §3.1]; confirmed empirically by [REF 2 R5]: HG00096 in HGSVC3 = 26,152 ins/del SV loci"
+    count_total:
+      dist: fixed_from_donor
+      expected_band: [20000, 27000]
+      fixed_because: "copied from the donor's HGSVC3 calls"
+      source: "[DOC 2 §3.1] LOG25 26,115/genome; EBE21 24,653; SCH25 non-AFR median 19,297; [REF 2 R5] HG00096 measured 26,152"
+      range_and_pick: "the full literature ladder is 2,100 (1KG-P3) -> 9,679 (BB22 30x Illumina) -> 26,115 (assembly). Pick the assembly tier: the reads are HiFi."
+    zygosity_het_hom:
+      value: 1.85
+      band: [1.70, 2.10]
+      source: "[REF 2 B1] corrected — MEASURED on HG00096 in the HGSVC3 file the recipe names: 16,974 het / 9,178 hom"
+      correction: |
+        docs/02 §11 specified 2.3 with a gate of 2.00-3.06, both taken from the SHORT-READ panel.
+        A build that faithfully copies the real assembly genotypes FAILS that gate. The panel
+        drops ~53% of SVs and the survivors are not a random subset.
+    class_ordering_gate:
+      value: "SNV < SV < INDEL"
+      source: "[REF 2 B1] corrected"
+      correction: "docs/02 §11 gated 'SNV < INDEL < SV'; at the assembly tier SV (1.85) sits BELOW indel (2.08)"
+    ins_del:
+      value: 1.665
+      band: [1.50, 1.70]
+      source: "[REF 2 R5] measured on HG00096 HGSVC3; [DOC 2 §3.5] LOG25 cohort 1.617 vs GRCh38"
+      why: "GRCh38 is missing sequence relative to a typical human, so assembly calling recovers an insertion excess. LOG25's CHM13 comparison (1.003) proves the underlying biology is balanced."
+      CORRECTED_FOR_CHM13:
+        value: 1.0265
+        band: [0.90, 1.20]
+        source: "[MEASURED] spec/measured_real_chm13.tsv — HG00733's real T2T-CHM13 callset"
+        why: |
+          1.665 is a GRCh38 ARTEFACT, not biology: it counts the reference's missing sequence
+          as donor insertions. CHM13 is complete, so that excess disappears and the ratio
+          collapses to ~1.0 — exactly the 1.003 LOG25 predicted. Since the reference switched,
+          the 1.50-1.70 band above is UNREACHABLE by correct data and must not be gated on.
+          It FAILED the correct germline once (2026-08-19) before being re-derived.
+        binding: "germline_gate.py G07b uses THIS band; the 1.665 above is kept only as the
+                  GRCh38 record and drives nothing (build_mode_germline is real_donor_copy,
+                  so the realized ratio is the donor's own)"
+    size_spectrum:
+      source: "[REF 2 B2] corrected — measured on HG00096's HGSVC3 calls, NOT on the panel"
+      correction: "docs/02 §11 rows 3a/3b/3g quoted panel medians (DEL 314, INS 281) against an assembly-tier count; the real assembly spectrum is 2.2x smaller in DEL median and 3.7x larger at >=1 kb"
+      del:  {p25: 73,  median: 141, p75: 328, p95: 2553, source: "[REF 2 B2]"}
+      ins:  {p25: 90,  median: 198, p75: 466, p95: 2734, source: "[REF 2 B2]"}
+      counts_by_size: {ge_1kb: 3238, ge_10kb: 273, ge_100kb: 11, source: "[REF 2 B2]"}
+    inversions:
+      count_band: [100, 200]
+      source: "[REF 2 M3] corrected — CHA19 156 inversions/genome, multi-platform haplotype-resolved, the same sensitivity tier as everything else here"
+      correction: "docs/02 §3.2/§11 row 3d recommended 30-70 from BB22(68)/SUD15(37) — a short-read-tier band inconsistent with an assembly-tier SV count. 1KG-P3 gives ~10; gnomAD-SV's 867 is short-read FP-inflated (and [REF 2 M2] found its per-class per-genome numbers are absent from the cited source entirely)."
+      realisation: "take the donor's own HGSVC3 sv_inv calls; the band is the acceptance gate, not a generator target"
+    translocations_germline:
+      value: 0
+      fixed_because: "reciprocal translocations are essentially absent from a germline genome"
+      source: "[DOC 2 §3.2] BB22 CTX = 0 per genome; gnomAD 1.5 per 1,000 individuals"
+      consequence: "every CTX in a leaf is somatic by construction — a clean truth-set separator for snape"
+      caveat: "[REF 2 m9] the balanced-rearrangement carrier rate (~1/500 reciprocal, ~1/1000 Robertsonian) is not modelled; this is a declared design choice"
+    nesting_note:
+      value: "MEI, VNTR and tandem-duplication SVs are SUBSETS of the SV total, not additions"
+      source: "[REF 2 m5] — SCH25: 19.5% of insertions are duplications (89.8% of them tandem), 39.0% are VNTR. Reading docs/02 §11 rows 3c/4/5 additively double-counts."
+    footprint_note:
+      value: "sum|SVLEN| over distinct autosomal loci = 23.19 Mb (15.64 inserted + 7.55 deleted, 24,869 loci) for HG00096"
+      source: "[REF 2 M5] measured"
+      correction: "docs/02 §11 row 3h's '7.35 Mb per genome' is SCH25's SAGA quantity under a different definition and is ~3x inconsistent with rows 3/3a/3b; do not use it as a target"
+
+  mobile_elements:
+    policy:
+      value: "count directly in the donor's HGSVC3 Mobile_Elements/ release; do NOT scale short-read counts"
+      source: "[REF 2 M7] — scaling locus counts by a base-pair ratio is invalid in principle (SCH25's Mb gain is dominated by recovering full-length sequence, not by finding more loci)"
+    short_read_reference_only:
+      alu: 915
+      l1: 128
+      sva: 51
+      numt: 4
+      source: "[DOC 2 §4] 1KG-P3; total 1,098 MEI/genome vs SUD15's 1,218 MEI alleles/individual — [REF 2 M6] showed these agree once SUD15's mis-attributed Alu row is corrected"
+      status: "reference points, NOT build targets"
+
+  roh_and_density:
+    policy:
+      value: "NOT MODELLED — inherited from the donor's real haplotypes"
+      source: "meta.build_mode_germline"
+    expected_f_roh_ge_1mb: {band: [0.003, 0.009], source: "[DOC 2 §8] 5 samples: 0.0029-0.0084; AMR donor HG00731 0.0084"}
+    expected_roh_ge_100kb: {band_segments: [1500, 1800], band_mb: [377, 419], source: "[DOC 2 §8] non-African"}
+    correction_recorded: |
+      [REF 2 B4]: docs/02 §8's simulator requirement ('inside the >=100 kb blocks het density
+      must drop to near zero') is refuted by its own §7.2 measurement (p05 of the 1-Mb het
+      density is 214 het/Mb, not 0). The >=100 kb layer is a 2-3x local depression with a
+      floor near 200 het/Mb; only the >=1 Mb layer approaches zero. Recorded because a future
+      parametric germline arm would otherwise re-introduce the error.
+    per_chromosome_density_band:
+      value: [686, 903]
+      unit: "het SNV per CALLABLE Mb"
+      source: "[REF 2 B3] corrected"
+      correction: "docs/02 §7.1/§11 row 8 quoted 529-900 het/Mb over FULL chromosome length, N included. hg38 autosomes carry 118.7 Mb of N (chr22 22.9%, chr15 17.0%). Divided by callable length the 1.70x spread collapses to 1.32x and the ranking changes. The old band is unreachable by any simulator that correctly places nothing in N."
+    correction_moot_on_chm13: "the N-vs-callable distinction above was the whole point of the
+      correction and it DISSOLVES on CHM13: N = 0, so callable length == full length and the two
+      conventions coincide. The corrected band stands; the reasoning is now historical."
+    density_cv_1mb: {band: [0.33, 0.47], source: "[DOC 2 §7.2] CV 0.36-0.46 measured; uniform placement gives ~0.03"}
+    recombination_coupling: {spearman_rho: 0.48, band: [0.30, 0.50], source: "[DOC 2 §7.2]"}
+    correction_recorded_2: |
+      [REF 2 m4]: 'place SNVs with intensity proportional to recombination rate' does not follow
+      from the data — recombination spans 13.2x across deciles while het density spans 1.95x
+      (het ~ rec^0.26), so proportional placement overshoots the CV gate. Not used here
+      (real donor), recorded for the same reason as above.
+
+# =====================================================================================
+tree:
+# =====================================================================================
+  n_leaves:
+    value: 20
+    fixed_because: "user mandate: 1 germline + 20 tumour lines"
+    source: "PLAN.md §1"
+    disambiguation:
+      value: "the germline is the ROOT, not a leaf. n = 20 everywhere (T01..T05 in validation)."
+      source: "[REF 6 R3.6] corrected — docs/06 said 'leaf count = 21' (T01), '190 leaf pairs' = C(20,2) (T03) and 'Yule null for n=20' (T05); these cannot all be right, and if the normal were a leaf, RF=0 on a somatic-only matrix would be unreachable"
+
+  topology:
+    newick:
+      value: "((((T01,(T02,((T03,T04),(T05,((T06,T07),T08))))),((T09,T10),(T11,((T12,T13),T14)))),((T15,T16),(T17,T18))),(T19,T20));"
+      source: "[DOC 1 §8.1] candidate I; emitted to spec/tree.newick and spec/tree.json"
+    structure:
+      value: "germline root -> long trunk -> MRCA -> 4 uneven superclones (8/6/4/2) split in a rapid burst -> binary mixed cherry-and-ladder interiors"
+      source: "[DOC 1 §8.1]"
+      evidence: |
+        Minussi 2021 (Nature 592:302): 7-22 subclones organised into 3-5 superclones per sample,
+        and 11-20 subclones / 3-5 superclones inside each of four TNBC CELL LINES — so a 20-clone
+        panel from one line is not an artificial construct.
+        Gerlinger 2014: 10/10 ccRCC branched, none linear. Dentro 2021: two subclones are 3.11x
+        more likely to be siblings than parent-child (95% CI 1.71-7.50).
+    arity:
+      value: strictly_binary
+      fixed_because: "Colless and the Yule null are defined for binary trees; T05 needs both"
+      source: "[REF 6 R3.6]"
+      honest_caveat:
+        source: "[REF 1 M8]"
+        value: "[REF 1 M8]: Dentro's 3.11x argues against LINEAR SUCCESSION, not against polytomies. Minussi's superclone->subclone architecture IS a polytomy. Binary splits were chosen to give the SV caller resolvable nested branches — that is the real reason, stated."
+      second_caveat:
+        value: "parent-child pairs are still observed 1 time in 4, i.e. ancestral clones commonly persist as sampled populations. This design has ZERO sampled ancestors (every leaf has a strictly positive private branch)."
+        source: "[REF 1 M8]"
+
+  shape_statistics:
+    verified_independently:
+      value: true
+      source: "activity_log 05:16:06 — scripts/build_tree.py reproduced docs/01 §8.2; [REF 1 R0] reproduced it again at seed 999333 with its own parser"
+    sackin:   {value: 111, yule_pct: 78.5, pda_pct: 11.5, yule_5_95: [93, 122],  source: "spec/tree.json [MEASURED]"}
+    colless:  {value: 49,  yule_pct: 78.5, pda_pct: 11.7, yule_5_95: [20, 62],   source: "spec/tree.json [MEASURED]"}
+    max_depth: {value: 9,   yule_pct: 80.5, pda_pct: 12.3, yule_5_95: [6, 10],    source: "spec/tree.json [MEASURED]"}
+    n_cherries: {value: 7, source: "spec/tree.json [MEASURED]"}
+    mean_leaf_depth: {value: 5.55, source: "spec/tree.json [MEASURED]"}
+    j1:
+      value: 0.8763
+      status: REPORTED_NOT_GATED
+      source: "spec/tree.json; removed from the gate at activity_log 05:16:06"
+      correction: |
+        [REF 1 M3]: for a full binary cladogram with equal leaf sizes, Lemant's Prop. 6 gives
+        J1 = n*log2(n)/I_S EXACTLY, and the paper states J1 then has 'exactly the same
+        sensitivity as Sackin's index'. J1's percentile is 100 - Sackin's percentile by
+        construction. docs/01 §8.2's claim that 'none of the FOUR statistics leaves the Yule
+        envelope' overstates the evidence by ~2x in effective degrees of freedom.
+        GATE ON: Sackin + cherry count (genuinely independent). Report J1, do not count it.
+    circularity_disclosure:
+      value: "the tree was hand-tuned to sit near the 80th Yule percentile (docs/01 §7 rejects candidates E/F as 'too balanced'), so 'not rejectable as pure-birth' is a restatement of the selection criterion, not independent validation"
+      source: "[REF 1 M3]"
+    contrary_evidence_recorded:
+      value: "Noble 2022 (Nat Ecol Evol 6:207, 43 tumours): typical size-weighted J1c is 0-0.5, and 'neutral models predict smaller or more variable tree balance than the data for solid tumours' — i.e. real solid-tumour trees are MORE balanced than neutral prediction, the opposite direction from this design's imbalanced-side placement (whose only support is one unrefereed preprint at n~10)."
+      source: "[REF 1 M4]"
+      action: "declared limitation; the abundance-weighted J1c comparison Noble's caveat demands is in risks.unknowns.clone_abundance_model"
+
+  gamma:
+    value: null
+    status: NOT_A_DESIGN_TARGET
+    source: "[REF 1 B2] corrected"
+    correction: |
+      docs/01 §8.5 presented gamma = -3.17 as evidence of punctuated evolution against a
+      'gamma ~ N(0,1) under pure birth' null. That null holds only for a COMPLETELY SAMPLED
+      reconstructed tree. The referee simulated forward Yule and sampled 20 tips: gamma medians
+      are +0.42 (pop 20), -1.83 (pop 100), -3.42 (pop 500), -5.19 (pop 20,000). gamma = -3.17
+      sits at the MEDIAN of a strictly neutral process sampled 20-of-500. The design consequence
+      was inverted. Sackin is invariant to sampling (102-103 throughout), so the Sackin/Colless
+      comparison survives — only gamma is broken.
+    what_survives: "the punctuated burst is kept on the BIOLOGICAL argument alone (Navin 2011, Gao 2016, Minussi 2021 8/8 AIC, Gerstung 2020's 57% synchronous arm gains) — which is sufficient"
+
+  branch_budget:
+    unit: "fraction of S = the total somatic SNV burden carried by one leaf"
+    edges_source:
+      value: spec/tree.json edges_in_units_of_S
+      n_edges: 38
+      sum_post_mrca: 5.2193
+      source: "[MEASURED] scripts/build_tree.py, seed 20260818, verified activity_log 05:16:06"
+      discrepancy_flagged: "docs/01 §8.3's own table sums to 5.444*S post-MRCA (1.243 internal + 4.20 private). spec/tree.json gives 5.2193. The 0.22*S gap is unreconciled -> risks.open.tree_budget_sum_mismatch. spec/tree.json is authoritative because it was independently recomputed."
+    trunk_fraction_snv:
+      value: 0.55
+      range_in_literature: [0.33, 0.934]
+      source: "[DOC 1 §8.3]; conflict with [DOC 3 §12a] (0.80) resolved here"
+      why: |
+        DECISION: 0.55. The only single-cell-derived, SNV-RESOLUTION measurement in the whole
+        evidence base is Roerink 2018 patient P2: trunk 12,623 / 22,291 = 56.6% — and Roerink's
+        material (single-cell-derived organoid clones from one tumour, WGS) is the direct
+        analogue of this design. 0.55 sits one point below it.
+        WHAT WAS DROPPED [REF 1 B1]: docs/01 justified 0.55 as 'the mean of two deep-sampling
+        measurements', averaging Roerink's 57% with Minussi's 47%. Minussi's 10,063/11,193 are
+        MANHATTAN DISTANCES BETWEEN INTEGER COPY-NUMBER PROFILES measured from an artificial
+        diploid root — not mutation counts, and not convertible into one (a WGD contributes an
+        enormous CN distance and zero SNVs). Minussi's 47% is retained below as a COPY-NUMBER
+        trunk loading, where it belongs.
+        WHAT WAS REJECTED [REF 3 R1.6]: docs/03 §12a's 0.80, which that document itself labels
+        'a design choice, not a measured value', sits above every entry in its own bracketing
+        table (whose maximum is 17%) and was derived by correcting bulk single-biopsy numbers
+        (Hartwig 93.4%, PCAWG 82%) downward. Our leaves are single-cell-derived, i.e. the
+        maximal-resolution regime, so the bulk anchors do not apply.
+        BIAS NOTE [REF 1 M6]: the low anchor in that literature range (Gerlinger 33%) is a
+        426x EXOME measurement and is partly a depth artefact; the trunk fraction was taken
+        only from genome-wide WGS / single-cell-clone sources.
+    trunk_fraction_cn:
+      value: 0.47
+      source: "Minussi 2021 truncal 10,063 +/- 2,504 vs branching 11,193 +/- 4,106 CN Manhattan distance (p = 0.52) [DOC 1 §1], reclassified per [REF 1 B1]"
+      use: "copy-number trunk loading only — never averaged into the SNV trunk fraction"
+    trunk_fraction_sv:
+      value: 0.88
+      band: [0.88, 0.90]
+      source: "[DOC 3 §12a]"
+      why: |
+        SVs are MORE clonal than SNVs, and the two documents do not contradict here — they
+        describe different classes. SVs inside a cluster share a cancer-cell fraction and are
+        strongly enriched for clonality (Li 2020 Suppl. Fig. 3); Dentro 2021 finds only 14.7%
+        of samples carry ANY subclonal SV driver.
+      caveat: "[DOC 3 §15 / spec/somatic.yaml unknowns] this rests on an indirect argument, not a direct measurement of SV trunk fraction in single-cell-derived clones"
+    clustered_events_are_atomic:
+      value: "WGD, chromothripsis and the synchronous arm-gain burst are placed as NODE EVENTS on the trunk. They consume NO branch-length mass and do not follow the SNV clock."
+      source: "[REF 1 B6] corrected — docs/01 budgeted SNVs only and had no SV branch vector at all, which for an SV-caller benchmark would have produced a smoothly accumulating, unrealistically easy target set"
+      background_svs: "only the non-clustered 'background' SV load follows the SV branch vector above"
+    ultrametricity_decision:
+      value: topological_spread_only_plus_constant_culture_term
+      source: "[REF 1 M1] + [REF 1 M2] + [REF 1 B4], reconciled"
+      detail: |
+        [REF 1 M1] required one decision, not two overlapping ones: the topology ALREADY produces
+        a 5.97x private-branch spread (0.382/0.064 in units of S). docs/01 §8.4 then added a
+        4-7x per-lineage lognormal on top, giving a combined 24-42x spread no source supports —
+        and docs/01 §8.6 then asked to confirm the un-multiplied fractions.
+        DECISION: the in-vivo private spread is TOPOLOGICAL (no multiplier). Rate heterogeneity
+        is applied ONLY to the in-culture increment C below, at the corrected magnitude.
+      in_vivo_private_spread: {value: [0.064, 0.382], unit: "fraction of S", source: "[DOC 1 §8.3] trunk=0.55 column"}
+    in_culture_increment_C:
+      dist: {dist: lognormal, median: 230, p05_p95: [210, 250]}    # median = midpoint of the sourced 210-250 range [COMPUTED]
+      unit: "extra private SBS per leaf, identical expectation for every leaf"
+      source: "[DOC 3 §12a] 7.2-8.3 SBS/genome/population doubling x ~30 doublings"
+      citation_correction:
+        value: "Kuijk et al. 2020, Nat Commun 11:2493 — liver 8.3 +/- 3.6, intestinal 7.2 +/- 1.1, iPSC 3.5 +/- 0.5 per population doubling"
+        source: "[REF 3 R2.1] corrected"
+        correction: "docs/03 §10 attributed these rates to Blokzijl et al. 2016 Nature 538:260. They are not there — Blokzijl 2016 is the in-vivo ~40-mutations-per-year paper. The '~40x higher in vitro' statement is also Kuijk's."
+      why_a_constant_term: |
+        [REF 1 M2]: a 20-clone panel has two phases — in-vivo tumour evolution (which creates the
+        topology) and single-cell cloning followed by THE SAME expansion period for all 20 clones.
+        Phase two adds a roughly constant increment to every terminal branch. docs/01 §8.3 instead
+        made the private branch purely a function of tree depth (T01 gets 0.3825*S, T06/T07 get
+        0.0643*S) — the opposite of what identical culture time predicts.
+    lineage_rate_heterogeneity:
+      dist: {dist: lognormal, p05_p95_spread: [1.5, 2.5]}
+      applies_to: "the in-culture increment C only"
+      source: "[REF 1 B4] corrected"
+      correction: |
+        docs/01 §8.4 asked for 'lognormal with 5-95% spanning ~4-7x', generalising from LS180's
+        749 vs 5,310. In the SAME experiment HT115's five sibling subclones span 5,296-6,511 =
+        1.23x. Observed sibling spread is 1.2x-7x, n = 2 LINES. Moreover [REF 1 B3]: LS180 is MSI
+        (MMR-null) and HT115 carries POLE exonuclease-domain mutations plus PMS2/MSH6/MSH3 hits —
+        both are hypermutators, chosen by the re-analysis BECAUSE they mutate fast. Building a
+        20-leaf panel on them makes every leaf a hypermutator by construction, and we have
+        explicitly declared no hypermutator (see somatic.hypermutator_policy).
+        Corrected magnitude for an MMR-proficient, POLE-wild-type line: 1.5-2.5x.
+    mutation_loss_by_subclonal_deletion:
+      value: ENABLED
+      source: "[REF 1 B5] corrected"
+      correction: |
+        docs/01 §8.4/§8.6 set an acceptance gate of '>=95% of shared mutations must fit the
+        topology perfectly, cf. Roerink's 88-98%'. Two of Roerink's three patients (89.7%, 88.1%)
+        FAIL that gate, and worse, it would be PASSED by a simulation that omits subclonal
+        deletions entirely. Roerink's own Methods say the misfit is 'deletions of those mutations
+        in a subclone', not homoplasy.
+        DESIGN RULE (inverted from the doc): deliberately place subclonal deletions/LOH over
+        regions carrying earlier mutations, and let the tree-fit percentage FALL OUT as a measured
+        consequence in 88-98%. Homoplasy (independent recurrence at the same base) stays ~0.
+      free_by_architecture: "docs/07 §1: CN = contig count, so deleting a contig segment deletes the mutations on it"
+
+  seeds:
+    value: "one fixed integer per node, recorded in spec/tree.json; a node's output is reproducible from parent FASTA + config + seed alone"
+    source: "[DOC 4 §10] — random_seed gives BYTE-IDENTICAL FASTA/VCF/BEDPE across processes (measured, 4 repeats, default randomized PYTHONHASHSEED)"
+    caveat: "variant-set ORDER in the config is part of the seed's meaning; VariantSet.next_sv_id is a class variable, so one process = one simulation"
+
+# =====================================================================================
+somatic:
+# =====================================================================================
+  sampling_rule:
+    value: "the cohort distributions below are sampled ONCE to fix this tumour's totals; the totals are then PARTITIONED down the tree. Only the private-branch component varies per leaf."
+    source: "[REF 3 R2.4] corrected"
+    correction: |
+      docs/03 §12 said 'sample from IQR 7,466-10,905' per leaf. The 20 leaves are clones of ONE
+      tumour, not 20 draws from a cohort; read literally that produces sibling clones differing
+      by 1.5x in total burden, which is impossible given a shared trunk. Also 'sample from an IQR'
+      is not a distribution — the fitted lognormals below name one.
+  hypermutator_policy:
+    value: EXCLUDED
+    source: "[DOC 3 §2d] MSI is 1.98% of 5,365 genomes at a 10-20x burden jump; POLE in breast ~0.3%; APOBEC hypermutators 0.9%"
+    why: "a hypermutator leaf would make the whole 21-genome truth set unrepresentative"
+
+  per_leaf_burden:
+    sbs:
+      fixed: 8990
+      dist: {dist: lognormal, median: 8990, iqr: [8142, 10970]}
+      fixed_because: "one tumour -> one draw; the median is taken for a deterministic, reproducible build. The IQR is recorded so the choice can be re-drawn."
+      source: "[REF 3 R2.2] corrected — PCAWG breast, HRD AND WGD stratum, n=30"
+      correction: "docs/03 §12 column A used HRD-only medians (n=55): 8,750 (IQR 7,466-10,905, p95 18,090). Point estimates barely move; the IQR tightens and the p95 turns out to be an artefact of pooling the 45% WGD-negative half (median ploidy 1.74)."
+      cross_checks:
+        - {value: 5135, what: "PCAWG breast, all HR statuses, median", source: "[DOC 3 §2a]"}
+        - {value: 4742, what: "CUBRICS 1,364 breast WGS median", source: "[DOC 3 §2c] Kim R. 2025"}
+        - {value: 8360, what: "CUBRICS basal-like median (IQR 5,296-11,504)", source: "[DOC 3 §2c]"}
+        - {value: 6214, what: "Nik-Zainal 2016, 560 breast WGS mean (pulled up by APOBEC hypermutators)", source: "[DOC 3 §2c]"}
+      why_not_hartwig: "Hartwig metastatic breast median is 7,884 = ~1.5x the primary; for a PRIMARY-tumour-derived cell-line panel use the PCAWG numbers [DOC 3 §2c]"
+    indels:
+      fixed: 910
+      dist: {dist: lognormal, median: 910, iqr: [671, 1308]}
+      fixed_because: "same as sbs"
+      source: "[REF 3 R2.2] corrected, HRD-and-WGD n=30"
+      correction: "docs/03 §12 gave 940 (696-1,340) on the HRD-only stratum"
+      ratio_check: {value: 0.101, what: "indel:SBS", source: "[COMPUTED] 910/8990; Alexandrov 2020 pan-cancer expectation ~10% [DOC 3 §3]"}
+    sv_junctions:
+      fixed: 393
+      dist: {dist: lognormal, median: 393, iqr: [261, 595]}
+      fixed_because: "same as sbs"
+      source: "[REF 3 R2.2] corrected, HRD-and-WGD n=30"
+    sv_events:
+      fixed: 273
+      dist: {dist: lognormal, median: 273, iqr: [205, 381]}
+      fixed_because: "same as sbs"
+      source: "[REF 3 R2.2] corrected, HRD-and-WGD n=30"
+      unit_trap: "events = LINX-clustered events; junctions = breakpoints. A 20-junction complex cluster is ONE event. Never compare the two. [DOC 3 §0]"
+      junctions_per_event: {value: 1.44, source: "[COMPUTED] 393/273; measured HRD ratio 1.29 (IQR 1.19-1.55) [DOC 3 §4b]"}
+    dbs:
+      value: 30
+      simulate: false
+      source: "[DOC 3 §8b] median total DBS burden ~20-35 per genome"
+      caveat: "[REF 3 R3.3] Alexandrov's 'DBS at ~1% of SBS prevalence' would give ~87 for an 8,990-SBS leaf — a factor ~3 unreconciled. The omission conclusion is probably still right; the two numbers are not."
+    detected_vs_true:
+      value: "these are DETECTED medians from 2020-era short-read callers, not true biology"
+      source: "[REF 3 R2.9] — PCAWG reported sensitivity: SNV 95%, SV 90%, INDEL 60%"
+      decision: "build to the DETECTED medians and say so. Inflating indels by 1/0.60 would put the truth set outside every published median and make the whole battery uncomparable."
+    genome_build_note:
+      value: "every burden here was called on GRCh37 in mappable space (Martinez-Jimenez's own Methods: 'divided by the GRCh37 total genome length')"
+      source: "[REF 3 R2.8]"
+      convention_adopted: "counts are counts over T2T-CHM13v2.0 primary chr1-22+chrX; fraction-of-genome quantities (LOH, aneuploidy) are fractions of meta.reference.callable_length_bp (= 3,054,815,472, gapless)"
+
+  distribution_over_the_tree:
+    snv:
+      trunk: {value: 4944, source: "[COMPUTED] 0.55 x 8990, tree.trunk_fraction_snv"}
+      per_leaf_shared_internal: {value_fraction: 0.240, source: "[DOC 1 §8.3] trunk=0.55 column, mean over leaves"}
+      per_leaf_private:         {value_fraction: 0.210, range_fraction: [0.064, 0.382], source: "[DOC 1 §8.3]"}
+      total_distinct_in_tree:
+        value: 51865
+        source: "[COMPUTED] (0.55 + 5.2193) x 8990, using spec/tree.json"
+        alt_value_from_doc: {value: 53886, source: "[DOC 1 §8.3]", note: "docs/01 §8.3's 5.994*S; see tree.branch_budget.edges_source.discrepancy_flagged"}
+    indels:  {rule: "same branch vector as SNVs, scaled to 910", source: "[DOC 3 §3] indels track SBS; no separate indel branch vector exists in any doc"}
+    sv:
+      trunk_junctions: {value: 346, source: "[COMPUTED] 0.88 x 393"}
+      non_trunk_junctions: {value: 47, source: "[COMPUTED] 0.12 x 393"}
+      trunk_events: {value: 240, source: "[COMPUTED] 0.88 x 273"}
+      non_trunk_events: {value: 33, source: "[COMPUTED] 0.12 x 273"}
+      note: "the trunk atomic events (WGD, chromothripsis, arm burst) are counted INSIDE these trunk numbers, not on top — see single_accounting below"
+    implied_pseudobulk_subclonal_fraction:
+      raw: {value: 0.905, source: "[COMPUTED] (51865 - 4944)/51865"}
+      at_detection_limit:
+        value: "must be recomputed at CCF >= 0.30 before comparison"
+        source: "[REF 3 R2.5] requires this number be reported; [DOC 3 §9] Dentro's 'powered' samples only see subclones at CCF >= 30%"
+        why: "with 20 equally-weighted leaves a mutation must be shared by >= 6 leaves to reach CCF 30%, so the DETECTABLE subclonal fraction is a small fraction of the raw 90.5% and is the only figure comparable to PCAWG breast's measured 6.7% [DOC 3 §9]"
+        status: "computed at Phase D, gated by validation.S05b"
+      raw_caveat: "the raw 90.5% is NOT comparable to any published bulk number and must never be quoted as one"
+
+  signatures:
+    reference_set:
+      value: "COSMIC v3.4 (SBS96 GRCh38, ID83)"
+      source: "[DOC 3 §8b] decision: use the COSMIC assignment, NOT Martinez-Jimenez's de-novo labels"
+      why: "that study's de-novo extraction did not recover SBS3 in breast and spread the HRD signal over SBS_denovo_3 + SBS8 + SBS39. CUBRICS (Kim R. 2025, 1,364 breast genomes) names the HRD set explicitly as SBS3, SBS8, ID6, SV3, SV5; Nik-Zainal 2016 and Alexandrov 2020 also report signature 3 in breast."
+    sbs_mix:
+      normalisation: "weights are the PCAWG-breast mean proportions of [DOC 3 §8b], renormalised to 1.0 over the 9 retained signatures (raw sum 88.1%)"
+      source_all: "[DOC 3 §8b] Martinez-Jimenez 2023 Suppl. T3, breast carcinoma, mean proportion"
+      SBS8:   {value: 0.1623, raw_pct: 14.3, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion", aetiology: "unknown; tracks HRD in breast (CUBRICS)"}
+      SBS3:   {value: 0.1555, raw_pct: 13.7, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion", aetiology: "HRD — flat 96-profile", mapping_note: "carries the weight the source reports as SBS_denovo_3; this remapping is the deliberate choice above, not a measurement"}
+      SBS1:   {value: 0.1544, raw_pct: 13.6, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion", aetiology: "5-methylcytosine deamination, C>T at CpG; clock-like"}
+      SBS5:   {value: 0.1112, raw_pct: 9.8, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion",  aetiology: "flat, clock-like"}
+      SBS39:  {value: 0.0988, raw_pct: 8.7, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion",  aetiology: "unknown; prominent in PCAWG breast"}
+      SBS2:   {value: 0.0863, raw_pct: 7.6, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion",  aetiology: "APOBEC, C>T at TpC"}
+      SBS13:  {value: 0.0851, raw_pct: 7.5, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion",  aetiology: "APOBEC, C>G at TpC"}
+      SBS18:  {value: 0.0795, raw_pct: 7.0, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion",  aetiology: "ROS, C>A"}
+      SBS40a: {value: 0.0670, raw_pct: 5.9, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion",  aetiology: "flat, age-correlated",
+               version_note: "the source used COSMIC v3.2/3.3 where SBS40 is ONE signature; v3.4 split it into 40a/40b/40c. All 5.9% is assigned to SBS40a as the closest to the original flat profile. Splitting it three ways was equally defensible; the choice is recorded, not silent."}
+      apobec_check: {value: 0.1714, source: "[COMPUTED] SBS2+SBS13; CUBRICS: APOBEC >10% of SNVs in 633/1,364 (46%) of breast samples [DOC 3 §8b]"}
+    id_mix:
+      normalisation: "PCAWG-breast mean proportions of [DOC 3 §3], renormalised to 1.0 (raw sum 92.3%)"
+      source_all: "[DOC 3 §3] Martinez-Jimenez 2023 Suppl. T3, breast, mean proportion"
+      ID1: {value: 0.2102, raw_pct: 19.4, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion", character: "1 bp T insertions at poly-T >= 5"}
+      ID5: {value: 0.1701, raw_pct: 15.7, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion", character: "1 bp T deletions at poly-T; clock-like"}
+      ID6: {value: 0.1690, raw_pct: 15.6, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion", character: ">=5 bp deletions with >=2 bp microhomology — the HRD signature"}
+      ID4: {value: 0.1408, raw_pct: 13.0, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion", character: ">=2 bp deletions at short repeats, no microhomology"}
+      ID8: {value: 0.1224, raw_pct: 11.3, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion", character: ">=5 bp deletions with short/no microhomology (NHEJ)"}
+      ID9: {value: 0.1062, raw_pct: 9.8, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion",  character: "APOBEC-associated in breast"}
+      ID2: {value: 0.0813, raw_pct: 7.5, source: "[DOC 3 §8b/§3] PCAWG breast mean proportion",  character: "1 bp T deletions at poly-T"}
+      consistency_checks:
+        id1_plus_id2: {value: 0.2915, expected: "~0.27", source: "[DOC 3 §12]"}
+        id6:          {value: 0.1690, expected: "~0.15", source: "[DOC 3 §12]"}
+      supersedes: "spec/somatic.yaml's id_mix, whose ID3/ID4/ID5/ID8/ID9 weights were assigned 'per the COSMIC breast profile' with no measured source"
+    indel_repeat_context:
+      value: 0.85
+      what: "fraction of somatic indels falling in microsatellites / STRs"
+      source: "[DOC 3 §3] Priestley 2019 (Hartwig), verbatim-verified by [REF 3 R0]"
+    spectrum_shift_along_the_tree:
+      fraction_of_lineages: {value: 0.35, source: "[DOC 3 / DOC 1 §8.4] Gerstung 2020: shifts in 29%/30%/40% of samples"}
+      absolute_change:      {value: 0.20, source: "Gerstung 2020: median 19%/21% absolute change"}
+      mechanism_note: "[REF 1 MISSING-8]: Petljak's APOBEC bursts are EPISODIC and LINEAGE-PRIVATE (>100-fold between siblings of one parent), not a smooth trunk-to-branch gradient. Apply the shift as a per-lineage APOBEC (SBS2/SBS13) burst on selected branches."
+    somatic_ti_tv:
+      value: null
+      status: "falls out of the 96-channel mix; computed at build time and reported, no independent target exists in any doc"
+      source: "[REF 3 R4.12] flags PLAN.md's somatic Ti/Tv acceptance criterion as unsourced"
+
+  sv_class_mix:
+    unit: "clustered events; shares are of total events"
+    stratum: "PCAWG breast HRD, n=55 (the HRD-and-WGD n=30 re-derivation gave totals only, not a class split)"
+    source_all: "[DOC 3 §4b] Martinez-Jimenez 2023 Suppl. T5"
+    del_lt_10kb:  {n: 139, frac: 0.454}
+    del_ge_10kb:  {n: 29,  frac: 0.096}
+    td_lt_10kb:   {n: 23,  frac: 0.143}
+    td_ge_10kb:   {n: 39,  frac: 0.148}
+    complex_lt_20_junctions: {n: 33, frac: 0.148}
+    complex_ge_20_junctions:
+      prevalence: 0.47
+      conditional_count: {median_when_present: 1, max: 14}
+      source: "[REF 3 R3.7] corrected"
+      correction: "docs/03 §12 printed '0-2 (0.4% of events)', a zero-inflated median presented as a count. Measured: 47% of HRD breast genomes carry >=1, max 14 (66% across all breast)."
+    line1_insertions: {n: 1, frac: 0.007}
+    single_accounting_rule:
+      value: "the trunk chromothripsis event IS the Complex >=20 cluster. It consumes that allocation and its junctions count toward the 393/273 totals."
+      source: "[REF 3 R1.3] corrected"
+      correction: "docs/03 §12 listed 'complex clusters >=20' and 'chromothripsis: 1 event, 26 SVs' as separate rows. In the LINX taxonomy they are the same physical object; as written a leaf got both and blew past the junction budget."
+    exhaustiveness_note:
+      value: "for all 55 HRD breast samples, Del<10k + Del>=10k + Dup<10k + Dup>=10k + Complex<20 + Complex>=20 + LINE equals 'Total no. of SVs' EXACTLY, residual 0.0 on every row"
+      source: "[REF 3 R1.4] measured"
+      consequence: "LINX folds inversions, reciprocal and unbalanced translocations into 'Complex'. There is no INV or TRA column to read, so those classes must be sourced from outside this taxonomy (below)."
+    inversions:
+      policy: "not an independent class; small reciprocal inversions travel with <50 kb deletions and large ones with >500 kb deletions; simple inversions are uncommon"
+      source: "[DOC 3 §5c / §12] Li et al. 2020"
+      unallocated_flag: "[REF 3 R1.4]: Nik-Zainal 2016 reports RS6 (inversions) = 19% and RS4 (translocations) = 18% of all rearrangements in 560 breast genomes, i.e. 37% of the rearrangement load is unallocated by the LINX mix. Those percentage shares are UNVERIFIED ([DOC 3 §15.7], [REF 3 R3.5]) -> risks.unknowns.inv_tra_shares"
+    translocations:
+      distal_or_interchromosomal_share_of_svs:
+        value: 0.217
+        source: "[DOC 3 §4c] Kim R. et al. 2025, 1,364 breast WGS: 45,266/208,540; local intrachromosomal <5 Mb = 78.2%"
+      reciprocal_vs_unbalanced:
+        value: "rank order only — unbalanced translocations form their own signature; reciprocal translocations and reciprocal inversions are uncommon"
+        source: "[DOC 3 §5] Li et al. 2020"
+        status: "no numeric split in any doc -> risks.unknowns.inv_tra_shares"
+    length_spectrum_within_class:
+      value: null
+      status: UNSOURCED
+      source: "[REF 3 R1.5] — the budget is bucketed <10 kb / >=10 kb only; insilicoSV needs a length distribution per class"
+      what_is_known:
+        - {value: "fragile-site deletion size peak ~100 kb", source: "[DOC 3 §5] Li et al. 2020"}
+        - {value: "deletion and TD size distributions are multimodal ACROSS a cohort but UNIMODAL WITHIN one patient", source: "[DOC 3 §5] Li et al. 2020"}
+      goes_to: risks.unknowns.somatic_sv_length_spectrum
+    breakpoint_junction_structure:
+      microhomology_modes:
+        - {value: [2, 7],  mechanism: MMEJ,      source: "[DOC 3 §5] Li et al. 2020, bimodal"}
+        - {value: [10, 30], mechanism: "SSA / MMBIR", source: "[DOC 3 §5]"}
+        - {value: 0, mechanism: NHEJ, note: "a large fraction has none", source: "[DOC 3 §5]"}
+      per_junction_probabilities: {value: null, status: UNSOURCED, goes_to: risks.unknowns.junction_microhomology_probabilities}
+      why_it_matters: "[REF 6 R3.11]: if every junction is blunt, every junction is perfectly assemblable and R07's recall gate becomes meaningless — this is the exact signal snape builds contigs from"
+
+  copy_number:
+    wgd:
+      count: {value: 1, fixed_because: "one WGD is typical for this stratum", source: "[DOC 3 §6] PCAWG breast 50%, Hartwig breast 56%"}
+      where: trunk
+      at_fraction_of_trunk_molecular_time:
+        value: 0.84
+        ci: [0.808, 0.876]
+        source: "Roerink 2018 patient P2, bootstrap x10,000 [DOC 1 §3]"
+        correction: "docs/01 §8.4 and spec/somatic.yaml rounded this to 0.80; the measured value is 0.84 (formula (180x2)/(180x2+67), the x2 correcting for allele loss in 2+0 regions — [REF 1 R0] required the formula be written out)"
+        ordering: "WGD follows the TP53 mutation in 97.3% of timeable cases (Bielski 2018 [DOC 3 §6]); WGD events have an intermediate ranking overall (Gerstung 2020 [DOC 1 §3])"
+      subclonal_wgd: {value: 0, source: "[DOC 1 §8.4] TRACERx421: 19% of tumours have >=1 subclonal WGD — a legitimate but secondary option; not used"}
+      multiplicity_consequence:
+        value: "trunk mutations arising BEFORE the WGD (0.84 of the trunk = ~4,153 SBS) sit at multiplicity 2; post-WGD trunk mutations at multiplicity 1"
+        source: "[REF 1 M11] + [REF 3 R2.6]; count [COMPUTED] 0.84 x 4944"
+        vaf_consequence: "at CN 4: m=2 -> VAF 0.50, m=1 -> VAF 0.25. WGD alone does not change VAF. [DOC 3 §11]"
+    post_wgd_loss:
+      value: REQUIRED
+      source: "[REF 1 M11] corrected"
+      correction: "docs/01 placed the WGD and stopped. With CN = contig count (docs/07 §1), a trunk WGD with no subsequent chromosome loss leaves every leaf at 4n — doubling every genome and its read requirement. The chromosome-loss process that walks 4n back to the target ploidy is mandatory."
+    leaf_ploidy:
+      value: 2.97
+      iqr: [2.83, 3.39]
+      source: "[REF 3 R2.3] corrected — PCAWG breast, HRD AND WGD+, n=30"
+      correction: "docs/03 §12 anchored ploidy to a CELL-LINE proxy ('breast cell lines median 2.93', Cell Model Passports n=52). The exact stratum number was already in hand. The proxy landed in the right place by coincidence; without the HRD filter it would have been 0.3 ploidy units low (PCAWG breast WGD+ overall is 3.25, IQR 2.96-3.70)."
+    cn_segments_per_leaf: {dist: {median: 88, iqr: [43, 160]}, p05: 29, p95: 310, source: "[DOC 3 §6] Steele 2022, PCAWG WGS n=512"}
+    loh_fraction_autosomal:
+      dist: {median: 0.185, iqr: [0.086, 0.340]}
+      p05: 0.018
+      p95: 0.524
+      source: "[DOC 3 §6] Martinez-Jimenez 2023 Suppl. T2, PCAWG breast"
+      cross_check: {value: 0.23, what: "Hartwig pan-cancer mean", source: "Priestley 2019"}
+      unit: "fraction of meta.reference.callable_length_bp"
+    aneuploidy_score_arm_events: {dist: {median: 19, iqr: [10, 30]}, p95: 36, source: "[DOC 3 §6] PCAWG breast"}
+    arm_gain_burst:
+      value: "the majority of arm-level gains are placed in ONE trunk event, each incrementing allele-specific CN by exactly +1"
+      source: "[DOC 1 §3] Gerstung 2020: 57% (468/815) of informative near-diploid tumours show synchronous gains, 61% more frequent than chance (P<0.01); 80-90% of arm gains are +1"
+    homozygous_deletions:
+      count: {value: 2, source: "[DOC 3 §6] Priestley 2019 mean 2.0 gene-level events"}
+      constraint: "never a whole autosomal arm (Priestley: 'not a single example... of a complete autosomal arm')"
+      size_distribution: {value: null, status: UNSOURCED, goes_to: risks.unknowns.homozygous_deletion_geometry}
+    subclonal_cn:
+      value: ENABLED
+      source: "[REF 3 R4.6]"
+      target_genome_fraction_under_branch_level_cn: {value: 0.22, source: "[DOC 3 §10] Ben-David 2018: median 22% of the genome affected by subclonal CN events across 916 CCLE lines"}
+      source_of_requirement: "[REF 3 R4.6] — docs/03 §12 assigned ALL copy-number structure to the trunk; 20 CN-identical leaves is precisely the 'the leaves came out too clean' failure the mandate warns about"
+      placement: "on superclone stems, so several leaves share each event (also supplies the mutation-loss mechanism of tree.branch_budget.mutation_loss_by_subclonal_deletion)"
+    loh_placement_on_the_tree:
+      value: "a mixture of trunk LOH (the bulk of the 18.5%) and superclone-stem LOH"
+      source: "[REF 1 MISSING-5] — which branch an LOH arises on is a tree question, and it determines which leaves show germline heterozygous variants going homozygous (the user's named failure mode)"
+    chrx_in_a_female_tumour:
+      value: "X-chromosome loss / Xi loss is a common breast-carcinoma event and is NOT covered by the autosomal LOH/aneuploidy numbers above"
+      source: "[REF 3 R4.7]"
+      status: "no sourced rate -> risks.unknowns.chrx_loss_rate"
+
+  complex_events:
+    chromothripsis:
+      count: {value: 1, source: "[DOC 3 §7a] breast-AdenoCA high-confidence prevalence 48.9% (93/190 donors); decision recorded: include one"}
+      where: "trunk, before the MRCA"
+      source_placement: "[DOC 1 §8.4] Cortes-Ciriano 2020; a single catastrophic early event"
+      geometry:
+        region_mb:       {dist: {median: 56.6, iqr: [27.8, 98.4]}, p95: 162.8, source: "[DOC 3 §7b] breast, 156 HC regions / 93 donors"}
+        n_svs:           {dist: {median: 26, iqr: [13, 43]}, p95: 141, max: 351, source: "[DOC 3 §7b]"}
+        n_cn_segments:   {dist: {median: 30, iqr: [16, 52]}, source: "[DOC 3 §7b]"}
+        n_chromosomes:   {value: {1: 0.59, 2: 0.23, "3-4": 0.18}, source: "[DOC 3 §7b] breast donor counts 55/21/9+8"}
+        oscillation_rule: {value: ">60% of CN segments oscillating between TWO CN states, across >=7 adjacent segments (high-confidence definition)", source: "[DOC 3 §7b]"}
+      ordering_vs_wgd:
+        value: "chromothripsis is placed BEFORE the WGD on the trunk"
+        source: "[REF 1 M11] required the order be stated — chromothripsis before vs after WGD produces different CN states from the same breakpoint set"
+        rationale: "Gerstung 2020 ranks WGD as an intermediate event and TP53 among the earliest; the chromothripsis-TP53 association is strong (pan-cancer OR 3.22) [DOC 3 §7c]"
+    kataegis:
+      prevalence: {value: 0.49, source: "[DOC 3 §7c] Nik-Zainal 2016: 49% of 560 breast cancers had >=1 focus; 4% had >=10 foci"}
+      character: {value: "clustered APOBEC C>T / C>G at TpC", source: "[DOC 3 §7c] 81.7% of kataegis mutations carry the APOBEC signature (PCAWG)"}
+      geometry: {value: null, status: UNSOURCED, goes_to: risks.unknowns.kataegis_geometry}
+      co_localisation: "kataegis co-localises with clustered rearrangements — it is the one SNV feature that interacts with SV placement"
+    chromoplexy: {decision: EXCLUDE, prevalence: 0.178, source: "[DOC 3 §7c] PCAWG 467/2,613; prominent in prostate/lymphoid/thyroid, not a breast-enriched process"}
+    ecdna:       {decision: EXCLUDE, prevalence_pan_cancer: 0.143, source: "[DOC 3 §7c] Kim H. 2020", why: "breast-specific frequency is UNSOURCED ([DOC 3 §15.1]) and ecDNA needs a separate copy-number architecture"}
+    bfb_foldback: {decision: EXCLUDE, source: "[DOC 3 §15.2] per-tumour fold-back inversion count is UNSOURCED; a candidate figure found in search could not be located in either primary paper and was discarded"}
+
+  drivers:
+    truncal: {value: 4, source: "[DOC 1 §8.4] Frankell 2023 TRACERx421 mean 4.2 truncal"}
+    subclonal: {value: 3, source: "[DOC 1 §8.4] Frankell 2023 mean 2.8 subclonal"}
+    cross_check: {value: 4.6, what: "PCAWG pan-cancer drivers per tumour (2.6 coding point drivers); 91% of tumours have >=1", source: "[DOC 3 §12]"}
+    clonality_check: {value: 0.090, what: "fraction of SNV/indel drivers that are subclonal", source: "[DOC 3 §9] Dentro 2021: 357/3,933"}
+    gene_identities: {value: null, status: UNSOURCED, goes_to: risks.unknowns.driver_genotype}
+
+  zygosity_and_vaf:
+    architecture_rule:
+      value: "every somatic mutation is written to ONE haplotype/copy contig -> structurally heterozygous. pick_genotype is never called."
+      source: "docs/07 §1; experiments/01 (insilicoSV's random placement is P(hom)=0.5 fixed, variant_set.py:455 — a disaster for somatic zygosity)"
+    homozygous_only_via: "LOH or homozygous deletion, i.e. loss of the opposite copy — the real mechanism"
+    vaf_formula:
+      value: "VAF = m*rho / (rho*CN_T + (1-rho)*CN_N); at rho=1 this collapses to VAF = m/CN_T"
+      source: "[DOC 3 §11] Dentro 2021 STAR Methods"
+      purity: {value: 1.0, fixed_because: "each leaf is a pure clonal cell line; no stromal contamination", source: "[DOC 3 §10-11]"}
+    targets:
+      vaf_eq_1_fraction: {value: [0.10, 0.20], source: "[DOC 3 §11] derived from 18.5% LOH x the pre/post-LOH split"}
+      het_fraction:      {value: ">= 0.60", source: "[DOC 6 §4.1 S04]"}
+      hom_fraction:      {value: "<= 0.35, and >= 80% of those inside declared LOH/CN-loss intervals", source: "[DOC 6 §4.1 S04]"}
+      dominant_mode:     {value: "1/ploidy", source: "[DOC 3 §11]"}
+      correction: |
+        [REF 3 R2.6]: docs/03 §11 stated '~80-90% should show VAF ~ 1/CN' while its own cross-check
+        (c) correctly says pre-WGD trunk mutations carry multiplicity 2. With a trunk WGD and 55%
+        of SBS on the trunk, a large share of somatic SNVs sits at m=2 (VAF ~ 2/CN). The corrected
+        statement is: the VAF histogram is MULTI-MODAL — a mode at m/CN for each realised
+        multiplicity, a secondary mode at 1.0 concentrated inside LOH segments, and ZERO somatic
+        SNVs inside CN=0 segments.
+    forbidden_outcomes:
+      - {value: "all-heterozygous", source: "[DOC 3 §11]"}
+      - {value: "all-homozygous (the user's named failure mode)", source: "PLAN.md §1"}
+
+  germline_somatic_collision:
+    expected_collisions:
+      value: 63
+      source: "[COMPUTED] germline density 1 SNV per 823 bp x 51,865 distinct somatic sites over 2.9006 Gb; [REF 1 MISSING-7] computed ~64 at S=8,750"
+      about_half_on_the_same_haplotype: true
+    why_it_is_a_blocker:
+      value: "insilicoSV REJECTS overlapping imported variants (simulate.py:820), so a collision aborts a node build or silently produces a tri-allelic site the truth VCF cannot express"
+      source: "[REF 1 MISSING-7]; activity_log 04:59:20"
+    rule:
+      value: "somatic sites are drawn EXCLUDING every germline variant position (both haplotypes), and the exclusion count is reported per node"
+      source: "design decision forced by the above; [REF 6 R4.12] also requires the check"
+
+# =====================================================================================
+engine:            # how germline and every somatic node are MATERIALISED (insilicoSV)
+# =====================================================================================
+  tool:
+    value: "insilicoSV v0.1.9, vendored at /home/yuio/snape/lib/insilicoSV, git 4dc1bae + 2 local patches"
+    source: "[DOC 4 header]; upstream paper Battistella et al., Bioinformatics 2025;41(11):btaf594"
+  required_patches:
+    - id: patch1
+      what: "imported INS sequences were truncated to their FIRST BASE, silently"
+      where: "variant_set.py, grammar_to_variant_set call: pass [insseq], not insseq"
+      source: "[DOC 4 §9 bug 1]; docs/08 §1; measured 10 bp INSSEQ -> +1 bp before, +10 bp after"
+      impact_if_lost: "every shared insertion in the whole tree becomes 1 bp with no warning"
+    - id: patch1b
+      what: "imported SVs carried GRAMMAR='' so output_adjacencies: True crashed after all output was written"
+      where: "variant_set.py: assign parent_info['GRAMMAR'] AFTER the SV_KEY derivation"
+      source: "[DOC 4 §9 bug 1b]; docs/08 §2"
+    - warning:
+        value: "both patches are UNCOMMITTED in the working tree; one `pip install -e .` reverts them"
+        source: "[REF 4 MINOR]"
+        goes_to: risks.blockers.uncommitted_patches
+  known_bugs_worked_around:
+    snp_import: {value: "SVTYPE=SNP in an imported VCF crashes; omit SVTYPE for SNP records (REF/ALT single bases are auto-detected)", source: "[DOC 4 §9 bug 2] — present in BOTH pristine and patched trees"}
+    snp_genotype: {value: "in a default diploid run 36% of SNPs are written GT 1|1 with TWO different ALTs (should be 1|2)", source: "[DOC 4 §4.4] measured 108/300", fix: "post-hoc truth-VCF rewrite GT 1|1 + 2 ALTs -> GT 1|2 — NOT by forcing homozygous_only, see haploid_mode_rule"}
+    mcnv: {value: "mCNV crashes unless n_copiesB is given explicitly", source: "[DOC 4 §9 bug 4]"}
+    output_svops_bed: {value: "crashes with KeyError SVTYPE; leave off", source: "[DOC 4 §9 bug 5]"}
+    stats_txt: {value: "sim.stats.txt reports every SV as UNKNOWN; parse sim.vcf instead", source: "[DOC 4 §9 bug 8]"}
+    whole_chromosome_mode: {value: "consumes the entire contig from the free tree; never mix with ordinary SV sets in one run — chain them", source: "[DOC 4 §9 bug 10]"}
+  haploid_mode_rule:
+    value: "haploid:True / homozygous_only:True is used ONLY at post-germline somatic levels applied to a cat'ed 2N genome, where 'haploid' means one contig per homolog. It is NEVER used for the germline import."
+    source: "[REF 4 B4] corrected"
+    correction: |
+      docs/04 recommendation 4 said keep EVERY level haploid. Applied to the germline import that
+      silently drops the donor's 2,742,284 heterozygous records (imported het records appear in the
+      VCF and are never applied to the FASTA — docs/04 §6 measured this) and yields het/hom = 0:
+      verbatim the 'Aaa tum mutasyonlar homosigot olmus' outcome the mandate forbids.
+    somatic_heterozygosity_comes_from: "WHICH of the two homologous contigs an event lands on"
+  phase_fidelity:
+    value: "imported GT allele ORDER is honoured literally; phase is preserved exactly"
+    source: "[REF 4 M1] corrected (docs/04 §7 wrongly said 'het with a random haplotype'); measured 60/60 at activity_log 04:54:47 and again by the referee at 3 seeds"
+    why_it_matters: "this is what makes the real-donor-copy germline viable at all"
+  spectrum_free_warning:
+    value: "insilicoSV's type:SNP generator emits Ti/Tv = 0.4996 (uniform over the 3 non-reference bases, utils.py:62-64) — the signature of random sequencing error"
+    source: "[REF 4 B1] measured, n = 251,327"
+    consequence: "NO SNV field in this project may be generated that way. Germline and somatic SNVs both arrive through `- import:`."
+  n_content_threshold:
+    value: "[MOOT ON CHM13 — N = 0, no threshold can be exceeded] th_proportion_N must be raised for chromosome/arm-scale sets, or arm ROIs defined on ungapped intervals with overlap_mode: contained"
+    source: "[REF 4 B5] — 9 of 24 hg38 chromosomes exceed the 0.05 default (chr1 7.4%, chr9 12.0%, chr13 14.3%, chr14 15.4%, chr15 17.0%, chr16 9.4%, chr21 14.2%, chr22 22.9%, chrY 53.8%)"
+    on_chm13: "the whole class of failure below is gone: CHM13v2.0 is gapless, so no ROI can be
+               rejected for N content and no run can die on an interspersed N. The N screen in
+               scripts/vcf_to_insilicosv.py is kept (it costs nothing and guards the REF check)."
+    already_hit: "experiments/04 — single interspersed N bases outside the big gaps killed whole chr2/chr3 runs; scripts/vcf_to_insilicosv.py now screens N context AND checks REF against the reference"
+  contig_naming:
+    value: "contig names gain a _hapA suffix per generation (chr1 -> chr1_hapA -> chr1_hapA_hapA); strip back to the canonical name after every level and re-faidx"
+    source: "[DOC 4 §6]; verified activity_log 05:48:10"
+  coordinate_projection:
+    value: "a node's VCF is in its PARENT's coordinate space. Two independent routes to REFERENCE coordinates (ref/chm13.primary.fa) are built and REQUIRED to agree: (A) compose the per-level sim.hapX.paf chain; (B) re-align the leaf genome to the reference with minimap2 -x asm5 and call variants from scratch with paftools.js."
+    source: "docs/07 §2; [DOC 4 §5.1, §5.3]"
+    known_hole: {value: "novel-insertion blocks have NO PAF row, so a somatic event landing inside a germline insertion is unprojectable by route A", source: "[REF 4 X2]", goes_to: risks.open.paf_insertion_nesting}
+  truth_identity:
+    value: "every mutation carries a STABLE UUID assigned in mutations.tsv and written to the VCF ID field; identity is NEVER re-derived from coordinates"
+    source: "[REF 6 R2.2] — coordinates shift after every indel/SV on the path, so coordinate-keyed set comparison fails at node 2"
+
+# =====================================================================================
+reads:
+# =====================================================================================
+  simulator:
+    value: "Badread v0.4.2 (vendored, lib/Badread, git 4deb15b), --error_model pacbio2021 --qscore_model pacbio2021"
+    source: "[DOC 5 §4] decision against PBSIM3"
+    why: |
+      PBSIM3 ships NO HiFi error model (RSII/SEQUEL CLR + ONT only); HiFi would require piping
+      multi-pass CLR through PacBio `ccs`, which is not installable here (no conda) and is itself
+      the expensive step. PBSIM3's own paper measures its best HiFi configuration at 0.34-0.53%
+      total error against real 0.25% — worse than Badread, and it credits Badread with better
+      homopolymer realism.
+    invocation: "lib/Badread/venv/bin/python3 -m badread  (the venv console script has a stale /home/yuio/svp/ shebang and cannot run — [DOC 5 §10.1])"
+  flags:
+    identity:
+      value: "28.3,3"
+      objective: "MATCH THE DELETION ERROR RATE"
+      source: "[REF 5 R8] corrected"
+      why: |
+        --identity in 2-value form is a NORMAL OVER READ Q-SCORE, and it scales total error only:
+        the substitution:insertion:deletion mix is baked into the pacbio2021 7-mer table and is
+        NOT tunable ([DOC 5 §3.2], measured across 30/27/26). No single value can match more than
+        one error class, so the objective must be named. For a somatic SV/indel caller the error
+        class that manufactures false calls is the DELETION rate, and deletions are the class
+        Badread over-produces. 28.3,3 gives deletion 0.135% (real: 0.130% CHM13 / 0.141% Revio).
+      alternatives_recorded:
+        - {value: "27,3",   matches: "TOTAL error 0.25%", source: "[DOC 5 §9.1] main-text recommendation"}
+        - {value: "25.4,3", matches: "INSERTION rate 0.093%", source: "[REF 5 R8]"}
+        - {value: "30,3",   matches: "comparability with the existing snape benchmark", source: "[DOC 5 §12.1]"}
+      derived_totals:
+        median_read_identity: {value: 0.998521, source: "[COMPUTED] 1 - 10^(-28.3/10)"}
+        mean_read_identity:   {value: 0.998122, source: "[COMPUTED] 1 - exp(-mu*ln10/10 + (sigma*ln10/10)^2/2), the closed form of [DOC 5 §1.2]"}
+        expected_total_error: {value: 0.00186, source: "[REF 5 R8] deletion-matched row"}
+    length:
+      value: "17000,4400"
+      source: "[DOC 5 §2.1] measured on real Revio SRR28305160: mean 17,075 / sd 4,367 (N50 17,654); the 10-run CASTLE cohort spans 10.8-17.6 kb mean"
+      correction: "the project's previous 15000,4000 yields mean 14,913 / N50 15,667 — ~12% short of the runs snape is benchmarked against"
+      caveat: "gamma skew 0.518 vs real 0.608 — as close as Badread's gamma can get [DOC 5 §2.1]"
+    junk_reads:    {value: 0, source: "[DOC 5 §9.1] HiFi requires >=3 subread passes plus CCS consensus; no source reports a nonzero junk rate for HiFi"}
+    random_reads:  {value: 0, source: "[DOC 5 §9.1] same reasoning"}
+    chimeras:      {value: 0, source: "[DOC 5 §9.1]", caveat: "the per-read chimera rate for human HiFi WGS is UNSOURCED (12 searches). 0 avoids baking an invented rate into the primary dataset; an explicitly labelled sensitivity arm is the alternative."}
+    glitches:      {value: "0,0,0", source: "[DOC 5 §9.1] glitches model ONT signal dropouts; CCS removes them"}
+    start_adapter: {value: "0,0", source: "[DOC 5 §9.1] real HiFi carries adapter in <=0.25% of reads (Sim et al. 2022) and every production pipeline runs HiFiAdapterFilt"}
+    end_adapter:   {value: "0,0", source: "[DOC 5 §9.1]"}
+    seed:          {value: "deterministic function of (node, contig, copy); MUST be unique per shard or shards duplicate each other's reads", source: "[DOC 5 §1.2]"}
+    defaults_warning:
+      value: "Badread's DEFAULTS (--identity 95,99,2.5 beta, adapters on 90%/50% of reads, 1% junk, 1% random, 1% chimeras, glitches 10000,25,25) would fail the error and provenance gates outright"
+      source: "[REF 6 R3.7]"
+
+  depth_plan:
+    definition:
+      value: "depth D means D reads covering each position of the HAPLOID REFERENCE, not D x the input FASTA"
+      source: "docs/07 §4 (bold: 'bu carpani ters cevirmek klasik bir hatadir'); [REF 5 R2]"
+    per_shard_quantity_formula:
+      value: "bases_shard = D * R * len(shard) / T   where R = reference length, T = that node's total FASTA length"
+      source: "[REF 5 R2] corrected"
+      correction: |
+        docs/05 §9.1 hard-coded '--quantity 15x' per haplotype shard while §6 asserted the read
+        requirement is independent of ploidy. Both cannot be true: Nx is N x the length of the
+        FASTA you hand it (simulate.py:55). With a flat 15x per contig, a WGD leaf at ploidy 2.93
+        is sequenced to 44x genome-average, not 30x — +44% bases and +44% disk (2,439 GB
+        as-emitted, which does not fit the 2.5 TB free).
+      worked_values:
+        germline_diploid:   {per_copy_depth: 15.00, source: "[COMPUTED] 30 x R / 2R"}
+        leaf_at_ploidy_2p97: {per_copy_depth: 10.10, source: "[COMPUTED] 30 x R / (2.97 R)"}
+    stage_1:
+      depth: 15
+      bases_per_genome_gbp: {value: 45.47, source: "[COMPUTED] 15 x 3,031,042,417"}
+      bases_total_gbp:      {value: 954.8, source: "[COMPUTED] x 21 nodes"}
+    stage_2:
+      depth: 30
+      method: "generate a SECOND, INDEPENDENT 15x set with different seeds and concatenate"
+      source: "[DOC 5 §8] — Badread coverage is Poisson (measured interior CV 0.0404 vs Poisson 0.0370), so the union of two independent 15x runs IS a 30x run"
+      why: "nothing is wasted and a partial/failed run is never thrown away; there is a valid dataset at every moment"
+      bases_per_genome_gbp: {value: 90.93, source: "[COMPUTED]"}
+      bases_total_gbp:      {value: 1283.0, source: "[COMPUTED] 21 x 20 x 3.0548 Gb — ACTUAL run: 20x, CHM13 primary"}
+      correction: "docs/05 used 3.117 Gb (CHM13 including chrY/chrM) -> 1,963.9 Gbp. The build in
+        use is CHM13 primary chr1-22+chrX = 3.0548 Gb and the depth actually run is 20x, not 30x
+        (user decision: 30x is overkill), giving 21 x 20 x 3.0548 = 1,283.0 Gbp.
+        docs/06 §0's '630 Gbp' is wrong by 3.0x ([REF 6 R2.4])."
+      measured: "[MEASURED] germline 61,098,676,413 bases = 20.00x; T01/T02/T03 all 20.00x"
+    reads_count: {value: "111.8 M at 30x, 55.9 M at 15x", source: "[COMPUTED] at 17,075 bp mean"}
+
+  sharding:
+    unit:
+      value: "(node, contig, copy) — one Badread process per contig-copy. NEVER split a chromosome."
+      source: "[DOC 5 §5.2]"
+      why: |
+        The previous script split the reference into THREADSx8 chunks = 192 artificial contig ends
+        per genome. Measured ([DOC 5 §5.1]): each boundary produces a ~30 kb coverage ramp bottoming
+        at ~50% of interior depth, ZERO reads spanning the boundary, and truncated reads — i.e. 192
+        loci per genome that look exactly like a breakpoint to a somatic SV caller, ~4,000 across
+        21 genomes. This must not survive into the dataset.
+    enumeration:
+      value: "from each node's OWN .fai under the declared sex — never from a constant contig count"
+      source: "[REF 5 R10] corrected"
+      correction: "docs/05 §9.2's '21 x 2 haplotypes x 25 contigs = 1,050 units' puts chrX AND chrY in both haplotypes, i.e. an XXYY genome. Donor is female: chrX x2, no chrY. Node ploidy also changes the copy count after WGD."
+    natural_ends: {value: "chromosome ends still ramp, and that is CORRECT — real telomeric coverage falls off and truth evaluation excludes the terminal read-length", source: "[DOC 5 §5.2]"}
+    concurrency: {value: 24, source: "PLAN.md §4.8 — 32 cores shared with other users"}
+    peak_rss_per_shard: {value: "~180 MB + 16.5 MB per Mb of reference; chr1 (248 Mb) ~4.3 GB; 24 concurrent chr1-sized shards ~100 GB — stagger process starts", source: "[DOC 5 §5.3] measured"}
+
+  postprocess:
+    quality_rebinning:
+      value: "HISTOGRAM-MATCH the base-Q string onto the measured real-Revio frequencies {Q40 78.12%, Q35 10.70%, Q27 3.63%, Q22 2.75%, Q17 2.37%, Q10 1.77%, Q3 0.65%}"
+      source: "[REF 5 R4] corrected"
+      correction: |
+        docs/05 §9.3 proposed nearest-level mapping. Measured on the doc's own re-binned file that
+        gives Q40 = 96.92% (real: 78.12%) and a Q-string implying 99.892% per-base accuracy against
+        the real 99.414% — 5x too optimistic, and the doc's own gate ('exactly the 7 levels, max
+        Q40') passes on it. Corroborating tell: the 'realistic' file is 25% MORE compressible than
+        real Revio.
+      why_at_all: "Badread emits 92 distinct Q values up to Q93 with 59% of bases at Q93; modern Revio is binned to 7 levels capped at Q40 ([DOC 5 §3.3] measured). Anything BQ-aware (DeepVariant, samtools/pbmm2 filters, hifiasm) sees an alien distribution."
+      script: {value: "scripts/rebin_hifi_q.py", status: "DOES NOT EXIST YET", source: "[REF 5 R12]", goes_to: risks.blockers.missing_scripts}
+      residual_miscalibration:
+        value: "at 28.3,3 the FASTQ Q string will still overstate accuracy (measured +3.9 Q at 27,3, i.e. 2.5x in error probability); the qscore model is a fixed CIGAR-context table trained on ~Q30 reads"
+        source: "[REF 5 R5]"
+        fix_path: "train a qscore model from the on-disk 600 MB Revio slice with `badread qscore_model` — the same alignment also retrains the error model"
+    compression: {value: "pigz -6 -p2 in the pipe", source: "[DOC 5 §9.1]", caveat: "[REF 5 R14] 24 shards x pigz -p2 = 48 threads on a 24-core plan; account for it"}
+
+  budget:
+    throughput:
+      value: 3.50
+      unit: "Mbp/s aggregate on 24 cores"
+      source: "[REF 5 R6] corrected"
+      correction: "docs/05 §8's 3.89 Mbp/s was measured at 30,3 / 15000,4000 — the parameters the doc then rejects. At the recommended settings edlib does more work and throughput is ~10% lower (measured 0.304-0.311 vs 0.337-0.341 Mbp/s single-core)."
+    wall_time:
+      stage_1_15x: {value: 75.8, unit: hours, source: "[COMPUTED] 954.8 Gbp / 3.5 Mbp/s"}
+      stage_2_30x_cumulative: {value: 151.6, unit: hours, source: "[COMPUTED] 1909.6 Gbp / 3.5 Mbp/s"}
+      note: "6.3 days at 30x, inside the user's stated '1 hafta hatta 10 gun' tolerance. docs/05 §0's '2.9 d / 5.8 d' headline predates both corrections."
+    disk:
+      free_now: {value: "2.5 TB on /home", source: "[DOC 5 §0] measured"}
+      fastq_gz_rebinned: {stage_1: "352 GB", stage_2_total: "703 GB", source: "[COMPUTED] at 0.3684 B/base measured [DOC 5 §7]"}
+      fastq_gz_as_emitted: {value: "1,644 GB at 30x", source: "[COMPUTED] at 0.8608 B/base", note: "this is why re-binning is not optional"}
+      raw_fastq: {value: "3,946 GB at 30x — DOES NOT FIT", source: "[DOC 5 §7]"}
+      svb_2bit: {value: "491 GB at 30x", source: "[DOC 5 §7] 0.2503 B/base measured", decision: "NOT the default — .svb discards the Badread truth header (contig/strand/coords/identity), which is the only free per-read ground truth, and locks the reads to snape"}
+      alignment_budget:
+        value: "~2 TB for 21 HiFi BAMs plus the CPU to make them"
+        source: "[REF 5 R11] — docs/05 budgeted only the FASTQ, and the validation battery requires BAMs (mosdepth, Clair3, Severus, provenance)"
+        status: "with 703 GB of reads + ~2 TB of BAMs against 2.5 TB free, this does NOT fit -> risks.blockers.disk_does_not_fit"
+        mitigation_options:
+          - {value: "CRAM against ref/chm13.primary.fa (~40% of BAM)", source: "[REF 6 R2.4 D02]"}
+          - {value: "delete the 15x FASTQ set once the 30x merge is verified", source: "[REF 6 R2.4 D03]"}
+          - {value: "align, gate, and delete node by node rather than keeping all 21 BAMs", source: "[REF 6 R2.4 D01]"}
+
+  known_deviations_from_real_hifi:
+    substitution_deficit:
+      value: "Badread pacbio2021 makes ~1 substitution per 100 errors; real HiFi makes 8-17"
+      source: "[DOC 5 §3.2, §3.5] measured"
+      consequence: "second-order for SV calling, FIRST-ORDER for anything scoring somatic SNVs off these reads — the data would look far cleaner than reality"
+      fix_path: "retrain the error model with `badread error_model` from the on-disk real Revio slice, or inject substitutions post hoc. Neither is in Phase E as written."
+    no_coverage_bias:
+      value: "Badread coverage is pure Poisson (measured CV 0.0404 vs 0.0370 expected); real HiFi drops out in GA-rich regions and under-covers GC-rich VNTRs"
+      source: "[DOC 5 §3.4, §2.4]"
+      status: "declared deviation; would require GC/GA-keyed post-hoc subsampling"
+    error_model_vintage:
+      value: "pacbio2021 is trained on 2021 Sequel IIe HiFi; Revio runs DeepConsensus-class consensus on-instrument (which removes ~42% of remaining errors)"
+      source: "[REF 5 R7] — the doc rejects the Q ceiling BECAUSE it is 2021-era and then anchors the error rate on a 2021-era measurement"
+      decision: "the dataset is declared to target 2021-era Sequel IIe HiFi error characteristics with Revio LENGTH and Q-ALPHABET. Stated, not mixed silently."
+    n_runs_are_sequenced:
+      value: "[RESOLVED — NO LONGER APPLIES] Badread does not skip N; reads drawn from an
+              assembly gap come out as runs of N"
+      source: "[DOC 5 §1.5]"
+      old_decision: "N-reads are RETAINED and counted. They do not align, so callable-genome depth is unaffected; the wasted fraction (~4.0% of generated bases) is reported per node."
+      resolution: |
+        This was the DECISIVE reason to leave hg38. The mitigation above was wrong in practice:
+        MEASURED on the hg38 build, 86% of unmapped reads were poly-N, chr21 lost 15% of its
+        reads, and non-N depth came out 18.57x against a 20x target — i.e. callable depth WAS
+        affected. CHM13v2.0 has N = 0 (measured), so no read can be drawn from a gap and the
+        wasted fraction is 0. What remains is badread's own --junk_reads 1 --random_reads 1
+        (~2% by design, present in real data too); reads_gate R02 is set at >= 96.5% for that.
+
+# =====================================================================================
+validation:        # the numbered check battery. Gate order is load-bearing.
+# =====================================================================================
+  principles:
+    - {value: "the generating code's own report is NEVER validation; every check uses an independent tool", source: "PLAN.md §4.2"}
+    - {value: "T-series runs BEFORE any genome is materialised; G-series before D; F-series per node immediately after that node's FASTA is written", source: "[DOC 6 §0]"}
+    - {value: "each check writes validate/results/<id>.json with tool version, seed, reference build and input checksum", source: "[REF 6 R4.11] — docs/06's {id,measured,expected,threshold,verdict} schema is self-defeating given its own warning that numbers are incomparable across tool versions"}
+    - {value: "every script takes --threads, default 8", source: "[REF 6 R5.2] — docs/06 contradicted itself (cap 8-12, commands used -t16, plan used 4x8=32)"}
+
+  germline_mode_caveat:
+    value: "G03/G04/G07/G08/G12 are SELF-CONSISTENCY checks under meta.build_mode_germline = real_donor_copy — matching the panel we drew from is a tautology, not evidence"
+    source: "[REF 6 R3.5] corrected — docs/06 applied this anti-circularity rule to G09 only"
+    independent_realism_axes: "ROH/LD structure, the HGSVC3-vs-panel cross-check, and comparison against a HELD-OUT 1kGP sample never used in construction"
+
+  G_germline:
+    G01: {metric: "total variant sites, autosomes", expect: "4.0-4.8 M", source: "[REF 6 R3.1] corrected to the 30x resource: BB22 T1: 4,754,817 small variants per AMR sample (4,952,915 is the all-population mean); Auton 2015's 4.1-5.0 M is the low-coverage generation", verdict_rule: "PASS in band"}
+    G02: {metric: "SNV count", expect: "3.4-4.1 M", source: "germline.snv.count", verdict_rule: "PASS in band"}
+    G03: {metric: "SNV het/hom (PSC nHets/nNonRefHom)", expect: "1.40-1.85 genome-wide; NO autosome outside 1.30-2.30", source: "[REF 6 R2.1] corrected", correction: "docs/06's per-autosome band of 1.20-2.10 FAILS the real NA12878 on chr22 (2.150). A check that rejects the human it was calibrated against gets loosened at 3 a.m. or sends a correct genome back for rebuild.", verdict_rule: "FAIL if any autosome >3.0 or <0.8 — the everything-homozygous / everything-het failure"}
+    G04: {metric: "Ti/Tv", expect: "1.95-2.20 genome-wide; per-chromosome 1.95-2.40 with spread >= 0.35", source: "[REF 6 R2.1] corrected (chr19 2.23, chr20 2.19, chr22 2.32 measured); spread gate from [DOC 2 §11]", verdict_rule: "PASS in band AND spread present — a flat per-chromosome Ti/Tv is a one-global-model tell"}
+    G05: {metric: "exonic Ti/Tv", expect: "2.6-3.4", source: "[DOC 2 §1.3] GATK 3.0-3.3", note: "needs a CHM13 exon BED; [REF 6 R5.8] flagged that docs/06 named none, and none was built -> G05 is NOT among the 14 checks germline_gate.py actually runs"}
+    G06: {metric: "indel count", expect: "0.70-0.90 M", source: "germline.small_indels.count"}
+    G07: {metric: "indel ins:del", expect: "0.93-0.97", source: "[MEASURED] HG00733 0.9615", note: "[DOC 6 §10.1] records a competing literature value of 0.73 from short-read callsets that under-call insertions >10 bp; the panel is SV-integrated and partly rescues them"}
+    G08: {metric: "indel length spectrum", expect: "1 bp 47-52%; 4bp>3bp; 8bp>7bp", source: "germline.small_indels.length_spectrum", correction: "docs/06's G08 demanded MONOTONE decay and 'no spike >1.5x its neighbours' — that rule FAILS real data, where the STR bumps are the realism signal"}
+    G09: {metric: "dbSNP b156 overlap", expect: "N/A", source: "[REF 6 R3.4] — the cited 1.99% novel rate is actually 1.79%, from a Qatari cohort in an arXiv preprint. Under real_donor_copy the check is meaningless; measure the donor's own novel fraction and report it, do not gate it."}
+    G10: {metric: "gnomAD AF spectrum", expect: "96.0-99.5% of germline SNVs at AF > 0.001", source: "[REF 6 R3.3] corrected", correction: "docs/06 required '>=90%', far too loose: Auton's rare fraction is 1-4% (40,000-200,000 variants at AF<0.5%), so a generator emitting 10x too many rare variants sails through 90%. Two-sided: 100% is also wrong.", note: "join on the 4-tuple (chr,pos,ref,alt), never position alone; bcftools norm -f on BOTH sides first"}
+    G11: {metric: "F_ROH (>=1 Mb)", expect: "0.001 <= F_ROH <= 0.02", source: "[REF 6 R5.6] corrected to two-sided — no real human has zero ROH", blocker: "bcftools roh needs an AF tag; use the panel's own AF_AMR [DOC 2 §10.6]"}
+    G12: {metric: "side-by-side vs a HELD-OUT 1kGP sample", expect: "|d het/hom| <= 0.20; |d Ti/Tv| <= 0.10; indel-length spectrum max bin diff <= 5 pp", source: "[REF 6 R3.5] corrected — compare against a sample NOT used in construction, not against the file we drew from"}
+    G13: {metric: "1-Mb density CV over CALLABLE bases", expect: "0.33-0.47", source: "[DOC 2 §7.2]; denominator per [REF 2 B3]/[REF 6 R5.7]", verdict_rule: "FAIL if CV < 0.15 — Poisson/uniform placement gives ~0.03"}
+    G14: {metric: "germline SV count", expect: "20,000-27,000 (assembly tier)", source: "[REF 6 R2.7] — docs/06 had NO germline SV check at all, the single largest realism gap for a somatic-SV benchmark", why: "a somatic SV caller's false-positive rate is dominated by germline SVs it must not call; a ~4,300-SV background makes snape look far better here than in reality"}
+    G15: {metric: "germline SV class mix + ins:del", expect: "ins:del 1.50-1.70; INS and DEL both >> DUP/INV; CTX = 0", source: "germline.structural_variants"}
+    G16: {metric: "germline SV size spectrum", expect: "DEL median 141 (p25 73, p75 328, p95 2,553); INS median 198; >=1 kb ~3,238; MEI peaks present at ~300 bp (Alu), ~1-2 kb (SVA), ~6 kb (L1)", source: "[REF 2 B2] + [REF 6 R2.7]", verdict_rule: "a smooth size distribution with no mobile-element peaks is instantly recognisable as simulated"}
+    G17: {metric: "germline SV het/hom", expect: "1.70-2.10, and ordering SNV < SV < INDEL", source: "[REF 2 B1] corrected"}
+
+  S_somatic:
+    S01: {metric: "somatic SBS per leaf", expect: "within 0.5x-2.0x of 8,990", source: "somatic.per_leaf_burden.sbs", correction: "[REF 6 R2.3] DELETED docs/06's 'FAIL if the 20 leaves span < 1.2x of each other'. With trunk 0.55 the maximum achievable span is 1/(1-f); the rule was testing branch-length variance, not evolution, and was arithmetically incompatible with the declared clonality model."}
+    S01b: {metric: "per-leaf private fraction", expect: "private_i/(T+B_i) matches spec/tree.json to +/-10%", source: "[REF 6 R2.3] replacement check"}
+    S02: {metric: "indel:SBS ratio", expect: "0.05-0.20", source: "[DOC 6 §4.1] Priestley 2019"}
+    S03: {metric: "somatic SV junctions and events per leaf", expect: "junctions within 0.5x-2.0x of 393; events of 273", source: "somatic.per_leaf_burden", note: "always state which unit; [DOC 3 §0]"}
+    S04: {metric: "somatic zygosity / VAF", expect: "het >= 0.60; hom <= 0.35 with >=80% inside declared LOH; VAF histogram MULTI-MODAL with a mode at m/CN per realised multiplicity and a secondary mode at 1.0; ZERO somatic SNVs in CN=0 segments", source: "[DOC 6 §4.1 S04] + [REF 3 R2.6] correction", verdict_rule: "FAIL if >50% homozygous — the user's named failure mode on the somatic side"}
+    S05: {metric: "declared subclonal fraction", expect: "measured == declared +/- 0.03", source: "[REF 6 R2.3] corrected", correction: "docs/06's band of 6-61% is a 10x window that cannot fail for any plausible input"}
+    S05b: {metric: "pseudo-bulk subclonal fraction AT the CCF>=0.30 detection limit", expect: "reported and compared to PCAWG breast 6.7%", source: "[REF 3 R2.5]; somatic.distribution_over_the_tree.implied_pseudobulk_subclonal_fraction", verdict_rule: "REPORT, do not gate — but a wildly discordant number means the branch budget is wrong"}
+    S07: {metric: "SV class rank order", expect: "DEL > DUP > unbalanced TRA; reciprocal events each < 10%", source: "[DOC 6 §4.1] Li 2020", caveat: "[REF 6 R5.11] COLO829's own mix has TRA (13) > DUP (7); keep COLO829 as an S03/R07 anchor only"}
+    S07b: {metric: "replication-timing polarity", expect: "DEL and DUP enrichment run in OPPOSITE directions (DEL late-replicating, DUP early)", source: "[REF 6 R3.10] — docs/06's rank-order-only PASS is satisfied by a simulator that places every SV uniformly at random", status: "needs a Repli-seq track; not on box"}
+    S08: {metric: "SV size histogram", expect: "not unimodal (dip test p<0.05 or >=2 maxima >=0.5 log10 apart)", source: "[DOC 6 §4.1] Li 2020", caveat: "unimodal WITHIN a patient is the published finding — this gate tests the cohort-shaped mixture and is weak; S07b is the real placement check"}
+    S09: {metric: "signature refit (SigProfilerAssignment cosmic_fit)", expect: "spectrum cosine >= 0.95; each injected signature >= 0.90 to its COSMIC reference; exposure within +/-20% for every signature contributing >=10%", source: "[DOC 6 §4.1]", caveat: "[REF 6 R5.12] the +/-20% exposure tolerance is UNSOURCED"}
+    S10: {metric: "blind extraction (SigProfilerExtractor)", expect: ">=80% of injected signatures with exposure >=10% recovered at cosine >=0.90", source: "[DOC 6 §4.1]", priority: secondary}
+    S11: {metric: "SV junction microhomology distribution", expect: "non-degenerate (NOT 100% blunt); modes at 2-7 bp and 10-30 bp present", source: "[REF 6 R3.11]", measured_from: "the truth FASTA, not the generator's report"}
+    S12: {metric: "rainfall / inter-mutation distance plot", expect: "kataegis foci visible; NOT flat", source: "[REF 6 R4.9] — a flat rainfall plot is the most recognisable 'this is simulated' signature there is"}
+
+  T_tree:
+    T01: {metric: "structure", expect: "20 tumour leaves, germline is the ROOT, strictly binary", source: "tree.n_leaves"}
+    T02: {metric: "branch additivity", expect: "leafset == pathunion MINUS lost_by_declared_CN_loss, keyed on STABLE MUTATION UUID", source: "[REF 6 R2.2] corrected", correction: "docs/06's 'exact set equality, 0 extra 0 missing' is unsatisfiable by construction — any trunk mutation on a deleted arm is legitimately gone, and the per-node VCFs are in different coordinate spaces so coordinate keys do not even compare"}
+    T02b: {metric: "loss accounting", expect: ">=99% of each leaf's lost set lies inside its declared LOH/CN-loss intervals; the lost COUNT is reported per leaf as a realism number in its own right", source: "[REF 6 R2.2]"}
+    T03: {metric: "pairwise sharing", expect: "Spearman rho(Jaccard, -patristic distance) >= 0.95 over the 190 leaf pairs", source: "[DOC 6 §5]"}
+    T04: {metric: "topology reconstruction", expect: "normalised Robinson-Foulds == 0 from NJ AND parsimony on the leaf x somatic-site matrix", source: "[DOC 6 §5]", tool: "DendroPy or ete3 (both pip-resolve here)"}
+    T05: {metric: "tree balance", expect: "Sackin 111 and cherry count 7 inside the central 90% of a 10,000-tree Yule null for n=20", source: "[REF 1 M3] corrected", correction: "gate on Sackin + ONE genuinely independent statistic (cherry count). J1 is algebraically Sackin here and Colless is near-collinear; docs/01 §8.2's 'none of the four rejects' overstates the evidence ~2x in degrees of freedom.", disclosure: "the tree was hand-tuned to this percentile — see tree.shape_statistics.circularity_disclosure"}
+    T06: {metric: "CN-based phylogeny (MEDICC2)", expect: "RF <= 2 vs truth", source: "[DOC 6 §5]", prerequisite: "[REF 6 R4.2] — allele-specific CN profiles per leaf must actually be produced; no step currently emits them"}
+    T07: {metric: "infinite-sites / tree fit of shared SNVs", expect: "88-98% fit perfectly, AND >=80% of the misfits explained by an overlapping subclonal CN loss; homoplasy ~0", source: "[REF 1 B5] corrected", correction: "docs/01's '>=95% must fit' is stricter than 2 of Roerink's 3 patients AND would be passed by a simulation with no subclonal deletions at all — exactly the wrong incentive"}
+
+  F_fasta:
+    F00: {metric: "truth-VCF self-validation BEFORE anything is built", expect: "bcftools norm --check-ref e passes; left-aligned; no overlapping ALTs on one haplotype; no duplicate keys", source: "[REF 6 R4.7] — one command, catches a whole class of generator bugs at Phase C instead of Phase E"}
+    F01: {metric: "haplotype aligns end-to-end (minimap2 -cx asm5 --cs)", expect: ">=98% of bases in alignments >=10 kb", source: "[DOC 6 §6.4]"}
+    F02: {metric: "small-variant recall (paftools.js call + rtg vcfeval)", expect: "GT-match recall >=0.98 AND precision >=0.98 in the callable BED", source: "[DOC 6 §6.4] + [REF 6 R4.6]", correction: "gate on GENOTYPE-match recall, not plain recall — otherwise a het truth variant recovered as hom-alt counts as recovered and the headline failure mode survives the entire battery"}
+    F03: {metric: "SV recall (truvari bench --pctseq 0.7 --pctsize 0.7 --refdist 500)", expect: "F1 >= 0.90", source: "[DOC 6 §6.4]", blocker: "invoke as `python -m truvari` — the console script has a stale /home/yuio/svp/ shebang ([REF 6 R2.6])"}
+    F04: {metric: "second independent method (svim-asm or nucmer)", expect: "|d recall| <= 0.05", source: "[DOC 6 §6.4]", scope: "3 nodes (root, one mid-branch, one deep leaf) — all 21 costs ~350 CPU-h and buys little"}
+    F05: {metric: "direct base extraction, 10,000 random truth ALTs, zero aligner involvement", expect: "100% exact", source: "[DOC 6 §6.4]", scope: "all 21 nodes; nearly free", verdict_rule: "any mismatch is a hard stop"}
+
+  R_reads:
+    R01: {metric: "measured depth (mosdepth) over CALLABLE bases", expect: "genome-wide mean within +/-5% of target", source: "[DOC 6 §7]; docs/07 §4 makes this a gate before a read set is accepted"}
+    R02: {metric: "coverage uniformity", expect: ">=90% of 1 kb autosomal bins in [0.5,1.5]x mean AND 1.05 <= fold-80 < 2.0", source: "[REF 6 R5.4] corrected", correction: "docs/06 demanded fold-80 < 1.5 while citing <2.0 as good; and 'also FAIL if perfectly flat' had no numeric lower bound"}
+    R02b: {metric: "NO shard-boundary notch", expect: "no coverage depression at any contig join (+/-30 kb)", source: "[DOC 5 §11]"}
+    R03: {metric: "read length distribution", expect: "two-sample KS vs a real Revio run, p > 0.01", source: "[REF 6 R3.9] corrected", correction: "docs/06's 'N50 13-22 kb' is a tautology — Badread's --length sets exactly that. Passing proves the parameters were passed through."}
+    R04: {metric: "per-read Q distribution", expect: "two-sample KS vs real Revio, p > 0.01; exactly the 7 real levels; max Q = 40; per-level frequency |d| <= 2 pp", source: "[REF 5 R4] + [REF 6 R3.9] corrected"}
+    R05: {metric: "read identity (Badread header + independent realignment)", expect: "median 99.852% +/- 0.03; p01 >= 99.0%; KS of -10log10(1-identity) vs N(28.3,3) p>0.01", source: "[REF 5 R3] corrected", correction: "docs/05 §11's 'no read below 98%' is mathematically unsatisfiable: at 27,3 that is P=4.2e-4, i.e. ~49,000 reads across the 21-genome set, and a fresh smoke run measured a minimum of 97.679%. Gate the DISTRIBUTION, never the minimum."}
+    R05b: {metric: "error composition (realign to the node's OWN haplotype)", expect: "total 0.186% +/- 0.02; deletion 0.135% +/- 0.015; ins:del 0.36 +/- 0.03; indels > substitutions", source: "reads.flags.identity", note: "ins:del 0.36 and 72% of deletions in HP>=3 are BADREAD's values, not real HiFi's (0.62-0.77 and 50.5%) — a declared deviation, not a target"}
+    R06: {metric: "germline variant recall from reads (Clair3 or DeepVariant + rtg vcfeval)", expect: "SNP GT-recall >= 0.995 and INDEL >= 0.98 at 30x, AND within 0.005 / 0.015 of the same caller's recall on real HG002 HiFi through the identical command", source: "[REF 6 R3.2] corrected", correction: "docs/06's ceilings were not in the sources cited: the 2019 DeepVariant blog reports SNP F1 0.9957 at 13.7x (not 0.9992-0.9993), and Clair3 on PacBio reports SNP 0.9988 / INDEL 0.9907 (not 0.8814, which is an ONT-class indel number, ~11 pp low). Against a true ceiling of ~0.99, docs/06's INDEL>=0.95 would have declared PASS on a simulation 3.5 pp harder than reality."}
+    R07: {metric: "somatic SV recall (Severus + sniffles2, truvari bench)", expect: "recall >= 0.85, precision >= 0.90 at 30x", source: "[DOC 6 §7]"}
+    R08: {metric: "read provenance audit", expect: "100% of reads WITH a genomic source interval map back correctly", source: "[REF 6 R3.8] corrected", correction: "Badread's read NAME is a random UUID; the source locus is in the DESCRIPTION after the first whitespace. minimap2 drops the FASTQ comment unless -y is passed. Chimeric reads carry two comma-joined intervals.", note: "[REF 5 R13] for nodes 2-21 those coordinates are in the NODE's own mutated space — apply the PAF projection before comparing"}
+    R09: {metric: "negative control", expect: "somatic calls from germline-vs-germline (different read seeds) < N, N declared before the run", source: "[REF 6 R4.4] — every other R/F threshold is a recall on truth; nothing currently checks the number that matters most"}
+    R10: {metric: "haplotype coverage balance", expect: "per-haplotype read-count ratio 0.45-0.55 in 1 Mb bins outside declared CN-altered regions", source: "[REF 6 R4.5] — the read-level analogue of the user's #1 fear; a 60/40 imbalance shifts every het VAF and looks exactly like broken zygosity three phases later"}
+
+  B_benchmarks:
+    role: {value: "CALIBRATION, not pass/fail on our data. Run the identical command on the gold sample and on ours, report both. A metric BETTER than the gold sample means our simulation is unrealistically clean — that is a finding, not a success.", source: "[DOC 6 §8]"}
+    available_on_box:
+      value: "castle_truth.tar.gz (14.96 GB) already contains HG002_SVs_Tier1_v0.6.bed, HG002 GRCh37 VCF, the COLO829 somatic-SV truth VCF (hg38-lifted), HCC1395 + a HiFi/ONT PURITY ladder (20/40/60/80%) and DEPTH ladder (10/20/30/60x), and chm13_chm1"
+      source: "[REF 6 R2.5] corrected"
+      correction: "docs/06 §8 asserted 'none of the four standard truth sets is present on this box (verified by find)'. find matches file NAMES and cannot see inside a tarball; the doc itself flagged the tarball as unopened and then concluded the opposite. The download plan shrinks to 'GIAB HG002 small-variant v4.2.1/v5.0 VCF only'."
+    B03_anchor: {value: "COLO829 = 68 validated somatic SVs (38 DEL, 3 INS, 7 DUP, 7 INV, 13 TRA); a 2025 Genome Research re-analysis gives 54 STABLE somatic SVs across replicates in BOTH GRCh38 and CHM13 coordinates, and reports 346 SVs (1.13%) seen in only one replicate", source: "[DOC 6 §8] + [REF 6 R4.1]", caveat: "the replicate instability directly undercuts the 'pure clonal cell line' premise of S04 — record it"}
+    B04_anchor: {value: "SEQC2 HCC1395 = 39,536 high-confidence somatic SNVs + 2,020 indels", source: "[DOC 6 §8]"}
+
+  D_disk_and_compute:
+    D01: {metric: "pre-flight df before each phase against a declared byte budget", expect: "no phase starts below its budget; 85% full = stop and analyse", source: "[REF 6 R2.4] + PLAN.md §4.6"}
+    D02: {metric: "reads stored as .fq.gz (re-binned) or CRAM; BAMs not all retained", expect: "peak /home usage < 2.2 TB", source: "[REF 6 R2.4]"}
+    D03: {metric: "the 15x set is CONSUMED by the 30x merge, not retained alongside it", expect: "verified before deletion", source: "[REF 6 R2.4]"}
+
+  tool_state:
+    verified_working: "bcftools 1.21, samtools 1.21, minimap2 2.31, paftools.js + k8-1.2, bedtools, uv, docker, insilicosv 0.1.9, matplotlib, plot-vcfstats"
+    broken_console_script: {value: "truvari (module imports at 5.4.0; the entry point carries a stale /home/yuio/svp/.venv shebang)", source: "[REF 6 R2.6]"}
+    missing: "rtg-tools (needed by G12/F02/R06 — single Java jar, install EARLY), mosdepth, seqkit, cramino, svim-asm, sniffles2, DeepVariant/Clair3 images"
+    source: "[DOC 6 §1] as corrected by [REF 6 R2.6] — the doc's table was built with ls, not --version; two of its local-state claims did not survive testing"
+
+# =====================================================================================
+risks:
+# =====================================================================================
+  blockers:            # must be closed before the phase named can run
+    chrx_missing:
+      what: "chrX is absent from the on-disk 1kGP phased folder; the .v2 file (2.5 G) must be downloaded"
+      phase: C
+      source: "[DOC 2 §9.1, §13.4]"
+      action: "download from the EBI 1000G FTP path recorded in docs/02 §9.1 (HTTP-verified 2026-08-18), or take chrX from HGSVC3 only"
+    uncommitted_patches:
+      what: "both insilicoSV patches are uncommitted; a re-clone or `pip install -e .` silently reverts them and every shared insertion becomes 1 bp with no warning"
+      phase: "C and D"
+      source: "[REF 4 MINOR]; docs/08"
+      action: "commit them in the vendored tree and add a startup assertion (import a 10 bp INSSEQ, assert +10 bp) to the build scripts"
+    disk_does_not_fit:
+      what: "703 GB of 30x reads + ~2 TB of HiFi BAMs against 2.5 TB free"
+      phase: E
+      source: "[REF 5 R11] + [REF 6 R2.4]"
+      action: "pick from reads.budget.disk.alignment_budget.mitigation_options BEFORE Phase E writes anything; enforce via D01-D03"
+    missing_scripts:
+      what: "scripts/rebin_hifi_q.py does not exist, and the five gate scripts referenced by docs/05 §11 live in /home/yuio/tmp (the box's declared throwaway directory)"
+      phase: E
+      source: "[REF 5 R12]"
+      action: "write the re-binner (histogram-match, not nearest-level) and move realstats/errcomp/covprof/covprof2 into simulation/phylo/scripts/"
+    tree_json_node_name_collision:
+      what: "spec/tree.json's edges_in_units_of_S uses the label `scA` for all FOUR superclone stems (3 edges point INTO a node named scA, 6 edges point out of it). Any build step that constructs a graph keyed by node name will produce a cycle or silently merge branches."
+      phase: B
+      source: "[MEASURED] this review, on spec/tree.json"
+      action: "re-emit spec/tree.json with unique stem names (scA/scB/scC/scD) before scripts/realize_tree.py consumes it; the 38 edge KEYS are distinct so no length information is lost"
+    rtg_tools_missing:
+      what: "G12, F02 and R06 all want rtg vcfeval; it is a single Java jar with no compilation"
+      phase: "C/D/E"
+      source: "[DOC 6 §11.6]"
+      action: "install in Phase A, not at validation time; also `rtg format -o SDF ref.fasta` (docs/06 §6.2 passes -t SDF/ without ever creating it)"
+
+  open:                # decided or decidable, but not yet closed
+    tree_budget_sum_mismatch:
+      what: "docs/01 §8.3's post-MRCA edge total is 5.444*S; spec/tree.json's is 5.2193*S — a 0.22*S (~2,000 SBS) gap"
+      source: "[MEASURED] this review"
+      resolution: "spec/tree.json is authoritative (independently recomputed at activity_log 05:16:06); the docs/01 table should be re-emitted from it"
+    paf_insertion_nesting:
+      what: "novel-insertion blocks have no PAF row, so a somatic event landing inside a germline insertion is unprojectable to reference coordinates by the PAF-composition route"
+      source: "[REF 4 X2]"
+      resolution: "route B (independent asm5 re-alignment + paftools call) covers it; the two routes are already required to agree, so a disagreement localises the problem"
+    trunk_fraction_residual_disagreement:
+      what: "docs/01 (0.55) vs docs/03 (0.80) — resolved in favour of 0.55, but on n=1 (Roerink P2)"
+      source: "tree.branch_budget.trunk_fraction_snv"
+      resolution: "recorded as a design choice with the full bracketing range; S05b reports the consequence in a comparable unit"
+    error_model_generation:
+      what: "pacbio2021 is 2021-era Sequel IIe; the length and Q-alphabet targets are 2024 Revio"
+      source: "[REF 5 R7]"
+      resolution: "declared as a deviation (reads.known_deviations_from_real_hifi.error_model_vintage). Closing it means retraining error+qscore models from the on-disk 600 MB Revio slice — the alignment machinery and the data are already here."
+    real_read_divergence_anchor:
+      what: "docs/05 §2.3's 0.27% Revio anchor was measured by aligning to hg38 with a HAND-ESTIMATED germline subtraction (~0.075%/haplotype; the standard figure is ~0.090%)"
+      source: "[REF 5 R7]"
+      resolution: "the reads are on disk — measure the germline load instead of assuming it, before quoting a target error rate"
+
+  unknowns:            # needed, absent from ALL six docs, NOT guessed
+    somatic_sv_length_spectrum:
+      what: "per-class length distributions in base pairs for somatic DEL / TD / INV / TRA-partner distance"
+      why_absent: "docs/03 §12 buckets everything as <10 kb / >=10 kb; the three TDP modal spans were dropped with the BRCA1-type label ([REF 3 R1.1/R1.2])"
+      source: "[REF 3 R1.5]"
+      resolution_path: "fit per-class length distributions from the PCAWG consensus SV release or Li 2020's size histograms and record the fitted parameters here with the fit shown"
+      blocks: "Phase D SV realisation — insilicoSV needs a length distribution per variant set, not a bucket"
+    inv_tra_shares:
+      what: "the numeric split of the ~37% of the rearrangement load that LINX folds into 'Complex' — RS4 (translocations) and RS6 (inversions)"
+      why_absent: "Nik-Zainal's 9/22/18/18/14/19% RS shares could not be verified from the primary text by either the author or the referee ([DOC 3 §15.7], [REF 3 R3.5]); the LINX taxonomy has no INV/TRA column at all"
+      what_is_usable: "21.7% of breast SVs are distal-intrachromosomal or interchromosomal (Kim R. 2025), and unbalanced >> reciprocal (Li 2020) — rank order only"
+    junction_microhomology_probabilities:
+      what: "per-junction probability of blunt / 2-7 bp MH / 10-30 bp MH / templated insertion, and the insert length distribution"
+      why_absent: "docs/03 §5 describes the modes qualitatively and never converts them to probabilities"
+      source: "[REF 3 R4.3], [REF 6 R3.11]"
+      blocks: "the realism of exactly the signal snape builds contigs from"
+    somatic_snv_placement_covariates:
+      what: "replication timing / chromatin / transcription-coupled-repair weights for somatic SNV density"
+      why_absent: "docs/03 gives replication timing for SVs only"
+      source: "[REF 3 R4.1]"
+      consequence: "uniform placement gives a flat regional mutation density that no real tumour has and that any reviewer can test in one command"
+    sv_breakpoint_placement_targets:
+      what: "target fraction of somatic SV breakpoints in repeats / segdups / fragile sites"
+      why_absent: "docs/06 asks for the CHECK; no doc supplies the TARGET. Only the fragile-site ~100 kb deletion peak exists."
+      source: "[REF 3 R4.2]"
+      consequence: "uniformly-placed breakpoints make the caller look better than it is — the dominant realism axis for a caller benchmark"
+    homozygous_deletion_geometry:
+      what: "size distribution of CN=0 segments"
+      why_absent: "docs/03 gives the count (mean 2.0, never a whole arm) and no sizes"
+      source: "[REF 3 R4.9]"
+    kataegis_geometry:
+      what: "foci per affected tumour, mutations per focus, focus span"
+      why_absent: "Nik-Zainal gives prevalence only (49% >=1 focus, 4% >=10 foci)"
+      source: "[DOC 3 §15.3]"
+    driver_genotype:
+      what: "WHICH TP53 mutation, where, and how BRCA1/2 is biallelically inactivated"
+      why_absent: "docs/03 recommends the phenotype and budgets 4.6 drivers without naming a genotype"
+      source: "[REF 3 R4.4]"
+      note: "promoter methylation, one of the two documented BRCA1 routes, is unsimulatable in a sequence-only truth set — itself worth stating"
+    clone_abundance_model:
+      what: "clonal abundances for the 20 leaves, needed to compute the size-weighted J1c that Noble 2022's empirical range (0-0.5) is expressed in"
+      why_absent: "docs/01 cites Laks (9 clones, 62-145 cells) and Salehi's abundance time series and then uses neither"
+      source: "[REF 1 M4], [REF 1 MISSING-6]"
+      consequence: "without it we cannot say whether '20 distinct leaves over superclones of size 8/6/4/2' is even a likely draw, and the null comparison silently assumes complete sampling"
+    chrx_loss_rate:
+      what: "rate of X-chromosome / Xi loss in breast carcinoma"
+      why_absent: "docs/03 §11 handles chrX in a MALE leaf; the donor is female and the LOH/aneuploidy numbers quoted are autosomal"
+      source: "[REF 3 R4.7]"
+    cell_line_excess_burden:
+      what: "the immortalised line's mutation excess over the founding tumour, accumulated in years of culture BEFORE the 20-clone experiment"
+      why_absent: "docs/01 §5 covers within-line drift over 8-14 months but never adds this term"
+      source: "[REF 1 MISSING-10]"
+      consequence: "leaf burden is anchored to primary-tumour medians while the object simulated is not a primary tumour"
+    post_wgd_rate_scaling:
+      what: "how the per-genome mutation rate changes across the WGD boundary (twice the DNA per cell)"
+      why_absent: "neither the scaling nor its interaction with the pre/post-WGD trunk split is given anywhere"
+      source: "[REF 3 R4.5]"
+    long_read_mei_per_genome:
+      what: "per-genome Alu/L1/SVA counts at long-read sensitivity"
+      why_absent: "no source states them; docs/02 §4's 1,500-2,500 Alu is a DERIVED scaling that [REF 2 M7] showed is invalid in principle"
+      source: "[DOC 2 §13.1]"
+      resolution_path: "count MEIs directly in the donor's HGSVC3 Mobile_Elements/ release"
+    per_individual_tr_locus_count:
+      what: "how many of the ~1.7 M tandem-repeat loci carry a non-reference allele in one genome"
+      why_absent: "no retrieved source states it; docs/02 §5's >=0.5 M is a measured lower bound"
+      source: "[DOC 2 §13.2]"
+
+  accepted_deviations:  # known-unreal, deliberately chosen, must appear in the final report
+    no_mitochondrion:
+      what: "chrM is absent from the reference and therefore from every node and every read set"
+      real_world: "a 30x HiFi library yields chrM at 100-1000x; a real genome carries ~30-50 homoplasmic differences from rCRS plus heteroplasmy; mtDNA is a standard clonal-lineage marker in tumour work"
+      source: "[REF 2 R4.1], [REF 5 R9], [REF 6 R4.8]"
+      why_accepted: "ref/chm13.primary.fa is cut to chr1-22+chrX; adding chrM means rebuilding the germline and the whole tree"
+    leaves_are_perfectly_clonal:
+      what: "each leaf is a single pure genome at purity 1.0"
+      real_world: "a real 'clonal cell line' is a population with ~45% subclonal mutations and 22% of its genome under subclonal CN change (Ben-David 2018, 27 MCF7 strains / 916 CCLE lines)"
+      source: "[DOC 3 §10]"
+      why_accepted: "insilicoSV yields one genome per node; any subclonal VAF must be produced by MIXING READ SETS at Phase E ([REF 4 X5]), which is not in the current plan"
+      partial_mitigation: "somatic.copy_number.subclonal_cn puts 22% of the genome under branch-level CN change, so the leaves are at least not CN-identical"
+    no_purity_ladder:
+      what: "no tumour-in-normal contamination and no non-100%-purity leaf"
+      real_world: "purity and TiN are the two knobs that decide whether a somatic caller works"
+      source: "[REF 6 R4.3]"
+      note: "the CASTLE archive already on disk contains a ready-made HiFi purity ladder at 20/40/60/80% — it can be used as the comparator without simulating one"
+    detected_not_true_burdens: {see: somatic.per_leaf_burden.detected_vs_true}
+    badread_error_composition: {see: reads.known_deviations_from_real_hifi}
+
+  superseded:          # where this file overrides spec/somatic.yaml
+    - {key: "per_leaf.sbs 8750 -> 8990", why: "HRD-and-WGD stratum, [REF 3 R2.2]"}
+    - {key: "per_leaf.indel 940 -> 910", why: "same"}
+    - {key: "per_leaf.sv_junctions 390 -> 393; sv_events 293 -> 273", why: "same"}
+    - {key: "leaf_ploidy [2.8,3.0] (cell-line proxy) -> 2.97 (IQR 2.83-3.39, the actual stratum)", why: "[REF 3 R2.3]"}
+    - {key: "subtype BRCA1-type TDP -> HRD deletion-dominant; TD modal spans 11 kb/231 kb/1.7 Mb DROPPED", why: "[REF 3 R1.1, R1.2]"}
+    - {key: "complex_ge20 'n: 1' -> prevalence 0.47 with the trunk chromothripsis CONSUMING that allocation", why: "[REF 3 R1.3, R3.7]"}
+    - {key: "wgd at 0.80 of trunk molecular time -> 0.84 (CI 0.808-0.876)", why: "the measured Roerink value; 0.80 was a rounding"}
+    - {key: "lineage_rate_heterogeneity 4-7x on terminal branches -> 1.5-2.5x on the in-culture increment only", why: "[REF 1 B3, B4, M1, M2] — both anchors were hypermutators and the multiplier double-counted the topological spread"}
+    - {key: "infinite_sites enforce:true, tolerance 0 -> mutation loss by subclonal deletion ENABLED, tree fit 88-98% as a measured consequence", why: "[REF 1 B5]"}
+    - {key: "id_mix (ID3/ID4/ID5/ID8/ID9 weights unsourced) -> the measured PCAWG-breast ID means of docs/03 §3, renormalised", why: "removes five unsourced numbers"}
+    - {key: "reference 'hg38_primary_chr1-22_X' kept; chrM/chrY exclusion now explicit with consequences", why: "[REF 5 R9, R10]"}
+    - {key: "REVERSED 2026-08-18: reference -> 'chm13v2.0_primary_chr1-22_X'. The hg38 gaps were
+             being SEQUENCED (86% of unmapped reads poly-N, chr21 -15%, depth 18.57x vs 20x).
+             CHM13 is gapless (N=0) and centromeres now come from censat v2.1, not rounded
+             coordinates. Source callset switched to the HGSVC3 T2T-CHM13 flavour of the same
+             donor; realism bands re-derived from that individual's real CHM13 data.",
+       why: "[MEASURED] the artefact has no counterpart in real sequencing"}

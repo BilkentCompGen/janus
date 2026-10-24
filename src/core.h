@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "lps.h"
+#include "lcp_batch.h"
 
 class Bases {
 public:

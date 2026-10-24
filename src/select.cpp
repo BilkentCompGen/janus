@@ -36,6 +36,7 @@ static const uint32_t PAD = 1000;
 static const uint32_t FL = 3;
 static const uint32_t MULT = 2;
 static const double DL = 15000;
+static const uint32_t GROUP = 3;
 
 Anchors::Anchors(const Graph& g) : g(g) {
     std::vector<uint32_t> smp;
@@ -270,12 +271,12 @@ private:
     void write(Pieces& p, size_t n0) const;
 };
 
-Select::Select(const Args& a) : Walker(a.threads), a(a), g(a.in), adj(g), combos(g, adj), anchors(g), files(a.reads), ids(a.threads), groups(nullptr) {
+Select::Select(const Args& a) : Walker(a.threads), a(a), g(a.need(a.graph, "--graph")), adj(g), combos(g, adj), anchors(g), files(a.need(a.reads, "--reads")), ids(a.threads), groups(nullptr) {
     combos.keep(std::vector<uint8_t>(g.K, 1));
 }
 
 void Select::load() {
-    Input in(a.data);
+    Input in(a.need(a.sites, "--sites"));
     std::vector<uint64_t> r(2 + in.h.total);
     for (uint64_t i = 0; i < in.h.n; i++) {
         std::fread(r.data(), 8, r.size(), in.f);
@@ -326,7 +327,7 @@ static std::string list(const std::vector<Anchor>& v, uint32_t lo) {
 }
 
 void Select::write(Pieces& p, size_t n0) const {
-    std::string o(a.out);
+    std::string o(a.need(a.out, "--out"));
     FILE *f = std::fopen((o + ".fa").c_str(), "w"), *v = std::fopen((o + ".tsv").c_str(), "w");
     p.cut(f);
     for (uint32_t i = 0; i < w.size(); i++) {
@@ -351,7 +352,7 @@ int Select::run() {
         groups = &gr;
         stream(std::vector<std::string>(files.names.begin() + 1, files.names.end()), 1);
         groups = nullptr;
-        add = gr.rows(a.support);
+        add = gr.rows(GROUP);
     }
     std::vector<Site> old;
     old.swap(w);

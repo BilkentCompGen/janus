@@ -357,9 +357,9 @@ void Count::write(Output& out) {
 }
 
 int Count::run() {
-    std::string ex = std::string(a.in) + ".exc";
-    Input svb(a.in), exc(ex);
-    Output out(a.out);
+    std::string ex = std::string(a.need(a.reads, "--reads")) + ".exc";
+    Input svb(a.reads), exc(ex);
+    Output out(a.need(a.out, "--out"));
     w = exc.h.resv[1];
     cores.make(CoreTable::slots(exc.h.total));
     for (;;) {
@@ -370,11 +370,11 @@ int Count::run() {
         std::fprintf(stderr, "[count] the tables filled up at %lu slots per shard; counting again with %lu\n", (unsigned long)cores.z, (unsigned long)z);
         pairs.release();
         if (!cores.make(z)) { std::fprintf(stderr, "[count] too many distinct cores\n"); return 1; }
-        svb = Input(a.in);
+        svb = Input(a.reads);
         exc = Input(ex);
     }
-    if (a.data) {
-        Input nc(a.data);
+    if (a.normal) {
+        Input nc(a.normal);
         std::vector<uint64_t> nh(nc.h.n);
         std::vector<uint16_t> nn(nc.h.n);
         if (std::fread(nh.data(), 8, nh.size(), nc.f) != nh.size() || std::fread(nn.data(), 2, nn.size(), nc.f) != nn.size()) return 1;

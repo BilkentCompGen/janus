@@ -1,0 +1,3 @@
+name	role	path
+n	normal	hifi/hcc1937/n.fastq.gz
+t	tumor	hifi/hcc1937/t.fastq.gz

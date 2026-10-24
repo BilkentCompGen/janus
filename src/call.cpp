@@ -295,12 +295,11 @@ void CallPass::run(const ReadFiles& files) {
         for (std::vector<int32_t>& d : e.dl) std::sort(d.begin(), d.end());
 }
 
-static const uint32_t ROW = 200, GROW = 3000;
+static const uint32_t ROW = 200;
 static const uint32_t TOL = 50;
 
 void Call::sites() {
-    const uint32_t reach = a.germline ? GROW : ROW;
-    Graph g(a.graph);
+    Graph g(a.need(a.graph, "--graph"));
     alignments();
     std::vector<Lite> lt;
     std::unordered_map<std::string, std::vector<uint32_t>> all;
@@ -322,10 +321,10 @@ void Call::sites() {
     std::vector<uint8_t> keep(lt.size(), 0);
     for (std::pair<const std::string, std::vector<uint32_t>>& pc : all) {
         if (!al.count(pc.first)) continue;
-        for (const Event& e : evs[pc.first] = events(al[pc.first], a.germline)) {
+        for (const Event& e : evs[pc.first] = events(al[pc.first])) {
             uint32_t u = NONE;
             for (uint32_t i : pc.second)
-                if (e.q + reach >= lt[i].a && e.q <= lt[i].b + reach && (u == NONE || lt[i].t > lt[u].t)) u = i;
+                if (e.q + ROW >= lt[i].a && e.q <= lt[i].b + ROW && (u == NONE || lt[i].t > lt[u].t)) u = i;
             if (u != NONE) keep[u] = 1;
         }
     }
@@ -343,17 +342,16 @@ void Call::sites() {
     probes(g.S);
     CallPass pass(w, pbs, g, a.threads);
     g = Graph();
-    pass.run(ReadFiles(a.reads));
+    pass.run(ReadFiles(a.need(a.reads, "--reads")));
 }
 
 void Call::probes(uint64_t S) {
-    const uint32_t reach = a.germline ? GROW : ROW;
     for (std::pair<const std::string, std::vector<uint32_t>>& pc : bypc) {
         if (!al.count(pc.first)) continue;
         for (Event& e : evs[pc.first]) {
             uint32_t u = NONE;
             for (uint32_t i : pc.second)
-                if (e.q + reach >= w[i].a && e.q <= w[i].b + reach && (u == NONE || w[i].t > w[u].t)) u = i;
+                if (e.q + ROW >= w[i].a && e.q <= w[i].b + ROW && (u == NONE || w[i].t > w[u].t)) u = i;
             e.pb = 0;
             if (u == NONE) continue;
             bool ins = e.ty == "INS", del = e.ty == "DEL", dup = e.ty == "DUP";
@@ -365,7 +363,7 @@ void Call::probes(uint64_t S) {
             if (lx + rx > PWIDE) { lx = std::min(lx, PLOC); rx = std::min(rx, PLOC); }
             if (dup && len <= PDUP) { lx += len; rx += len; }
             if (e.st == '-') std::swap(lx, rx);
-            Probe b;
+            Probe b = Probe();
             b.qa = (int32_t)e.q - (int32_t)lx - (int32_t)PM;
             b.qb = e.q + (ins ? len : 0) + rx + PM;
             b.ta = (int32_t)e.q - (int32_t)PM;
@@ -416,14 +414,11 @@ static bool by_event(const Record& x, const Record& y) {
     return x.r.s != y.r.s ? x.r.s < y.r.s : x.e.ty != y.e.ty ? x.e.ty < y.e.ty : x.e.c1 != y.e.c1 ? x.e.c1 < y.e.c1 : x.e.c2 != y.e.c2 ? x.e.c2 < y.e.c2 : x.e.o != y.e.o ? x.e.o < y.e.o : x.e.p1 != y.e.p1 ? x.e.p1 < y.e.p1 : x.e.p2 != y.e.p2 ? x.e.p2 < y.e.p2 : x.e.q != y.e.q ? x.e.q < y.e.q : x.nm != y.nm ? x.nm < y.nm : x.e.de < y.e.de;
 }
 
-static bool near(const Record& x, const Record& y, bool germ) {
-    uint32_t lx = x.e.p2 - x.e.p1, ly = y.e.p2 - y.e.p1;
-    if (germ && (x.e.ty == "INS" || x.e.ty == "DEL") && x.e.c1 == x.e.c2 && std::max(lx, ly) - std::min(lx, ly) > std::max<uint32_t>(10, std::max(lx, ly) / 10)) return false;
+static bool near(const Record& x, const Record& y) {
     return x.r.s == y.r.s && x.e.ty == y.e.ty && x.e.o == y.e.o && x.e.c1 == y.e.c1 && x.e.c2 == y.e.c2 && x.e.p1 + TOL >= y.e.p1 && y.e.p1 + TOL >= x.e.p1 && x.e.p2 + TOL >= y.e.p2 && y.e.p2 + TOL >= x.e.p2;
 }
 
 std::vector<Record> Call::attach(size_t* found) {
-    const uint32_t reach = a.germline ? GROW : ROW;
     std::vector<Record> som, res;
     for (std::pair<const std::string, std::vector<uint32_t>>& pc : bypc) {
         if (!al.count(pc.first)) continue;
@@ -431,15 +426,15 @@ std::vector<Record> Call::attach(size_t* found) {
             const Spot* r = nullptr;
             uint32_t u = 0;
             for (uint32_t i : pc.second)
-                if (e.q + reach >= w[i].a && e.q <= w[i].b + reach && (!r || w[i].t > r->t)) { r = &w[i]; u = i; }
+                if (e.q + ROW >= w[i].a && e.q <= w[i].b + ROW && (!r || w[i].t > r->t)) { r = &w[i]; u = i; }
             if (!r || !primary(e.c1) || !primary(e.c2) || r->t < a.support) continue;
             Row row(*r, u);
-            som.push_back({e, pc.first, 1, row, misfit(row, e), row.nsame, row.nspan, e.q < r->a ? r->a - e.q : e.q > r->b ? e.q - r->b : 0});
+            som.push_back({e, pc.first, 1, row, misfit(row, e), row.nsame, row.nspan});
         }
     }
     std::sort(som.begin(), som.end(), by_event);
     for (const Record& v : som) {
-        if (res.empty() || !near(res.back(), v, a.germline)) { res.push_back(v); continue; }
+        if (res.empty() || !near(res.back(), v)) { res.push_back(v); continue; }
         Record& q = res.back();
         bool more = v.r.n[v.r.s] > q.r.n[q.r.s];
         Row m = more ? v.r : q.r;

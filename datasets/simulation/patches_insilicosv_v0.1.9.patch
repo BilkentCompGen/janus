@@ -1,0 +1,33 @@
+diff --git a/insilicosv/variant_set.py b/insilicosv/variant_set.py
+index 25c75f6..91d64a3 100644
+--- a/insilicosv/variant_set.py
++++ b/insilicosv/variant_set.py
+@@ -1158,10 +1158,13 @@ class ImportedVariantSet(VariantSet):
+                     parsed_info['OP_TYPE'] = VariantType(parsed_info['SVTYPE'])
+                 parent_info['OP_TYPE'] = parsed_info['SVTYPE']
+ 
+-            parent_info['GRAMMAR'] = parsed_info.get('GRAMMAR', '')
+             if 'GRAMMAR' not in parsed_info and parsed_info['SVTYPE'] != 'Custom':
+                 lhs_strs, rhs_strs = SV_KEY[VariantType(parsed_info['SVTYPE'])]
+                 parsed_info['GRAMMAR'] = ''.join(lhs_strs) + '->' + ''.join(rhs_strs)
++            # PATCH (snape/phylo 2026-08-18): this used to be assigned BEFORE the derivation
++            # above, so imported SVs carried GRAMMAR='' and output_novel_adjacencies() died on
++            # "not enough values to unpack" (output.py:362) for every imported non-SNP variant.
++            parent_info['GRAMMAR'] = parsed_info.get('GRAMMAR', '')
+ 
+             target_left = False
+             source_regions.append([parsed_info['START'], parsed_info['END']])
+@@ -1227,7 +1230,12 @@ class ImportedVariantSet(VariantSet):
+                 # Get the operations record by record
+                 operations, _, _, _, _ = self.grammar_to_variant_set(lhs_strs, rhs_strs_list, symbol_lengths,
+                                                                      symbol_min_lengths, 1,
+-                                                                     insseq,
++                                                                     # PATCH (snape/phylo 2026-08-18): grammar_to_variant_set
++                                                                     # expects a LIST of novel-insertion sequences and indexes
++                                                                     # it with novel_insertion_seqs[i]. Passing the bare string
++                                                                     # made that index return the first CHARACTER, silently
++                                                                     # truncating every imported INS to 1 bp (no warning).
++                                                                     ([insseq] if insseq is not None else None),
+                                                                      parsed_info['NCOPIES'],
+                                                                      parsed_info['DIVERGENCE_PROB'],
+                                                                      replacement_seq=parsed_info['ALT'],

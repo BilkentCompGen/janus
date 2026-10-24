@@ -1,0 +1,256 @@
+# spec/somatic.yaml — somatik mutasyon butcesi
+#
+# Kanser tipi: MEME KARSINOMU, TP53-mutant, BRCA1-tipi homolog rekombinasyon eksikligi (HRD),
+# govdede (trunk) tek bir tum-genom duplikasyonu (WGD).
+#
+# Secim gerekcesi: docs/03_somatic_burdens.md §1 -- SV surecinin modal duplikasyon boyutuna kadar
+# mekanizmayla tarif edildigi TEK tip; >=500 genomluk UC bagimsiz WGS kohortu var; yukler orta
+# aralikta (hicbir sayi ucuk degil). Ayrica snape'in gercek-veri kolundaki hucre hatlarinin
+# cogu meme (HCC1395/HCC1937/HCC1954/HS578T) ve HCC1937 BRCA1-mutant -- yani uretilen veri seti
+# gercek kolun dogal tamamlayicisi oluyor.
+#
+# HER SAYI KAYNAKLIDIR. [DERIVED] = arastirma ajani birincil ek tablolardan kendi hesapladi
+# (dokum: docs/03 §14). Kaynagi olmayan sayi YOKTUR; olmayanlar 'unknowns' altinda.
+
+meta:
+  cancer_type: breast_carcinoma
+  subtype: basal_like_HRD_deletion_dominant_BRCA2_PALB2_like
+  # [REF 3 R1.1] DUZELTILDI: 'BRCA1-tipi TDP' etiketi docs/03'un KENDI sinif dagilimiyla
+  # celisiyordu (%45.4 del<10kb'ye karsi %14.3 dup<10kb). HRD meme genomlarinin yalnizca
+  # 16/55'i TD-baskin, HRD-ve-WGD katmaninda 6/30. Olculen dagitim korundu, ETIKET duzeltildi.
+  # [REF 3 R1.2] uc TDP modal boyutu (11kb/231kb/1.7Mb) KALDIRILDI: bunlar birbirini dislayan
+  # surucu gruplarina ait ve tek bir hastada TD boyutu tek-modludur.
+  driver_context: TP53_mutant
+  germline_individual: HG00733       # PUR, kadin (chrX het/nonref 0.87 ile dogrulandi)
+  reference: chm13v2.0_primary_chr1-22_X    # 2026-08-18'de hg38'den gecildi, bkz.
+                                            # spec/parameters.yaml reference.build.why
+  source: docs/03_somatic_burdens.md §1, §12
+
+# ---------------------------------------------------------------- yaprak basina toplam yuk
+per_leaf:
+  sbs:
+    median: 8990          # [REF 3 R2.2] duzeltildi: HRD-VE-WGD katmani (n=30)
+    iqr: [8142, 10970]    # eski (HRD-only, n=55): 8750 / [7466,10905] / p95 18090
+    note_correction: "eski p95=18090, WGD-negatif yarinin (medyan ploidi 1.74) havuzlanmasindan dogan bir artefaktti"
+    dist: lognormal_fit_to_iqr
+    source: "[DERIVED] Martinez-Jimenez 2023 Nature 618:333, PCAWG breast HR-split"
+  indel:
+    median: 910           # [REF 3 R2.2] duzeltildi (eski 940)
+    iqr: [671, 1308]
+    source: "[DERIVED] ayni"
+  sv_junctions:
+    median: 1106
+    range_measured: [703, 1276]
+    dist: lognormal_fit
+    per_leaf_lineage_spread: 3.0      # soy-ozgu SV hizi (p05-p95); yaprak toplamlarinda
+                                      # ~1.5-1.8x yayilima donusur (govde ortak oldugu icin
+                                      # yaprak yayilimi hep soy yayilimindan KUCUKTUR)
+    poisson_noise: true
+    source: |
+      OLCULDU (2026-08-18) — CASTLE minda_4_2 ensemble truth setleri, /home/yuio/snape/hifi/
+      castle_truth.tar.gz icinden. MEME hucre hatlari:
+        HCC1937  703    HCC1954 1106    HCC1395 1276      -> medyan 1106
+      Karsilastirma icin: H2009 925, H1437 221, COLO829 66.
+    correction: |
+      ONCEKI DEGER 273 IDI VE YANLISTI. 273, PCAWG'nin LINX ile KUMELENMIS OLAY sayisidir;
+      bir somatik SV cagirici ise KIRILMA NOKTASI (junction/breakend) duzeyinde skorlanir ve
+      truth VCF'leri de junction sayar. docs/03 §0 bu birim tuzagini acikca yaziyordu, ben
+      yine de olay sayisini junction yerine koydum. Sonuc: gercek meme hatlarinin ~4 kati
+      dusuk, oyuncak bir SV yuku. Artik hedef DOGRUDAN gercek truth setlerinden aliniyor.
+  sv_class_mix_measured:
+    source: |
+      OLCULDU — uc meme hattinin havuzlanmis 3,085 SV'si (HCC1395 + HCC1954 + HCC1937):
+        BND 1253 (40.6%)   DEL 1126 (36.5%)   DUP 385 (12.5%)   INS 321 (10.4%)
+      BND'ler tek tek kayit olarak sayilir (bir translokasyon genelde 2 breakend kaydi verir).
+      INV bu ensemble'larda ayri sinif olarak GORUNMUYOR: uzun-okuma cagiricilari inversiyonu
+      BND ciftleri olarak raporluyor. COLO829'un kendi truth seti INV=14 tasidigi icin kucuk
+      bir INV payi ayrica ekleniyor ve bu SECIM burada kayitlidir.
+    fractions:
+      DEL:        0.355
+      TRA_unbal:  0.280     # dengesiz translokasyon -> insilicoSV dDUP, interkromozomal hedef
+      TRA_recip:  0.120     # resiprok translokasyon -> insilicoSV rTRA
+      DUP:        0.120
+      INS:        0.100
+      INV:        0.030
+    bnd_equivalent_check: "TRA_unbal + TRA_recip = 0.400  (olculen BND payi 0.406)"
+  dbs:
+    median: 30
+    simulate: false
+    reason: "genom basina ~20-35; bu olcekte yuvarlama hatasi. docs/03 §8b acikca omitting oneriyor."
+
+# ---------------------------------------------------------------- SV sinif dagilimi
+sv_class_mix:            # olaylarin yuzdesi, docs/03 §12 HRD basal-like sutunu
+  del_lt_10kb:    {frac: 0.454, n: 139}
+  del_ge_10kb:    {frac: 0.096, n: 29}
+  td_lt_10kb:     {frac: 0.143, n: 23,  modal_span_bp: 11000,
+                   source: "Menghi 2018 -- BRCA1/TP53 tandem duplicator fenotipi, mod ~11 kb"}
+  td_ge_10kb:     {frac: 0.148, n: 39,
+                   secondary_modes_bp: [231000, 1700000],
+                   source: "Menghi 2018 -- CCNE1 ~231 kb, CDK12 ~1.7 Mb modlari"}
+  complex_lt20_junctions: {frac: 0.148, n: 33}
+  complex_ge20_junctions: {frac: 0.004, n: 1}
+  line1_insertion: {frac: 0.007, n: 1}
+  inversion:
+    policy: "bagimsiz sinif olarak UYGULAMA"
+    reason: "Li et al. 2020 Nature 578:112 -- basit inversiyonlar nadir; kucuk resiprok
+             inversiyonlar <50 kb delesyonlarla, buyukleri >500 kb delesyonlarla birlikte gelir"
+  translocation:
+    frac_of_svs_distal_or_interchromosomal: 0.217
+    reciprocal: "nadir"
+    source: "Li et al. 2020; Kim R. et al. 2025 Nature"
+
+# ---------------------------------------------------------------- kopya sayisi / ploidi
+copy_number:
+  wgd:
+    mode: subclonal
+    where: "agacin FARKLI DERINLIKLERINDEKI iki ic dal -- GOVDE DEGIL"
+    n_events: 2
+    target_leaf_fraction: 0.50
+    events:
+      - {node: n10, expect_depth: 3, target_ploidy: 2.93,
+         source: "HCC1395 ~3.0N; Cell Model Passports meme hucre hatti medyani 2.93"}
+      - {node: n07, expect_depth: 6, target_ploidy: 3.30,
+         source: "HCC1954 ~3.4N -- ayni panelde daha yuksek ploidili hat"}
+    diploid_target_ploidy: 2.10
+    source_diploid: "HCC1937 near-diploid ~2.0N. PCAWG memede WGD yaygintigi ~%50, yani
+                     WGD-SIZ olmak da en az WGD-li olmak kadar tipiktir."
+    source_subclonal: "Dewhurst 2014 Cancer Discov: ayni tumorde WGD+ ve WGD- subklonlar
+                       bir arada bulunur; Bielski 2018 / Gerstung 2020: WGD zamanlamasi
+                       klonal olmak ZORUNDA degil"
+    prevalence_check: "PCAWG meme %50, Hartwig %56 -> yapraklarin ~yarisi WGD+ olmali"
+    correction: |
+      ONCEKI SURUMDE WGD GOVDEDEYDI (govde molekuler zamaninin %80'i). Sonuc: 20 yapragin
+      HEPSI WGD+ oldu ve ploidiler 2.845-2.944 gibi 0.1 genisliginde bir banda sikisti.
+      Gercek meme panelinde ploidi 2.0-3.4 arasina yayilir. WGD subklonal yapildi;
+      erken/gec klonal VAF sinyali korunur cunku WGD dalinin USTUNDEKI mutasyonlar
+      ikilenir (VAF~0.50), o daldan itibaren olusanlar tek kopyada kalir (VAF~0.25).
+  leaf_ploidy_target: [2.0, 3.4]
+  leaf_ploidy_note: "aile bazinda: WGD-siz ~2.10, n10 klad ~2.93, n07 klad ~3.30"
+  source_ploidy: "[DERIVED] Cell Model Passports: meme hucre hatlari medyan ploidi 2.93"
+  cn_segments_per_leaf: {median: 90, range: [90, 160], source: "[DERIVED] Steele 2022; PCAWG medyan 88 IQR 43-160"}
+  loh_fraction_autosomal: {median: 0.185, iqr: [0.086, 0.340], source: "[DERIVED]"}
+  aneuploidy_score_arm_events: {median: 19, iqr: [10, 30], p95: 36, source: "[DERIVED]"}
+  arm_gain_increment: "+1 (kazanclarin %80-90'i tek kopya)"
+  arm_gain_synchrony: "cogunluk TEK govde olayinda"
+  source_synchrony: "Gerstung 2020 Nature 578:122 -- yakin-diploid tumorlerin %57'sinde es zamanli kazanc"
+  homozygous_deletions: {n: 2, scope: "gen duzeyi, asla tum kol", source: "Priestley 2019"}
+
+# ---------------------------------------------------------------- karmasik olaylar
+complex_events:
+  chromothripsis:
+    probability: 0.489
+    decision: include_one          # 0.489 -> bir olay dahil ediliyor, karar spec'e yazildi
+    where: trunk_before_mrca
+    region_mb: {median: 56.6, iqr: [27.8, 98.4]}
+    n_svs: {median: 26, iqr: [13, 43]}
+    n_cn_segments: {median: 30, iqr: [16, 52]}
+    n_chromosomes: {1: 0.59, 2: 0.23, "3-4": 0.18}
+    source: "[DERIVED] Cortes-Ciriano 2020 Nat Genet 52:331 Suppl. Table 1"
+  kataegis:
+    prevalence: 0.49
+    ge10_foci: 0.04
+    character: "APOBEC C>T / C>G, TpC baglaminda, kume halinde"
+    source: "Nik-Zainal 2016"
+  chromoplexy: {prevalence: 0.178, decision: exclude, reason: "meme-zenginlesmis bir surec degil"}
+  ecdna: {prevalence: 0.143, decision: exclude, reason: "ayri kopya-sayisi mimarisi gerektirir; kapsam disi"}
+
+# ---------------------------------------------------------------- imzalar
+signatures:
+  # DIKKAT: dosya adlarindaki GRCh38/GRCh37 etiketleri KOORDINAT DEGIL, bu matrisler 96
+  # (SBS) ve 83 (ID) KANALIN olasilik vektorleri. COSMIC'in CHM13 surumu yok ve gerekmiyor;
+  # imzalar CHM13 uzerinde uygulaniyor, realize edilen spektrum kapida olculuyor (S09,
+  # kosinus 0.9997). Bu, referansin CHM13 olmasiyla celismez.
+  sbs_reference: spec/cosmic/COSMIC_v3.4_SBS_GRCh38.txt
+  id_reference:  spec/cosmic/COSMIC_v3.4_ID_GRCh37.txt
+  policy: "COSMIC atamasi kullanilacak (SBS1,2,3,5,8,13,18) -- Martinez-Jimenez'in de-novo
+           etiketleri DEGIL. Gerekce docs/03 §8b: o calismanin de-novo ayristirmasi memede SBS3'u
+           geri getirememis, HRD sinyalini SBS_denovo_3 + SBS8 + SBS39'a yaymis. CUBRICS
+           (Kim R. 2025 Nature, 1364 meme genomu) HRD setini acikca SBS3, SBS8, ID6, SV3, SV5 diyor."
+  sbs_mix:            # oranlar 1.0'a normalize edilir
+    SBS1:  0.136      # saat-benzeri, 5-metilsitozin deaminasyonu, CpG'de C>T
+    SBS3:  0.180      # HRD -- duz 96-profil; BRCA1/2 kaybinin imzasi
+    SBS5:  0.098      # saat-benzeri, duz, transkripsiyon eslenikli
+    SBS8:  0.143      # bilinmeyen etiyoloji, memede HRD ile birlikte
+    SBS2:  0.076      # APOBEC, TpC baglaminda C>T
+    SBS13: 0.075      # APOBEC, TpC baglaminda C>G
+    SBS18: 0.070      # reaktif oksijen turleri, C>A
+    SBS40a: 0.059     # duz, yasla artan
+    # SURUM NOTU: literatur (Martinez-Jimenez 2023) COSMIC v3.2/3.3 kullaniyor; orada SBS40 TEK
+    # bir imza. v3.4'te SBS40 -> SBS40a/40b/40c olarak UCE BOLUNDU. Orijinal duz profile en yakin
+    # olan SBS40a oldugu icin %5.9'un tamami ona veriliyor. Bolmeyi esit dagitmak da mumkundu;
+    # secim burada kayitli, sessizce yapilmadi. (Hata olarak yakalandi: mix_spectrum bilinmeyen
+    # imza adinda KeyError atiyor -- sessizce atlamiyor.)
+    SBS39: 0.087      # bilinmeyen; PCAWG memede belirgin
+    residual_note: "PCAWG ortalama oranlari (docs/03 §8b tablosu); SBS3 CUBRICS'ten geri konuldu
+                    ve SBS_denovo_3'un payi ona verildi"
+  apobec_check: "SBS2+SBS13 = %15.1 -> CUBRICS'te orneklerin %46'sinda APOBEC >%10; bizimki o esikte"
+  id_mix:
+    ID1:  0.27        # 1 bp T insersiyon/delesyon, poli-T; replikasyon kaymasi
+    ID2:  0.13
+    ID6:  0.15        # >=5 bp delesyon, >=2 bp mikrohomoloji -- HRD/NHEJ imzasi
+    ID8:  0.10
+    ID3:  0.05
+    ID5:  0.10
+    ID4:  0.10
+    ID9:  0.10
+    source: "docs/03 §12: ID6 ~%15, ID1+ID2 ~%27; kalan agirliklar COSMIC meme profiline gore"
+
+# ---------------------------------------------------------------- agac uzerinde dagilim
+tree_distribution:
+  snv_trunk_fraction:
+    value: 0.55
+    source: "docs/01 §8.3"
+    conflict_resolution: |
+      docs/03 §12a govde icin 0.80 oneriyor ama bunu ACIKCA 'tasarim secimi' olarak isaretliyor,
+      olculmus deger olarak degil. docs/01 ise 0.55'i IKI olculmus degerin ortalamasi olarak
+      veriyor: Minussi 2021 tek-hucre CN filogenisi %47 ve Roerink 2018 tek-hucre turevli
+      organoid klonlari %57. Roerink BIZIM TASARIMIN DOGRUDAN ANALOGU (tek bir tumorden
+      tek-hucre turevli klonlar, WGS) oldugu icin agirligi o belirliyor. 0.80 degeri bulk-biyopsi
+      olcumlerinden (PCAWG %82, Hartwig %93) asagi dogru duzeltilmis bir tahmindi; bizim
+      yapraklarimiz bulk degil, klonal. Bu yuzden 0.55 seciliyor ve secim burada kayitlidir.
+  sv_trunk_fraction:
+    value: 0.70
+    previous_value: 0.88
+    correction: |
+      0.88 hicbir zaman OLCULMUS bir deger degildi -- hakem de "dolayli bir argumana dayaniyor,
+      tek-hucre turevli klonlarda SV govde oraninin dogrudan olcumu degil" diye isaretlemisti.
+      Uygulandiginda sonucu su oldu: yapraklarin %88'i AYNI SV'leri tasidi ve 20 klonun SV
+      toplami 992-1043 arasina sikisti (yayilim 1.05x). Gercek meme hatlari 703/1106/1276
+      (1.82x) -- yani model, klonlar arasi cesitliligi yok ediyordu.
+      0.70, Dentro 2021'in OLCULMUS subklonal SV orani araliginin (%8 liposarkom - %56.8 ChRCC)
+      icinde ve meme icin orta bir degerdir. SV govde orani hala SNV'ninkinden (0.55) YUKSEK,
+      yani "SV'ler daha klonaldir" argumani korunuyor.
+    source: "docs/03 §12a"
+    note: "SV govde orani SNV'den YUKSEK olmali -- iki dokuman burada celismiyor: bir kumedeki
+           SV'ler ayni kanser-hucre fraksiyonunu paylasir ve klonallige guclu zenginlesir
+           (Li 2020 Suppl. Fig. 3; Dentro 2021: orneklerin yalnizca %14.7'sinde subklonal SV surucu)"
+  lineage_rate_heterogeneity:
+    dist: lognormal
+    p05_p95_spread: [4, 7]
+    applies_to: terminal_branches_only
+    source: "Petljak 2019 / PMC10300547 -- ayni ebeveynden gelen klonlar arasinda APOBEC yuku
+             >100 kat degisebiliyor; LS180'de 45 gunde 749'a karsi 5310"
+    note: "agac mutasyon sayisinda ULTRAMETRIK OLMAYACAK -- bu kasitli"
+  spectrum_shift:
+    fraction_of_lineages: 0.35
+    absolute_change: 0.20
+    source: "Gerstung 2020: orneklerin %29/%30/%40'inda medyan %19/%21 degisim"
+  infinite_sites:
+    enforce: true
+    tolerance: "geri mutasyon / paralel mutasyon = 0"
+    source: "Roerink 2018: paylasilan mutasyonlarin %88.1-97.7'si agaca kusursuz oturuyor"
+
+# ---------------------------------------------------------------- zigosite (kullanicinin 1 no'lu korkusu)
+zygosity:
+  rule: "her somatik mutasyon TEK bir haplotip kontigine yazilir -> yapisal olarak heterozigot"
+  homozygous_only_via: "LOH veya homozigot delesyon bolgeleri (yani karsi kopyanin kaybi)"
+  expected_het_fraction: ">= 0.60"
+  expected_vaf_mode: 0.50
+  expected_hom_fraction: "<= 0.35, ve bunlarin >=%80'i ilan edilmis LOH bolgesi icinde"
+  source: "docs/06 §9 S04; Priestley 2019 LOH"
+  enforcement: "mimari geregi -- pick_genotype hic cagrilmiyor (experiments/01)"
+
+unknowns:
+  - "20 tek-hucre turevli meme klonu icin OLCULMUS govde/dal orani yok; 0.55 en yakin analogdan (Roerink)"
+  - "tumor klon agaclari icin yayinlanmis Colless/Sackin/gamma tablosu yok (docs/01 §9)"
+  - "SV govde orani 0.88 tek bir dolayli argumana dayaniyor, dogrudan olcum degil"

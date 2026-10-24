@@ -20,15 +20,6 @@ static bool by_start(const Align& x, const Align& y) {
     return x.qs < y.qs;
 }
 
-static void cluster(std::vector<Event>& o, const Align& s, uint32_t gt, uint32_t gq, uint32_t ni, uint32_t nd) {
-    if (ni >= nd + MS) add(o, gq, "INS", s.t, gt, s.t, gt + ni - nd, s, s);
-    else if (nd >= ni + MS) add(o, gq, "DEL", s.t, gt, s.t, gt + nd - ni, s, s);
-    else if (ni >= MS && nd >= MS) {
-        add(o, gq, "INS", s.t, gt, s.t, gt + ni, s, s);
-        add(o, gq, "DEL", s.t, gt, s.t, gt + nd, s, s);
-    }
-}
-
 static void runs(std::vector<Event>& o, const Align& s) {
     uint32_t t = s.ts, q = s.st == '+' ? s.qs : s.qe, gt = 0, gq = 0, gl = 0, gap = ISL;
     char gop = 0;
@@ -52,35 +43,11 @@ static void runs(std::vector<Event>& o, const Align& s) {
     if (gop) add(o, gq, gop == 'I' ? "INS" : "DEL", s.t, gt, s.t, gt + gl, s, s);
 }
 
-static void gaps(std::vector<Event>& o, const Align& s) {
-    uint32_t t = s.ts, q = s.st == '+' ? s.qs : s.qe, gt = 0, gq = 0, ni = 0, nd = 0, gap = ISL;
-    bool open = false;
-    for (const char* p = s.cg.c_str(); *p;) {
-        uint32_t l = std::strtoul(p, (char**)&p, 10);
-        char op = *p++;
-        if ((op == 'I' || op == 'D') && l >= MS) {
-            if (!open || gap >= ISL) {
-                if (open) cluster(o, s, gt, gq, ni, nd);
-                open = true;
-                gt = t;
-                gq = q;
-                ni = nd = 0;
-            }
-            (op == 'I' ? ni : nd) += l;
-            if (op == 'I' && s.st != '+') gq = q - l;
-            gap = 0;
-        } else if (op != 'I' && op != 'D') gap += l;
-        if (op != 'I') t += l;
-        if (op != 'D') q = s.st == '+' ? q + l : q - l;
-    }
-    if (open) cluster(o, s, gt, gq, ni, nd);
-}
-
-std::vector<Event> events(std::vector<Align>& sg, bool germ) {
+std::vector<Event> events(std::vector<Align>& sg) {
     std::vector<Event> o;
     std::sort(sg.begin(), sg.end(), by_start);
     for (const Align& s : sg)
-        if (s.mq >= MQ) germ ? gaps(o, s) : runs(o, s);
+        if (s.mq >= MQ) runs(o, s);
     for (size_t i = 0; i + 1 < sg.size(); i++) {
         const Align &x = sg[i], &y = sg[i + 1];
         if (x.mq < MQ || y.mq < MQ) continue;
@@ -240,7 +207,6 @@ void features(const Record& s, const Probe* b, float rp, bool vn, float med, flo
     f[34] = std::log2(r.nspc + 1.f);
     f[35] = std::min(1.f, (float)r.tspc / std::max(r.tspan, 1u));
     measured(b, r.s, ind ? L : 0, f + 36);
-    f[56] = lg(s.far);
 }
 
 Bed::Bed(const char* path) {
@@ -262,10 +228,8 @@ Bed::Bed(const char* path) {
 }
 
 bool Bed::near(const std::string& c, uint32_t p) const {
-    std::unordered_map<std::string, std::vector<std::pair<uint32_t, uint32_t>>>::const_iterator it = m.find(c);
-    if (it == m.end()) return false;
-    std::vector<std::pair<uint32_t, uint32_t>>::const_iterator k = std::upper_bound(it->second.begin(), it->second.end(), std::make_pair(p + 50, ~0u));
-    return k != it->second.begin() && (k - 1)->second + 50 >= p;
+    uint32_t s, e;
+    return span(c, p, &s, &e);
 }
 
 bool Bed::span(const std::string& c, uint32_t p, uint32_t* s, uint32_t* e) const {
@@ -327,10 +291,10 @@ static bool by_place(const Placed& a, const Placed& b) {
 
 
 void Call::write(std::vector<Record>& res, size_t found) {
-    Fai fai(a.data);
-    FILE* fa = std::fopen(a.data, "r");
+    Fai fai(a.need(a.ref, "--ref"));
+    FILE* fa = std::fopen(a.ref, "r");
     uint64_t S = w[0].m.size() / KINDS;
-    FILE* o = std::fopen(a.out, "w");
+    FILE* o = std::fopen(a.need(a.out, "--out"), "w");
     std::fprintf(o, "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT");
     for (uint64_t i = 0; i < S; i++) std::fprintf(o, "\tS%lu", (unsigned long)i);
     std::fprintf(o, "\n");
@@ -349,9 +313,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         const Event& p = *ix[x].e;
         for (size_t y = x + 1; y < ix.size() && ix[y].e->c1 == p.c1 && ix[y].e->c2 == p.c2 && ix[y].e->p1 <= p.p1 + DUPT; y++) {
             const Event& q = *ix[y].e;
-            uint32_t lp = p.p2 - p.p1, lq = q.p2 - q.p1;
-            bool sized = a.germline && ((p.ty == q.ty && (p.ty == "INS" || p.ty == "DEL") && 10 * std::min(lp, lq) < 7 * std::max(lp, lq)) || ((p.ty == "DEL") != (q.ty == "DEL") && (p.ty == "INS" || q.ty == "INS" || p.ty == "DUP" || q.ty == "DUP")));
-            if (res[ix[x].i].r.s == res[ix[y].i].r.s && q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o) && !sized) dup[res[ix[x].i].r.n[res[ix[x].i].r.s] < res[ix[y].i].r.n[res[ix[y].i].r.s] ? ix[x].i : ix[y].i] = 1;
+            if (res[ix[x].i].r.s == res[ix[y].i].r.s && q.p2 + DUPT >= p.p2 && p.p2 + DUPT >= q.p2 && (p.ty != q.ty || p.o == q.o)) dup[res[ix[x].i].r.n[res[ix[x].i].r.s] < res[ix[y].i].r.n[res[ix[y].i].r.s] ? ix[x].i : ix[y].i] = 1;
         }
     }
     uint64_t nd = 0;
@@ -361,7 +323,7 @@ void Call::write(std::vector<Record>& res, size_t found) {
         const Spot& e = w[v.r.u];
         nd += dup[i];
         std::string j = (v.e.o & 1 ? "]" : "[") + v.e.c2 + ":" + std::to_string(v.e.p2) + (v.e.o & 1 ? "]" : "["), alt = v.e.ty != "BND" ? "<" + v.e.ty + ">" : v.e.o & 2 ? "N" + j : j + "N", fs, dls;
-        for (uint32_t k = 0; k < NF - !a.germline; k++) { std::snprintf(num, sizeof num, "%s%.4g", k ? "," : "", fv[i][k]); fs += num; }
+        for (uint32_t k = 0; k < NF; k++) { std::snprintf(num, sizeof num, "%s%.4g", k ? "," : "", fv[i][k]); fs += num; }
         for (uint64_t k = 0; k < S; k++) dls += ";D" + std::to_string(k) + "=" + deltas(e.dl[k]);
         std::fprintf(o, "%s\t%u\tsv%zu\tN\t%s\t.\t%s\tSVTYPE=%s;END=%u;SVLEN=%u;O=%u;PIECES=%u;PIECE=%s;F=%s;SPAN=%s;SAME=%s%s\tGT:DV", v.e.c1.c_str(), v.e.p1, i, alt.c_str(), dup[i] ? "DUPL" : ".", v.e.ty.c_str(),
                      v.e.ty == "BND" || v.e.ty == "INS" ? v.e.p1 : v.e.p2, v.e.c1 == v.e.c2 ? v.e.p2 - v.e.p1 : 0, v.e.o, v.pc, v.nm.c_str(), fs.c_str(), list(e.m, S, SPAN).c_str(), list(e.m, S, SAME).c_str(), dls.c_str());

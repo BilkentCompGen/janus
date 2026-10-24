@@ -24,10 +24,11 @@ void Job::par(int n) {
 Header::Header(char kind, uint32_t ver, uint64_t n, uint64_t total) : magic{'S', 'V', 'B', kind}, ver(ver), n(n), total(total), resv{} {}
 
 Input::Input(const std::string& path) : f(std::fopen(path.c_str(), "rb")) {
-    std::fread(&h, 1, sizeof(Header), f);
+    if (!f || std::fread(&h, 1, sizeof(Header), f) != sizeof(Header)) { std::fprintf(stderr, "janus: cannot read %s\n", path.c_str()); std::exit(1); }
 }
 
 Output::Output(const char* path) : f(std::fopen((std::string(path) + ".tmp").c_str(), "wb+")), path(path) {
+    if (!f) { std::fprintf(stderr, "janus: cannot write %s\n", path); std::exit(1); }
     std::setvbuf(f, nullptr, _IOFBF, 1 << 22);
     std::fseek(f, sizeof(Header), SEEK_SET);
 }
@@ -174,7 +175,9 @@ std::vector<std::string> split(const char* s) {
     return v;
 }
 
-Lines::Lines(const char* path) : s(nullptr), n(0), f(std::fopen(path, "r")), cap(0) {}
+Lines::Lines(const char* path) : s(nullptr), n(0), f(std::fopen(path, "r")), cap(0) {
+    if (!f) { std::fprintf(stderr, "janus: cannot read %s\n", path); std::exit(1); }
+}
 
 Lines::~Lines() {
     std::free(s);

@@ -1,12 +1,12 @@
-import sys, os, re, json, csv, time, glob, collections, pickle, subprocess, statistics as st
+import sys, os, re, json, csv, time, glob, collections, subprocess, statistics as st
 import numpy as np
 H = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.dirname(H)
 sys.path.insert(0, H)
 sys.dont_write_bytecode = True
-import paper
+import tools
 R = f"{H}/runs"
 RC = f"{H}/runs_clean"
-OUT = os.environ.get("FIGOUT", f"{ROOT}/paper/overleaf/figures")
+OUT = os.environ.get("FIGOUT", f"{ROOT}/paper/figures")
 TAB = os.environ.get("TABOUT", f"{H}/out")
 os.makedirs(OUT, exist_ok=True); os.makedirs(TAB, exist_ok=True)
 csv.field_size_limit(10**9)
@@ -135,10 +135,10 @@ from matplotlib.legend_handler import HandlerTuple
 
 ONT = ["Severus ONT", "SAVANA ONT", "nanomonsv ONT", "Sniffles2 ONT"]
 ILL = ["SvABA", "GRIPSS", "Manta"]
-EXT = {"snape": "janus", "severus_phased": "Severus", "savana_phased": "SAVANA", "nanomonsv": "nanomonsv", "dysgu": "dysgu", "svision-pro": "SVision-pro",
+EXT = {"janus": "janus", "severus_phased": "Severus", "savana_phased": "SAVANA", "nanomonsv": "nanomonsv", "dysgu": "dysgu", "svision-pro": "SVision-pro",
        "sniffles2": "Sniffles2", "cutesv": "cuteSV", "debreak": "DeBreak", "kled": "kled", "svdss": "SVDSS"}
 COV = ["Severus", "SAVANA", "nanomonsv"]
-TOOLKEY = {"janus": "snape", "Severus": "severus", "SAVANA": "savana", "nanomonsv": "nanomonsv"}
+TOOLKEY = {"janus": "janus", "Severus": "severus", "SAVANA": "savana", "nanomonsv": "nanomonsv"}
 DEP, DL = ["full", "30x", "20x", "15x", "10x", "5x"], ["full", "30×", "20×", "15×", "10×", "5×"]
 PUR, PL = ["100p", "80p", "60p", "40p", "20p"], ["100%", "80%", "60%", "40%", "20%"]
 TYPES = ["BND", "DEL", "DUP", "INS", "INV"]
@@ -247,7 +247,7 @@ def accuracy():
             assert len(rows) == len(names), (s, p, len(rows))
             out[s][p] = {n: record(r, d, i) for i, (n, r) in enumerate(zip(names, rows))}
             if s == "all_without":
-                out[s][p]["janus"] = record(overall(f"{d}_snape")[0], f"{d}_snape", 1, "MindaV0.0.2")
+                out[s][p]["janus"] = record(overall(f"{d}_janus")[0], f"{d}_janus", 1, "MindaV0.0.2")
     for s in SETNAMES:
         extra[s] = {}
         for p in P5:
@@ -259,8 +259,8 @@ def accuracy():
     return json.loads(json.dumps(dict(sets=out, extra=extra)))
 
 
-SIGTOOLS = ["snape", "severus", "savana", "nanomonsv"]
-ENS = {"snape": "K_Unknown source", "severus": "A_Severus_v1.7", "savana": "B_SAVANAv1.3.8", "nanomonsv": "C_nanomonsv-0.9.0"}
+SIGTOOLS = ["janus", "severus", "savana", "nanomonsv"]
+ENS = {"janus": "K_Unknown source", "severus": "A_Severus_v1.7", "savana": "B_SAVANAv1.3.8", "nanomonsv": "C_nanomonsv-0.9.0"}
 B = 2000
 
 
@@ -315,33 +315,33 @@ def significance():
         per = {}
         for p in P5:
             u = sigunits(p, k)
-            if "snape" in u and len(u) == 4:
+            if "janus" in u and len(u) == 4:
                 per[p] = draws(u, rng)
         if not per:
             continue
         pairs = sorted(per)
         mean_obs = {t: float(np.mean([per[p][1][t] for p in pairs])) for t in SIGTOOLS}
-        best = max((t for t in SIGTOOLS if t != "snape"), key=lambda t: mean_obs[t])
-        diff = np.mean([per[p][0]["snape"] - per[p][0][best] for p in pairs], 0)
-        snape_mean = np.mean([per[p][0]["snape"] for p in pairs], 0)
+        best = max((t for t in SIGTOOLS if t != "janus"), key=lambda t: mean_obs[t])
+        diff = np.mean([per[p][0]["janus"] - per[p][0][best] for p in pairs], 0)
+        janus_mean = np.mean([per[p][0]["janus"] for p in pairs], 0)
         pp = {}
         for p in pairs:
-            bp = max((t for t in SIGTOOLS if t != "snape"), key=lambda t: per[p][1][t])
-            d = per[p][0]["snape"] - per[p][0][bp]
-            pp[p] = dict(best=bp, diff=float(per[p][1]["snape"] - per[p][1][bp]), lo=float(np.percentile(d, 2.5)), hi=float(np.percentile(d, 97.5)))
-        out[k] = dict(pairs=pairs, mean=mean_obs, best=best, diff=float(mean_obs["snape"] - mean_obs[best]), lo=float(np.percentile(diff, 2.5)), hi=float(np.percentile(diff, 97.5)),
-                      snape_lo=float(np.percentile(snape_mean, 2.5)), snape_hi=float(np.percentile(snape_mean, 97.5)), per_pair=pp, p=pval(diff))
+            bp = max((t for t in SIGTOOLS if t != "janus"), key=lambda t: per[p][1][t])
+            d = per[p][0]["janus"] - per[p][0][bp]
+            pp[p] = dict(best=bp, diff=float(per[p][1]["janus"] - per[p][1][bp]), lo=float(np.percentile(d, 2.5)), hi=float(np.percentile(d, 97.5)))
+        out[k] = dict(pairs=pairs, mean=mean_obs, best=best, diff=float(mean_obs["janus"] - mean_obs[best]), lo=float(np.percentile(diff, 2.5)), hi=float(np.percentile(diff, 97.5)),
+                      janus_lo=float(np.percentile(janus_mean, 2.5)), janus_hi=float(np.percentile(janus_mean, 97.5)), per_pair=pp, p=pval(diff))
     ext = {}
     for p in ("hg008", "colo829"):
         u = {}
-        for t, d in {"snape": "snape", "severus": "severus_phased", "savana": "savana_phased", "nanomonsv": "nanomonsv"}.items():
+        for t, d in {"janus": "janus", "severus": "severus_phased", "savana": "savana_phased", "nanomonsv": "nanomonsv"}.items():
             d = f"{R}/external_eval/{p}/{d}/minda"
             rs = list(csv.DictReader(open(f"{d}/results/overall.tsv"), delimiter="\t"))
             u[t] = sigunit(d, [x for x in rs if not (x["False Positives"] == "0" and x["True Positives"] == x["Ensemble Records"])][0]["Caller"])
         hit, obs = draws(u, rng)
-        bp = max((t for t in SIGTOOLS if t != "snape"), key=lambda t: obs[t])
-        d = hit["snape"] - hit[bp]
-        ext[p] = dict(f1=obs, best=bp, diff=float(obs["snape"] - obs[bp]), lo=float(np.percentile(d, 2.5)), hi=float(np.percentile(d, 97.5)), p=pval(d))
+        bp = max((t for t in SIGTOOLS if t != "janus"), key=lambda t: obs[t])
+        d = hit["janus"] - hit[bp]
+        ext[p] = dict(f1=obs, best=bp, diff=float(obs["janus"] - obs[bp]), lo=float(np.percentile(d, 2.5)), hi=float(np.percentile(d, 97.5)), p=pval(d))
     return json.loads(json.dumps(dict(external=ext, settings=out)))
 
 
@@ -374,6 +374,7 @@ def simdata():
 
 
 def mm2():
+    # the 5/5 run was measured once and its timing files were not kept; bench/runtime.sh writes them, which replaces this value
     out = {"5-5": dict(wall_min=117.6, peak_gb=19.0)}
     for k in ("5-5", "20-20"):
         f = sorted(glob.glob(f"{R}/sim/mm2/{k.replace('-', '_')}/*.time"))
@@ -388,43 +389,16 @@ SIMT = ["T%02d" % i for i in range(1, 21)]
 ALL20 = frozenset(range(20))
 
 
-def carriers(d):
-    pr, du, own, NB, SM, SP, cut = [d[k] for k in ("pr", "du", "own", "NB", "SM", "SP", "cut")]
-    N = len(pr)
-    cut = np.broadcast_to(np.asarray(cut, float), (N,))
-    conf = np.array([len({own[j] for j in NB.get(i, ()) if own[j] != own[i] and pr[j] >= cut[j]}) for i in range(N)])
-    nown = np.array([len({own[j] for j in NB.get(i, ())} | {own[i]}) for i in range(N)])
-    anyown = [set() for _ in range(20)]
-    for i in np.where(~du)[0]:
-        anyown[own[i]].update(NB[i])
-    acc = ~du & ((pr >= cut + 0.2) | ((pr >= 0.1) & (conf >= 1)))
-    root = list(range(N))
-
-    def find(i):
-        while root[i] != i:
-            root[i] = root[root[i]]
-            i = root[i]
-        return i
-
-    for i in range(N):
-        for j in NB.get(i, ()):
-            root[find(i)] = find(j)
-    carr = collections.defaultdict(set)
-    for i in np.where(acc)[0]:
-        carr[find(i)].add(int(own[i]))
-    for k in range(20):
-        mine = np.where(acc & (own == k))[0]
-        have = set(mine)
-        for i in mine:
-            have.update(NB[i])
-        seen = set()
-        ok = acc & (own != k) & (SM[:, k] >= 1) & (0.25 * SP[:, k] <= SM[:, k]) & (nown >= 3)
-        for i in np.where(ok)[0]:
-            if i in anyown[k] or i in have or i in seen:
-                continue
-            carr[find(i)].add(k)
-            seen.update(NB[i])
-    return collections.Counter(frozenset(v) for v in carr.values())
+def carriers(vcf):
+    """The carrier sets of the SV groups after the first pass of a joint run: the tumors with a PASS record in the group and those
+    carrying the SV without a record of their own (CARRIERS)."""
+    K, F, own, carr = tools.janus_records(vcf); grp = tools.groups(K, [f == "DUPL" for f in F]); sets = collections.defaultdict(set)
+    for i, g in enumerate(grp):
+        if F[i] == "PASS":
+            sets[g].add(own[i])
+        for k in carr[i]:
+            sets[g].add(k)
+    return collections.Counter(frozenset(v) for v in sets.values())
 
 
 def splitkey(s):
@@ -492,7 +466,7 @@ def simtrees():
 
     tr, cnts = {}, {}
     for name in SIMSETS:
-        cnt = carriers(pickle.load(open(f"{R}/sim/settings/{name.replace('-', '_')}/joint/carry.pkl", "rb"))); cnts[name] = cnt
+        cnt = carriers(f"{R}/sim/settings/{name.replace('-', '_')}/joint/first.vcf"); cnts[name] = cnt
         rec = compatible(cnt); tot = sum(cnt.values()); cl = rooted(set(rec))
         tr[name] = dict(events=tot, sets=len(cnt), exact=sum(n for s, n in cnt.items() if s in TRUE), shared=len(set(rec) & TS), rf=len(set(rec) ^ TS),
                         clades=[sorted(c) for c in cl], wrong=[sorted(c) for c in cl if c not in SPLITS])
@@ -630,7 +604,7 @@ def series(S, n, keys, pairs, j):
 
 def f1_lines(ax, S, keys, labs, pairs, ttl, five=False, pvals=True, band=True):
     x = range(len(keys)); sg = SIG["settings"]
-    if band: ax.fill_between(x, [sg[k]["snape_lo"] for k in keys], [sg[k]["snape_hi"] for k in keys], color=JANUS, alpha=0.25, lw=0, zorder=1)
+    if band: ax.fill_between(x, [sg[k]["janus_lo"] for k in keys], [sg[k]["janus_hi"] for k in keys], color=JANUS, alpha=0.25, lw=0, zorder=1)
     for n in ["janus"] + COV:
         ax.plot(x, series(S, n, keys, pairs, 2), color=color(n), lw=1.1 if n == "janus" else 1.0, marker=MARK[n], ms=3.6 if n == "janus" else 3.0, mfc=color(n), mec="white", mew=0.4, zorder=3 if n == "janus" else 2, label=n)
     for i, k in enumerate(keys if pvals else []):
@@ -684,7 +658,7 @@ def fig2():
     for pn, keys, labs in (("b", DEP, DL), ("b", PUR, PL)):
         for n in ["janus"] + COV:
             v = [series(S, n, keys, P5, j) for j in range(3)]
-            rows += [[pn, n, "HiFi", l, v[0][i], v[1][i], v[2][i]] + [""] * 4 + ([sg[k]["snape_lo"], sg[k]["snape_hi"]] if n == "janus" else ["", ""]) for i, (k, l) in enumerate(zip(keys, labs))]
+            rows += [[pn, n, "HiFi", l, v[0][i], v[1][i], v[2][i]] + [""] * 4 + ([sg[k]["janus_lo"], sg[k]["janus_hi"]] if n == "janus" else ["", ""]) for i, (k, l) in enumerate(zip(keys, labs))]
     for pn, q in (("c", "colo829"), ("c", "hg008")):
         rows += [[pn, n, "HiFi", PAIRNAME[q], *E[q][n]] + [""] * 6 for n in sorted(E[q], key=lambda n: -E[q][n][2])]
         g = SIG["external"][q]; rows.append([pn, f"janus minus {[k for k, v in TOOLKEY.items() if v == g['best']][0]}", "", "F1 difference", "", "", g["diff"]] + [""] * 4 + [g["lo"], g["hi"]])
@@ -729,14 +703,14 @@ def supp_depth():
     fig, ax = page(160, 118)
     ax = [ax(14 + 38.5 * (i % 4), 67 - 56 * (i // 4), 28, 38) for i in range(7)]
     for p in P5 + ["hg008", "colo829"]:
-        ax[0].plot(xs, [S[(p, f"{x}x", "snape")][2] for x in xs], "-o", ms=2.2, lw=0.9, color=PAIRCOL[p], label=PAIRNAME[p])
+        ax[0].plot(xs, [S[(p, f"{x}x", "janus")][2] for x in xs], "-o", ms=2.2, lw=0.9, color=PAIRCOL[p], label=PAIRNAME[p])
     ax[0].set_xticks(xs); ax[0].set_xlabel("Depth of both samples (×)"); ax[0].set_ylabel("F1 score"); title(ax[0], "janus, depth", fs=0.0)
     for i, p in enumerate(P5):
         for n in ["janus"] + COV:
             ax[1 + i].plot(qs, [S[(p, f"{q}p", TOOLKEY[n])][2] for q in qs], "-", marker=MARK[n], ms=2.4, lw=1.2 if n == "janus" else 0.9, color=color(n), mec="white", mew=0.3, label=n)
         ax[1 + i].set_xticks(qs); ax[1 + i].set_xlabel("Tumor purity (%)"); ax[1 + i].set_ylabel("F1 score"); title(ax[1 + i], f"{PAIRNAME[p]}, purity", fs=0.0)
     for p in ["hg008", "colo829"]:
-        ax[6].plot(qs, [S[(p, f"{q}p", "snape")][2] for q in qs], "-o", ms=2.2, lw=0.9, color=PAIRCOL[p])
+        ax[6].plot(qs, [S[(p, f"{q}p", "janus")][2] for q in qs], "-o", ms=2.2, lw=0.9, color=PAIRCOL[p])
     ax[6].set_xticks(qs); ax[6].set_xlabel("Tumor purity (%)"); ax[6].set_ylabel("F1 score"); title(ax[6], "janus, HG008 and COLO829", fs=0.0)
     for i, a in enumerate(ax):
         a.set_ylim(0, 1); fticks(a); a.grid(axis="y", **GRID); tag(a, "abcdefg"[i], 4 + 38.5 * (i % 4), 2.5)
@@ -989,7 +963,7 @@ def gridvals():
     for l in open(f"{H}/runs/coverage_eval/scores.tsv"):
         s, t, n, pp, r, f = l.split()
         p, k = s.rsplit("_", 1)
-        if t == "snape":
+        if t == "janus":
             S[(p, k)] = float(f)
         else:
             O[(p, k)] = max(O.get((p, k), 0), float(f))
@@ -1127,9 +1101,7 @@ def clsfig():
 
 
 def missedfig():
-    ns = {}
-    exec(paper.SCRIPTS["score"].split("T, C = recs")[0], ns)
-    hit, ALT = ns["hit"], ns["ALT"]
+    hit, ALT = tools.hit, tools.ALT
     KIND = {}; miss = {}; bt = collections.defaultdict(lambda: [0, 0, 0])
     for p in P5:
         T = []
@@ -1242,7 +1214,7 @@ def filesfig():
     bam, tot = {}, {}
     for p in P5:
         J = json.load(open(f"{H}/runs_clean/full/{p}/run.json"))
-        bam[p] = [os.path.getsize(os.path.realpath(f"{ROOT}/hifi/{p}/{s}.bam")) / GB for s in "nt"]
+        bam[p] = [os.path.getsize(os.path.realpath(f"{ROOT}/datasets/hifi/{p}/{s}.bam")) / GB for s in "nt"]
         f = {x["file"]: x["bytes"] for x in J["files"] if not x["file"].startswith(("log.", "steps", "calls.vcf"))}
         pk = sum(v for k, v in f.items() if k in ("n.svb", "t.svb", "n.svb.idx", "t.svb.idx"))
         ex = sum(v for k, v in f.items() if k.endswith(".exc"))
@@ -1654,25 +1626,14 @@ def signatures():
 
 
 def simeval():
-    g = {"__name__": "x", "SCRIPTS": paper.SCRIPTS, "run_score": paper.run_score}
-    exec(paper.SCRIPTS["simjoint"].split("out = {}")[0], g)
-    T, P, TR, G, ns, load, prob, features, cutfor = (g[k] for k in ("T", "P", "TR", "G", "ns", "load", "prob", "features", "cutfor"))
-    V = f"{TAB}/simeval"
-    S = "20_20"
+    TR = f"{R}/sim/truth"; S = "20_20"
     TY = ["DEL", "INS", "DUP", "INV", "dDUP", "rTRA"]
     SZ = [("50–100 bp", 50, 100), ("0.1–1 kb", 100, 1000), ("1–10 kb", 1000, 10000), ("10–100 kb", 10000, 100000), (">100 kb", 100000, 10**12)]
     tk, hk, ts, hs = [collections.Counter() for _ in range(4)]
-    for t in T:
-        d = f"{P}/{S}/{t}"; L, K, X, J = load(f"{d}/calls.vcf"); mt = round(2 ** X[:, 1].min() - 1)
-        pr = prob(features(X, f"{d}/t.cnt.hist", mt)); du = G["mark"](K, pr); cut = cutfor(mt)
-        v = f"{V}/{S}/{t}"; os.makedirs(v, exist_ok=True)
-        with open(f"{v}/verdict.vcf", "w") as o:
-            o.write("".join(l for l in open(f"{d}/calls.vcf") if l[0] == "#"))
-            for (g, info), q, u in zip(L, pr, du):
-                g = list(g); g[6] = "DUPL" if u else "PASS" if q >= cut else "LOW"; g[7] += ";VP=%.4f" % q; o.write("\t".join(g) + "\n")
-        sv, TJ = ns["truth"](f"{TR}/{t}.tsv")
+    for t in SIMT:
+        sv, TJ = tools.truth(f"{TR}/{t}.tsv")
         ln = {l.split("\t")[0]: int(l.split("\t")[2]) for l in open(f"{TR}/{t}.tsv")}
-        f = ns["score"](f"{TR}/{t}.tsv", f"{v}/verdict.vcf")["found_ids"]
+        f = tools.simscore(f"{TR}/{t}.tsv", f"{R}/sim/settings/{S}/{t}/janus.vcf")["found_ids"]
         for m, ty in sv.items():
             tk[ty] += 1; hk[ty] += m in f
             s = next(n for n, lo, hi in SZ if lo <= ln[m] < hi); ts[s] += 1; hs[s] += m in f
@@ -1840,7 +1801,7 @@ def tables():
     for k, lab in [("full", "Full")] + [(f"{x}x", f"{x}$\\times$") for x in (30, 20, 15, 10, 5)] + [("mid", None)] + [(f"{q}p", f"{q}\\%") for q in (100, 80, 60, 40, 20)]:
         if k == "mid": rows += ["\\midrule", "Purity (30$\\times$) & & & & & & & \\\\", "\\midrule"]; continue
         g = sg[k]; bn = {v: k_ for k_, v in TOOLKEY.items()}[g["best"]]
-        rows.append(f"{lab} & " + " & ".join(f"{series(C_, 'janus', [k], P5, j)[0]:.3f}" for j in range(3)) + f" & {g['snape_lo']:.3f}--{g['snape_hi']:.3f} & " + " & ".join(f"{series(C_, n, [k], P5, 2)[0]:.3f}" for n in COV) + f" & {g['diff']:+.3f} [{g['lo']:+.3f}, {g['hi']:+.3f}] vs.\\ {bn}")
+        rows.append(f"{lab} & " + " & ".join(f"{series(C_, 'janus', [k], P5, j)[0]:.3f}" for j in range(3)) + f" & {g['janus_lo']:.3f}--{g['janus_hi']:.3f} & " + " & ".join(f"{series(C_, n, [k], P5, 2)[0]:.3f}" for n in COV) + f" & {g['diff']:+.3f} [{g['lo']:+.3f}, {g['hi']:+.3f}] vs.\\ {bn}")
     T["stab:depth"] = tabular("lrrrrrrrl", "Depth & \\multicolumn{4}{c}{\\tool{}} & Severus & SAVANA & nanomonsv & \\tool{} $-$ best other \\\\\n\\cmidrule(lr){2-5}\n & Precision & Recall & F1 & 95\\% interval & F1 & F1 & F1 & F1 [95\\% interval] \\\\", rows)
     tot, bam, stat = VAL["files"]
     T["stab:files"] = tabular("lrrrrrrr", "Pair & Packed reads & Core positions & Counts & Graph & Snippets, alignments, other & Total & BAM files \\\\",
@@ -1935,10 +1896,10 @@ def numbers(Z):
     v30, v5 = series(C_, "Severus", ["30x", "5x"], P5, 2), series(C_, "Severus", ["30x", "5x"], P5, 1)
     put("janus mean F1 and recall 30x to 5x", f"F1 {s30[0]:.3f} to {s30[1]:.3f}, recall {s5[0]:.3f} to {s5[1]:.3f}")
     put("Severus mean F1 30x to 5x, recall at 5x", f"{v30[0]:.3f} to {v30[1]:.3f}, recall {v5[1]:.3f}")
-    put("20% purity, mean over five pairs: janus precision and F1, Severus F1", ", ".join(f"{st.mean(C_[(p, '20p', t)][j] for p in P5):.3f}" for t, j in (("snape", 0), ("snape", 2), ("severus", 2))))
+    put("20% purity, mean over five pairs: janus precision and F1, Severus F1", ", ".join(f"{st.mean(C_[(p, '20p', t)][j] for p in P5):.3f}" for t, j in (("janus", 0), ("janus", 2), ("severus", 2))))
     put("20% purity, Severus F1 on NCI-H2009, HCC1937, NCI-H1437", rng((C_[(p, "20p", "severus")][2] for p in ("h2009", "hcc1937", "h1437")), 3))
-    put("purity, mean F1 100% to 20%, janus and Severus", "; ".join(", ".join(f"{st.mean(C_[(p, q, t)][2] for p in P5):.3f}" for q in ("100p", "80p", "60p", "40p", "20p")) for t in ("snape", "severus")))
-    put("20% purity F1 of the other three pairs", rng((C_[(p, "20p", "snape")][2] for p in ("h2009", "hcc1937", "h1437")), 3))
+    put("purity, mean F1 100% to 20%, janus and Severus", "; ".join(", ".join(f"{st.mean(C_[(p, q, t)][2] for p in P5):.3f}" for q in ("100p", "80p", "60p", "40p", "20p")) for t in ("janus", "severus")))
+    put("20% purity F1 of the other three pairs", rng((C_[(p, "20p", "janus")][2] for p in ("h2009", "hcc1937", "h1437")), 3))
     c, tot = Z["cost"], Z["tot"]
     def mins(x):
         s = round(x); return f"{s // 60} min {s % 60} s" if s % 60 else f"{s // 60} min"
@@ -2008,9 +1969,8 @@ def numbers(Z):
     for kind, keys in (("type", TYPES), ("size", [k for k, _ in SIZES])):
         put(f"callers above janus by {kind}", "; ".join(f"{k}: " + ", ".join(n for n in ["Severus", "SAVANA", "nanomonsv", "Sniffles2"] if pooled("all_with", n, kind, k)[0] > pooled("all_with", "janus", kind, k)[0]) for k in keys))
     put("aligned sequence, times less than both read sets", irng(round(Z["gbp"][p] / gb[p]) for p in P5))
-    xt = {q: int(overall(f"{R}/external_eval/{q}/snape/minda")[0][8]) for q in ("colo829", "hg008")}
-    ns = {}; exec(paper.SCRIPTS["score"].split("T, C = recs")[0], ns)
-    put("COLO829 validated SVs, at least 50 bp; HG008 truth SVs of at least 50 bp", f"{len(ns['recs'](f'{ROOT}/hifi/truth/colo829/truth.vcf'))}, {xt['colo829']}; {xt['hg008']}")
+    xt = {q: int(overall(f"{R}/external_eval/{q}/janus/minda")[0][8]) for q in ("colo829", "hg008")}
+    put("COLO829 validated SVs, at least 50 bp; HG008 truth SVs of at least 50 bp", f"{len(tools.recs(f'{ROOT}/datasets/hifi/truth/colo829/truth.vcf'))}, {xt['colo829']}; {xt['hg008']}")
     lc = {p: [int(overall(f"{H}/eval_loo/{p}/{t}/score")[0][8]) for t in EXT] for p in ("hcc1954", "h1437")}
     put("leave-one-out consensus sizes, HCC1954 and NCI-H1437", "; ".join(irng(v) for v in lc.values()))
     pn = {p: round(min(j[p]["reads"]["n"]["bases"] - 24 * X - X / 10, 30 * X) / X) for p in ("hcc1954", "hcc1395")}
@@ -2055,7 +2015,7 @@ def numbers(Z):
     fc = falsecalls("20-5")
     put("20/5 joint SVs, false calls, false calls in one tumor", f"{fc[0]:,}, {fc[1]:,}, {fc[2]:,}")
     put("simulated tree nodes", str(len(json.load(open(f"{R}/sim/truth/tree.json"))["parent"])))
-    gd = f"{ROOT}/simulation/phylo/genomes"
+    gd = f"{ROOT}/datasets/simulation/genomes"
     if os.path.exists(f"{gd}/germline/germline.truth.vcf.gz"):
         import gzip
         g = collections.Counter(); het = n = 0
@@ -2077,29 +2037,15 @@ def numbers(Z):
 
 
 def falsecalls(name):
-    g = {"__name__": "x", "SCRIPTS": paper.SCRIPTS, "run_score": paper.run_score}
-    exec(paper.SCRIPTS["simjoint"].split("out = {}")[0], g)
-    ns = g["ns"]; TI = [ns["index"](ns["truth"](f"{R}/sim/truth/{t}.tsv")[1]) for t in SIMT]
-    d = pickle.load(open(f"{R}/sim/settings/{name.replace('-', '_')}/joint/carry.pkl", "rb"))
-    pr, du, own, NB, J = [d[k] for k in ("pr", "du", "own", "NB", "J")]
-    N = len(pr); cut = np.broadcast_to(np.asarray(d["cut"], float), (N,))
-    conf = np.array([len({own[j] for j in NB.get(i, ()) if own[j] != own[i] and pr[j] >= cut[j]}) for i in range(N)])
-    acc = ~du & ((pr >= cut + 0.2) | ((pr >= 0.1) & (conf >= 1)))
-    root = list(range(N))
-
-    def find(i):
-        while root[i] != i:
-            root[i] = root[root[i]]
-            i = root[i]
-        return i
-
-    for i in range(N):
-        for j in NB.get(i, ()):
-            root[find(i)] = find(j)
-    comp = collections.defaultdict(list)
-    for i in np.where(acc)[0]:
-        comp[find(i)].append(i)
-    bad = [c for c, v in comp.items() if not any(J[i] and ns["match"](J[i], TI[own[i]]) for i in v)]
+    """SV groups accepted by the first pass of a joint run, those without a true record, and those of one tumor only."""
+    d = f"{R}/sim/settings/{name.replace('-', '_')}/joint"
+    TI = [tools.index(tools.truth(f"{R}/sim/truth/{t}.tsv")[1]) for t in SIMT]
+    K, F, own, carr = tools.janus_records(f"{d}/first.vcf"); J = [tools.junction(l) for l in open(f"{d}/first.vcf") if l[0] != "#"]
+    grp = tools.groups(K, [f == "DUPL" for f in F]); comp = collections.defaultdict(list)
+    for i, g in enumerate(grp):
+        if F[i] == "PASS":
+            comp[g].append(i)
+    bad = [c for c, v in comp.items() if not any(J[i] and tools.match(J[i], TI[own[i]]) for i in v)]
     return len(comp), len(bad), sum(1 for c in bad if len({own[i] for i in comp[c]}) == 1)
 
 

@@ -1,0 +1,76 @@
+panel,settings,tau_normal,tau_tumor,f1,thresholds_used
+a,Full depth,5,20,0.8858,0
+a,Full depth,5,30,0.888,0
+a,Full depth,5,40,0.888,0
+a,Full depth,5,50,0.8866,0
+a,Full depth,5,60,0.8836,0
+a,Full depth,10,20,0.8884,0
+a,Full depth,10,30,0.8868,0
+a,Full depth,10,40,0.8868,0
+a,Full depth,10,50,0.8881,0
+a,Full depth,10,60,0.8877,0
+a,Full depth,15,20,0.8884,0
+a,Full depth,15,30,0.8868,0
+a,Full depth,15,40,0.8868,0
+a,Full depth,15,50,0.8881,0
+a,Full depth,15,60,0.8877,0
+a,Full depth,20,20,0.8868,1
+a,Full depth,20,30,0.8874,0
+a,Full depth,20,40,0.8874,0
+a,Full depth,20,50,0.8844,0
+a,Full depth,20,60,0.888,0
+a,Full depth,25,20,0.8868,0
+a,Full depth,25,30,0.8874,0
+a,Full depth,25,40,0.8874,0
+a,Full depth,25,50,0.8844,0
+a,Full depth,25,60,0.888,0
+b,"Depth 30× to 5×, mean",5,20,0.73634,0
+b,"Depth 30× to 5×, mean",5,30,0.73684,0
+b,"Depth 30× to 5×, mean",5,40,0.73684,0
+b,"Depth 30× to 5×, mean",5,50,0.7354,0
+b,"Depth 30× to 5×, mean",5,60,0.73456,0
+b,"Depth 30× to 5×, mean",10,20,0.74802,0
+b,"Depth 30× to 5×, mean",10,30,0.74668,0
+b,"Depth 30× to 5×, mean",10,40,0.74668,0
+b,"Depth 30× to 5×, mean",10,50,0.7464,0
+b,"Depth 30× to 5×, mean",10,60,0.7459,0
+b,"Depth 30× to 5×, mean",15,20,0.74802,0
+b,"Depth 30× to 5×, mean",15,30,0.74668,0
+b,"Depth 30× to 5×, mean",15,40,0.74668,0
+b,"Depth 30× to 5×, mean",15,50,0.7464,0
+b,"Depth 30× to 5×, mean",15,60,0.7459,0
+b,"Depth 30× to 5×, mean",20,20,0.74668,1
+b,"Depth 30× to 5×, mean",20,30,0.74882,0
+b,"Depth 30× to 5×, mean",20,40,0.74882,0
+b,"Depth 30× to 5×, mean",20,50,0.74956,0
+b,"Depth 30× to 5×, mean",20,60,0.74918,0
+b,"Depth 30× to 5×, mean",25,20,0.74668,0
+b,"Depth 30× to 5×, mean",25,30,0.74882,0
+b,"Depth 30× to 5×, mean",25,40,0.74882,0
+b,"Depth 30× to 5×, mean",25,50,0.74956,0
+b,"Depth 30× to 5×, mean",25,60,0.74918,0
+c,"Purity 100% to 20%, mean",5,20,0.80438,0
+c,"Purity 100% to 20%, mean",5,30,0.80626,0
+c,"Purity 100% to 20%, mean",5,40,0.80628,0
+c,"Purity 100% to 20%, mean",5,50,0.80442,0
+c,"Purity 100% to 20%, mean",5,60,0.80406,0
+c,"Purity 100% to 20%, mean",10,20,0.80678,0
+c,"Purity 100% to 20%, mean",10,30,0.80618,0
+c,"Purity 100% to 20%, mean",10,40,0.80628,0
+c,"Purity 100% to 20%, mean",10,50,0.80562,0
+c,"Purity 100% to 20%, mean",10,60,0.8044,0
+c,"Purity 100% to 20%, mean",15,20,0.80678,0
+c,"Purity 100% to 20%, mean",15,30,0.80618,0
+c,"Purity 100% to 20%, mean",15,40,0.80628,0
+c,"Purity 100% to 20%, mean",15,50,0.80562,0
+c,"Purity 100% to 20%, mean",15,60,0.8044,0
+c,"Purity 100% to 20%, mean",20,20,0.80628,1
+c,"Purity 100% to 20%, mean",20,30,0.80834,0
+c,"Purity 100% to 20%, mean",20,40,0.80814,0
+c,"Purity 100% to 20%, mean",20,50,0.80606,0
+c,"Purity 100% to 20%, mean",20,60,0.80586,0
+c,"Purity 100% to 20%, mean",25,20,0.80628,0
+c,"Purity 100% to 20%, mean",25,30,0.80834,0
+c,"Purity 100% to 20%, mean",25,40,0.80814,0
+c,"Purity 100% to 20%, mean",25,50,0.80606,0
+c,"Purity 100% to 20%, mean",25,60,0.80586,0

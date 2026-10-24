@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstring>
+#include <string>
 #include "cmd.h"
 #include "core.h"
 #include "files.h"
@@ -66,7 +67,7 @@ void Cores::of(const std::string& q, uint32_t lo, uint32_t hi) {
 
 static bool by_entry(const Entry& a, const Entry& b) { return a.h != b.h ? a.h < b.h : a.cs != b.cs ? a.cs < b.cs : a.pos < b.pos; }
 
-RefIndex::RefIndex(const Args& a) : a(a), f(a.in), out(a.threads), cores(a.threads) {
+RefIndex::RefIndex(const Args& a) : a(a), f(a.need(a.ref, "--ref")), out(a.threads), cores(a.threads) {
     for (uint32_t ci = 0; ci < f.seq.size(); ci++)
         for (uint32_t x = 0, y; x < f.seq[ci].size(); x = y) {
             while (x < f.seq[ci].size() && f.seq[ci][x] == 'N') x++;
@@ -96,7 +97,7 @@ int RefIndex::run() {
     std::vector<Entry> all;
     for (std::vector<Entry>& v : out) all.insert(all.end(), v.begin(), v.end());
     std::sort(all.begin(), all.end(), by_entry);
-    Output::save(a.out, Header('R', 1, all.size(), f.seq.size()), all.data(), all.size() * sizeof(Entry));
+    Output::save(a.need(a.out, "--out"), Header('R', 1, all.size(), f.seq.size()), all.data(), all.size() * sizeof(Entry));
     std::fprintf(stderr, "[refidx] %zu cores on %zu sequences\n", all.size(), f.seq.size());
     return 0;
 }
@@ -112,8 +113,8 @@ static bool by_match(const Match& a, const Match& b) { return a.cs != b.cs ? a.c
 
 static bool by_window(const Window& a, const Window& b) { return a.ci != b.ci ? a.ci < b.ci : a.lo < b.lo; }
 
-Place::Place(const Args& a) : a(a), f(a.in), cores(a.threads), on(f.seq.size(), 0), w(a.threads) {
-    Input in(a.reads);
+Place::Place(const Args& a) : a(a), f((std::string(a.need(a.pieces, "--pieces")) + ".fa").c_str()), cores(a.threads), on(f.seq.size(), 0), w(a.threads) {
+    Input in(a.need(a.index, "--index"));
     idx.resize(in.h.n);
     std::fread(idx.data(), sizeof(Entry), in.h.n, in.f);
     std::fclose(in.f);
@@ -155,8 +156,8 @@ int Place::run() {
     std::vector<Window> all;
     for (std::vector<Window>& v : w) all.insert(all.end(), v.begin(), v.end());
     std::sort(all.begin(), all.end(), by_window);
-    Fasta g(a.data);
-    std::string o(a.out);
+    Fasta g(a.need(a.ref, "--ref"));
+    std::string o(a.pieces);
     FILE* fo = std::fopen((o + ".win.fa").c_str(), "w");
     for (size_t x = 0, y; x < all.size(); x = y) {
         uint32_t hi = all[x].hi;

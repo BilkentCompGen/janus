@@ -1,0 +1,47 @@
+\section{Introduction}\label{sec:introduction}
+
+Structural variants (SVs) are genomic alterations that span at least 50\,bp~\cite{chaisson}. 
+Beyond inherited germline variants, replication and repair defects generate somatic SVs in cancer cells, ranging from focal deletions to chromosome-scale rearrangements~\cite{cosenza,chromothripsis}. 
+SVs represent the primary class of driver mutations across most tumor types~\cite{cosenza}, and the resulting genomic instability fuels the acquisition of cancer hallmarks~\cite{hanahan2011,hanahan2022}. 
+Because cell lineages inherit these alterations~\cite{mcgranahan}, ongoing structural variation drives clonal diversification and tumor progression~\cite{ith}. 
+Consequently, rapid and accurate somatic SV identification is critical for clinical oncology~\cite{schram2017,severus}, yet remains technically demanding~\cite{nanomonsv}.
+
+Early approaches relied on short reads to infer SVs indirectly from discordant read pairs, split reads, depth fluctuations, and local assembly~\cite{manta,svaba,gripss}. 
+However, short reads map poorly to repetitive regions, limiting detection accuracy~\cite{chaisson}. 
+Integrating long reads resolved this limitation, uncovering 3 to 7 times as many SVs per genome as short-read datasets alone~\cite{chaisson}. 
+Long-read sequencing from Oxford Nanopore Technologies (ONT) and PacBio HiFi overcomes mapping ambiguity because individual reads can span repetitive elements or entire SVs~\cite{sedlazeck,logsdon,Ahsan_2023}. 
+Between the two platforms, PacBio HiFi reads achieve 99.8\% average base accuracy~\cite{wenger}, making them better suited than ONT reads for exact sequence matching and breakpoint resolution despite their shorter lengths~\cite{logsdon,Delahaye_2021}.
+
+Most studies analyze somatic SVs in bulk samples that pool DNA from thousands of cells~\cite{pcawg}. 
+Because ongoing mutations create distinct subclones~\cite{ith}, many variants occur only in small cell subpopulations. 
+Normal-cell contamination dilutes these mutations that often fall below standard variant allele frequency (VAF) thresholds~\cite{severus,ith}. 
+Single-cell methods directly isolate distinct clones~\cite{navin}, but they introduce coverage gaps and allelic dropout that impede variant discovery~\cite{gawad}. 
+Bulk sequencing therefore remains the standard approach. 
+To improve clonal resolution, researchers sequence multiple bulk samples that capture tumor diversity~\cite{mcgranahan,gerlinger}. 
+Standard germline tools fail at low VAFs because they expect variants that appear in half or all of the reads~\cite{severus}. 
+Even specialized tools like Sniffles2 include mosaic modes that target rare alleles~\cite{sniffles2}, yet they cannot distinguish somatic from germline events without normal data. 
+Somatic discovery therefore requires dedicated tumor--normal callers that evaluate matched control samples to filter non-somatic signal~\cite{severus,savana,nanomonsv}.
+
+
+All of the aforementioned tumor--normal callers detect SVs from reads that align to a single linear reference genome~\cite{Qin_2025}. 
+Reference bias causes alignment errors that often lead callers to misidentify germline variants as somatic SVs~\cite{Ballouz_2019,Qin_2025,refbias}. 
+Personal assemblies~\cite{hifiasm} and pangenome references~\cite{Liao_2023,Garrison_2018} mitigate this bias, but they still require full read alignments that demand heavy computation~\cite{Alser_2020,Qin_2025,refbias}. 
+Graph-based approaches instead compare sequences using $k$-mers and de~Bruijn graphs, which capture sample differences directly~\cite{Pevzner_2001,debruijn,cortex}. 
+Tools like novoBreak assemble reads that carry tumor-specific $k$-mers~\cite{novobreak}, while colored de~Bruijn graphs represent multiple samples in a single model~\cite{cortex}. 
+However, standard $k$-mers and sparse markers, such as minimizers and syncmers, have notable drawbacks~\cite{roberts,syncmers}. 
+A single mutation disrupts up to $k$ overlapping $k$-mers, while subsampled markers leave sequence gaps that miss critical variation~\cite{roberts,syncmers,lcpan}. 
+Locally consistent parsing (LCP) avoids these issues by generating variable-length cores that guarantee full sequence coverage~\cite{sv94a,sv94b}. 
+LCP parses shared regions into identical cores that match consistently across reads~\cite{lcpan,gencore}. 
+A single base substitution changes at most three cores at each level~\cite{gencore}, and iterative parsing produces longer cores that capture structural context across multiple levels~\cite{lcpan}.
+
+
+Here we introduce \tool, which discovers somatic SVs in a personal pangenome built using reads generated with the PacBio HiFi platform.
+This pangenome is similar to a colored de Bruijn graph with LCP cores instead of $k$-mers, that includes one normal sample and one or more tumor samples from the same patient.
+\tool first searches this graph, without any alignment, for candidate sites that are traversed only by tumor reads, and then aligns only short snippets of tumor reads around these sites to the reference genome.
+A classifier then uses features of the graph and of the alignments to flag germline variants and artifacts.
+\tool calls SVs across all tumor samples in a single run; in addition, it leverages SV features shared across tumors to improve individual calling results.
+On the CASTLE tumor--normal cell line pairs~\cite{severus,deepsomatic}, \tool predictions showed the highest average F1 score against a consensus of 18 call sets.
+While achieving this accuracy, starting from FASTQ files, \tool processed a pair in about 11 minutes on 16 threads, about 24 times faster than mapping the two read sets alone, while using less memory and disk space. 
+%Finally, on a simulated patient with 20 tumors, a single joint run was both faster and more accurate than separate runs for each tumor.
+
+%, and it also used less memory and disk space than the mapping.

@@ -1,0 +1,32 @@
+\section{Discussion}\label{sec:discussion}
+In this work, we introduced \tool{}, which avoids aligning all reads by building a personal pangenome, one graph of LCP cores from the normal and tumor samples of a patient.
+Instead of searching for somatic SVs in alignments to a single reference genome, \tool{} finds candidate sites directly in this graph, and only short snippets of tumor reads around them are aligned.
+Therefore, \tool{} processed each tumor--normal pair in about 11 minutes, while its accuracy on the same reads was higher on average than that of the alignment-based callers we compared.
+When we reduced the sequencing depth and tumor purity of the CASTLE pairs, \tool{} also lost less accuracy than Severus, SAVANA, and nanomonsv.
+The efficiency of \tool{} matters most for large multi-sample studies, where it places all tumor samples of a patient in one graph and processes them in a single run.
+For a simulated patient with 20 tumors, such a joint run was both faster and more accurate than separate runs for each tumor, with the largest gains at the lowest tumor depth: at 20/5, a joint run matched separate runs at 20/20 with a quarter of the tumor reads, and it found twice as many of the cohort's SVs as the same reads pooled into one bulk sample, which loses the SVs private to one tumor.
+Since a lower depth means fewer reads to sequence and to analyze, this robustness could make studies with many samples per patient cheaper.
+
+However, \tool{} currently builds a separate graph for each patient, and it has a classifier of gradient-boosted trees trained on a small cohort.
+A single graph of LCP cores could instead represent a whole cohort of patients, each with several tumor samples.
+Trained on such cohorts, deep learning models could replace the classifier and also refine the type of each SV.
+Reads of other long-read technologies such as ONT could also enter the graph.
+Spatially resolved DNA sequencing~\cite{slidedna} could locate the detected SVs and the subclones carrying them in the tissue.
+If pangenome-based methods scale to large cohorts, fast and accurate somatic SV calling could become a routine part of precision medicine, guiding the choice and development of targeted drugs~\cite{schram2017}.
+
+\junk{
+
+\begin{enumerate}
+\item \textbf{What \tool{} shows.}
+  \begin{itemize}
+  \item Somatic SVs can be found in one graph of LCP cores of all samples before any alignment; only 0.09--0.29\% of the sequence is aligned, in about eleven minutes per pair.
+  \item Most accurate against the consensus of 18 call sets and on the independent truth sets of COLO829 and HG008; second to Severus against the consensus without \tool{}.
+  \item Holds up better than the other callers at low depth and purity; a joint graph of several tumors improves accuracy and recovers the tree.
+  \end{itemize}
+\item \textbf{Limitations and next steps.}
+  \begin{itemize}
+  \item PacBio HiFi only; the classifier is trained on the consensus of five cell line pairs; joint calling is tested on one simulated tree.
+  \item Next: ONT reads, real multiregion datasets, and smaller intermediate files.
+  \end{itemize}
+\end{enumerate}
+}

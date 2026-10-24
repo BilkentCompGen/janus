@@ -1,98 +1,48 @@
-.cache
-.DS_Store
-.vscode
-.venv
-.venv-callers
-.venv-svision
-__pycache__
+# build products and fetched dependencies (make fetches rapidgzip into lib/)
+/build/
+/lib/
+/.venv-bench/
+__pycache__/
 
-# the binary and its objects
-/janus
-build
+# references, built by ref/build.sh
+/ref/*
+!/ref/build.sh
 
-# third-party sources built in place (Badread, ...) and generated benchmark data; lcptools (packed) is vendored
-lib/*
-!lib/lcptools/
-lib/lcptools/liblcptools.a
-lib/lcptools/config.h
-simulation
-outputs
+# data: the reads and truth sets fetched by datasets/fetch.sh, the simulation's genomes and reads (datasets/simulate.sh)
+/datasets/hifi/
+/datasets/simulation/.venv/
+/datasets/simulation/genomes/
+/datasets/simulation/reads/
+/datasets/simulation/ref/
+/datasets/simulation/logs/
+/datasets/simulation/spec/cosmic/
 
-# Real HiFi pairs: hundreds of GB of reads, graphs and the CASTLE archive. The shell that fetches
-# them IS source, so it stays. (A trailing comment on the pattern line does not work -- git reads it
-# as part of the pattern, which is why this directory was untracked rather than ignored.)
-/hifi/*
-!/hifi/*.sh
-
-# the paper: source is tracked, LaTeX build products are not
-paper/*.aux
-paper/*.log
-paper/*.out
-paper/*.pdf
-paper/*.toc
-paper/*.bbl
-paper/*.blg
-paper/*.synctex.gz
-
-# claude workspace (contains git worktrees)
-.claude
-
-# Assembly and read alignments plus the consensus workspace: BAMs of several GB each and the caller
-# outputs derived from them. All of it regenerates from scripts that ARE tracked, and `git add -A`
-# pulled the BAMs in once already, which is what this rule prevents.
-/asm2asm
-/readalign
-/consensus
-/asm_somatic
-/castle_res
-/castle_delly
-
-/tmp
-archive/
-paper/measure/out/
-
-# side builds (make BUILD=build4 ...) used to keep a variant binary next to the main one
-/build*/
-
-# benchmark outputs: the scripts are tracked, and of the runs only the structured measurements
-# (run.json, steps.tsv, files.tsv); calls, logs, monitors, verdict and evaluation outputs stay local.
-# Also the reference data (hg38 fasta, minimap2 index, core index, VNTR bed).
-/bench/runs/*/*/*
-!/bench/runs/*/*/run.json
-!/bench/runs/*/*/steps.tsv
-!/bench/runs/*/*/files.tsv
-/bench/runs/*/queue.log
-/bench/eval/
-/bench/verdict/
-/bench/callers/*
-!/bench/callers/*.sh
-!/bench/callers/*.md
-!/bench/callers/*.py
-!/bench/callers/images/
-!/bench/callers/ref/
-/bench/callers/ref/*
-!/bench/callers/ref/fetch.sh
-!/bench/callers/micro/
-/bench/callers/micro/*
-!/bench/callers/micro/*.sh
-!/bench/callers/micro/demo/
-/bench/callers/micro/demo/*
-!/bench/callers/micro/demo/*.sh
-/ref/
-
-# figure scripts cache the tables they computed from the runs; the scripts rebuild them
-paper/figures/snape/*/__pycache__/
-
-# the paper and all benchmark results stay local; benchmark scripts are tracked
-/paper/
+# benchmark results and environments (the scripts that make them are tracked)
 /bench/runs/
-/bench/verdict/
-/bench/eval/
-/bench/callers/images/*.log
-/bench/callers/images/*/*.log
-/bench/callers/images/cue2/cue2/
 /bench/runs_clean/
 /bench/eval_sets/
 /bench/eval_loo/
+/bench/verdict/
 /bench/supp/
+/bench/callers/env/
+/bench/callers/ref/
+/bench/svb2fq
 /bench/out/
+/bench/figures.log
+
+# LaTeX build products of the paper
+/paper/*.aux
+/paper/*.log
+/paper/*.out
+/paper/*.bbl
+/paper/*.blg
+/paper/*.pdf
+/paper/*.synctex.gz
+
+.claude/
+.DS_Store
+.vscode
+/build*/
+/hifi
+/out/
+core.[0-9]*

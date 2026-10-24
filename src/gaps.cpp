@@ -10,10 +10,10 @@ static const uint32_t MING = 50;
 static const uint32_t MAXG = 20000;
 
 int cmd_lift(const Args& a) {
-    Fai fai(a.data);
-    Lines in(a.in);
+    Fai fai(a.need(a.ref, "--ref"));
+    Lines in(a.need(a.paf, "--paf"));
     Paf p;
-    FILE* fo = std::fopen(a.out, "w");
+    FILE* fo = std::fopen(a.need(a.out, "--out"), "w");
     while (in.next()) {
         p.parse(in.s);
         char* c = std::strrchr(p.t, ':');
@@ -30,13 +30,13 @@ int cmd_lift(const Args& a) {
 int cmd_clip(const Args& a) {
     std::map<std::string, std::vector<std::pair<uint32_t, uint32_t>>> cov;
     {
-        Lines in(a.reads);
+        Lines in(a.need(a.paf, "--paf"));
         Paf p;
         while (in.next())
             if (p.parse(in.s) >= 4) cov[p.q].push_back({p.qs, p.qe});
     }
-    FILE* fo = std::fopen(a.out, "w");
-    Lines f((std::string(a.in) + ".fa").c_str());
+    FILE* fo = std::fopen(a.need(a.out, "--out"), "w");
+    Lines f((std::string(a.need(a.pieces, "--pieces")) + ".fa").c_str());
     std::string nm;
     while (f.next()) {
         if (f.s[0] == '>') { nm.assign(f.s + 1, std::strcspn(f.s + 1, " \t\n")); continue; }
@@ -62,18 +62,18 @@ int cmd_clip(const Args& a) {
 int cmd_patch(const Args& a) {
     std::map<std::string, uint32_t> len;
     {
-        Lines f((std::string(a.in) + ".fa").c_str());
+        Lines f((std::string(a.need(a.pieces, "--pieces")) + ".fa").c_str());
         std::string nm;
         while (f.next())
             if (f.s[0] == '>') nm.assign(f.s + 1, std::strcspn(f.s + 1, " \t\n"));
             else len[nm] = std::strcspn(f.s, "\r\n");
     }
-    FILE* fo = std::fopen(a.out, "w");
+    FILE* fo = std::fopen(a.need(a.out, "--out"), "w");
     {
-        Lines own(a.data);
+        Lines own(a.need(a.aln, "--aln"));
         while (own.next()) std::fputs(own.s, fo);
     }
-    Lines in(a.reads);
+    Lines in(a.need(a.paf, "--paf"));
     Paf p;
     while (in.next()) {
         p.parse(in.s);

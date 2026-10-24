@@ -1,0 +1,26 @@
+panel,series,item,value,unit
+,HCC1954,Tumor reads,11561429,count
+,HCC1954,Sites,96724,count
+,HCC1954,Snippets,28328,count
+,HCC1954,Records,2889,count
+,HCC1954,PASS calls,1114,count
+,NCI-H2009,Tumor reads,12683263,count
+,NCI-H2009,Sites,303742,count
+,NCI-H2009,Snippets,74948,count
+,NCI-H2009,Records,4374,count
+,NCI-H2009,PASS calls,901,count
+,HCC1937,Tumor reads,12386643,count
+,HCC1937,Sites,90227,count
+,HCC1937,Snippets,25855,count
+,HCC1937,Records,2393,count
+,HCC1937,PASS calls,687,count
+,NCI-H1437,Tumor reads,12080830,count
+,NCI-H1437,Sites,133582,count
+,NCI-H1437,Snippets,33521,count
+,NCI-H1437,Records,2336,count
+,NCI-H1437,PASS calls,206,count
+,HCC1395,Tumor reads,12662343,count
+,HCC1395,Sites,221909,count
+,HCC1395,Snippets,47821,count
+,HCC1395,Records,5044,count
+,HCC1395,PASS calls,1210,count

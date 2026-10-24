@@ -1,0 +1,11 @@
+panel,item,consensus_svs,record_not_pass,no_record,without_pass_call
+a,HCC1954,1051,33,35,68
+a,NCI-H2009,896,22,35,57
+a,HCC1937,694,43,60,103
+a,NCI-H1437,221,13,25,38
+a,HCC1395,1278,145,63,208
+b,BND,623,18,46,64
+b,DEL,1568,110,81,191
+b,DUP,502,8,14,22
+b,INS,976,104,53,157
+b,INV,471,16,24,40
