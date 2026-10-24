@@ -5,7 +5,6 @@
 #   bench/consensus.sh with       the consensus of all 18 call sets and every call set scored against both (eval_sets/<pair>/all_with, ...)
 #   bench/consensus.sh loo        every HiFi call set scored against the consensus of the other 17 (eval_loo)
 #   bench/consensus.sh external   janus and every HiFi caller on HG008 and COLO829 against their truth sets (runs/external_eval)
-#   bench/consensus.sh callsets   the 18 call sets of the five pairs as given to Minda, collected in bench/callsets/<pair>
 # `with`, `loo` and `external` need the classified janus calls of classifier.sh; E, LOO, VD and O override the directories (sweep.sh).
 source "$(dirname "$0")/env.sh"
 X=${1:?see the header}; shift
@@ -62,13 +61,5 @@ external)
             echo -e "$p\t$t\t$(awk -F'\t' 'NR==2{printf "%s\t%s\t%s\t%.3f\t%.3f\t%.3f", $8, $2, $4, $5, $6, $7}' $d/minda/results/overall.tsv)\t$($TOOLS score ${TB[$p]} $d/in.vcf)"
         done
     done > $O/scores.new; mv $O/scores.new $O/scores.tsv; column -t $O/scores.tsv ;;
-callsets)
-    for p in ${*:-$CASTLE}; do
-        castle $p; d=$H/callsets/$p; mkdir -p $d; cp $E/$p/in/janus.vcf $d/janus.vcf
-        for t in $HIFI_SETS; do n=${t%_phased}; case $n in severus|savana|nanomonsv|sniffles2) n=${n}_hifi ;; esac; cp $E/$p/in/$t.vcf $d/$n.vcf; done
-        set -- $ONT; cp $1 $d/severus_ont.vcf; cp $2 $d/savana_ont.vcf; cp $3 $d/nanomonsv_ont.vcf; cp $4 $d/sniffles2_ont.vcf
-        set -- $SR; cp $1 $d/svaba.vcf; cp $2 $d/gripss.vcf; cp $3 $d/manta.vcf
-        gzip -9 -f $d/*.vcf; echo "$p: $(ls $d | wc -l) call sets"
-    done ;;
 *) echo "unknown step $X" >&2; exit 1 ;;
 esac

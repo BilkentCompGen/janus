@@ -90,7 +90,7 @@ bench-competitors:
 
 # the consensus call sets, the classifier with each pair held out, every call set scored (Fig. 2a, 2c, 2d)
 bench-consensus:
-	bash bench/consensus.sh labels && bash bench/consensus.sh without && bash bench/classifier.sh verdict && bash bench/consensus.sh with && bash bench/consensus.sh loo && bash bench/consensus.sh external && bash bench/consensus.sh callsets
+	bash bench/consensus.sh labels && bash bench/consensus.sh without && bash bench/classifier.sh verdict && bash bench/consensus.sh with && bash bench/consensus.sh loo && bash bench/consensus.sh external
 
 # depth and purity (Fig. 2b)
 bench-coverage:
