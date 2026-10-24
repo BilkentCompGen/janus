@@ -65,7 +65,7 @@ external)
 callsets)
     for p in ${*:-$CASTLE}; do
         castle $p; d=$H/callsets/$p; mkdir -p $d; cp $E/$p/in/janus.vcf $d/janus.vcf
-        for t in $HIFI_SETS; do cp $E/$p/in/$t.vcf $d/${t%_phased}.vcf; done
+        for t in $HIFI_SETS; do n=${t%_phased}; case $n in severus|savana|nanomonsv|sniffles2) n=${n}_hifi ;; esac; cp $E/$p/in/$t.vcf $d/$n.vcf; done
         set -- $ONT; cp $1 $d/severus_ont.vcf; cp $2 $d/savana_ont.vcf; cp $3 $d/nanomonsv_ont.vcf; cp $4 $d/sniffles2_ont.vcf
         set -- $SR; cp $1 $d/svaba.vcf; cp $2 $d/gripss.vcf; cp $3 $d/manta.vcf
         gzip -9 -f $d/*.vcf; echo "$p: $(ls $d | wc -l) call sets"
