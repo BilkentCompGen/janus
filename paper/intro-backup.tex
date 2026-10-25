@@ -1,0 +1,130 @@
+\section{Introduction}\label{sec:introduction}
+
+\junk{Structural variants (SVs) are genomic alterations of size $\geq$50\,bp~\cite{chaisson}.
+Besides germline mutations, SVs that range from simple deletions to chromosome-scale alterations also arise in tumor cells as somatic mutations via replication and repair errors~\cite{cosenza,chromothripsis}.
+In most cancer types, SVs are the predominant class of driver mutation~\cite{cosenza}, and the genomic instability that produces them enables tumor cells to acquire the hallmarks of cancer~\cite{hanahan2011,hanahan2022}.
+Heritable by cell lineages~\cite{mcgranahan}, ongoing SVs expand tumors into related subclonal populations~\cite{ith}.
+Therefore, fast and accurate SV calling matters clinically~\cite{schram2017,severus} and remains a challenging problem for tumor analysis~\cite{nanomonsv}.
+
+Historically, short-read callers were used for SVs, which they infer indirectly through discordant read pairs, split reads, read depth, and local assembly~\cite{manta,svaba,gripss}.
+However, in repeats, they are unreliable, as short reads cannot be uniquely placed~\cite{chaisson}, and combining short reads with long reads revealed three to seven times more SVs per genome than standard short-read call sets~\cite{chaisson}.
+Long reads from Oxford Nanopore Technologies (ONT) and PacBio HiFi sequencing are better suited to SV calling, since a single read can span a repeat or a whole SV~\cite{sedlazeck,logsdon,Ahsan_2023}.
+Among them, HiFi reads are more reliable in exact matching algorithms, as ONT reads have more errors~\cite{logsdon,Delahaye_2021}, whereas HiFi reads are shorter but 99.8\% accurate~\cite{wenger}. }
+
+Structural variants (SVs) are genomic alterations that span at least 50\,bp~\cite{chaisson}. 
+Beyond inherited germline variants, replication and repair defects generate somatic SVs in cancer cells, ranging from focal deletions to chromosome-scale rearrangements~\cite{cosenza,chromothripsis}. 
+SVs represent the primary class of driver mutations across most tumor types~\cite{cosenza}, and the resulting genomic instability fuels the acquisition of cancer hallmarks~\cite{hanahan2011,hanahan2022}. 
+Because cell lineages inherit these alterations~\cite{mcgranahan}, ongoing structural variation drives clonal diversification and tumor progression~\cite{ith}. 
+Consequently, rapid and accurate somatic SV identification is critical for clinical oncology~\cite{schram2017,severus}, yet remains technically demanding~\cite{nanomonsv}.
+
+Early approaches relied on short reads to infer SVs indirectly from discordant read pairs, split reads, depth fluctuations, and local assembly~\cite{manta,svaba,gripss}. 
+However, short reads map poorly to repetitive regions, limiting detection accuracy~\cite{chaisson}. 
+Integrating long reads resolved this limitation, uncovering 3 to 7 times as many SVs per genome as short-read datasets alone~\cite{chaisson}. 
+Long-read sequencing from Oxford Nanopore Technologies (ONT) and PacBio HiFi overcomes mapping ambiguity because individual reads can span repetitive elements or entire SVs~\cite{sedlazeck,logsdon,Ahsan_2023}. 
+Between the two platforms, PacBio HiFi reads achieve $\ge$99.8\% base accuracy~\cite{wenger}, making them better suited than ONT reads for exact sequence matching and breakpoint resolution despite their shorter lengths~\cite{logsdon,Delahaye_2021}.
+
+Most studies analyze somatic SVs in bulk samples that pool DNA from thousands of cells~\cite{pcawg}. 
+Because ongoing mutations create distinct subclones~\cite{ith}, many variants occur only in small cell subpopulations. 
+Normal-cell contamination dilutes these mutations that often fall below standard variant allele frequency (VAF) thresholds~\cite{severus,nanomonsv}. 
+Single-cell methods directly isolate distinct clones~\cite{navin}, but they introduce coverage gaps and allelic dropout that impede variant discovery~\cite{gawad}. 
+Bulk sequencing therefore remains the standard approach. 
+To improve clonal resolution, researchers sequence multiple bulk samples that capture spatial or temporal tumor diversity~\cite{mcgranahan,gerlinger}. 
+Standard germline tools fail at low VAFs because they expect variants that appear in half or all of the reads~\cite{severus}. 
+Even specialized tools like Sniffles2 include mosaic modes that target rare alleles~\cite{sniffles2}, yet they cannot distinguish somatic from germline events without normal data. 
+Somatic discovery therefore requires dedicated tumor--normal callers that evaluate matched control samples to filter non-somatic signal~\cite{severus,savana,nanomonsv}.
+
+\junk{Regardless of the sequencing technology, somatic SVs have mostly been studied in bulk samples that pool DNA from many cells~\cite{pcawg}.
+However, as tumor cells continue to acquire mutations, many SVs are carried only by a subclone~\cite{ith}.
+Diluted by the normal cells, such SVs can fall below the variant allele frequency (VAF) at which callers detect them reliably~\cite{severus,nanomonsv}.
+Single-cell sequencing resolves tumor clones directly~\cite{navin}, but it introduces uneven coverage and allelic dropout problems~\cite{gawad}.
+Therefore, bulk sequencing remains standard.
+As a middle ground, some studies sequence several samples per patient~\cite{mcgranahan,gerlinger}.
+Germline SV callers in particular underperform at low VAF, as they expect an SV in about half or all of the reads that cover it~\cite{severus}.
+Among germline callers, even though Sniffles2 does have a mosaic mode for low-frequency SVs~\cite{sniffles2}, it still cannot separate somatic from germline SVs in a tumor sample alone.
+Instead, tumor--normal callers such as nanomonsv~\cite{nanomonsv}, SAVANA~\cite{savana}, and Severus~\cite{severus} compare the tumor with a matched normal sample.
+}
+
+All of these tumor--normal callers detect SVs from reads that align to a single linear reference genome~\cite{Qin_2025}. 
+Reference bias causes alignment errors that often lead callers to misidentify germline variants as somatic SVs~\cite{Ballouz_2019,Qin_2025,refbias}. 
+Personal assemblies~\cite{hifiasm} and pangenome references~\cite{Liao_2023,Garrison_2018} mitigate this bias, but they still require full read alignments that demand heavy computation~\cite{Alser_2020,Qin_2025,refbias}. 
+Graph-based approaches instead compare sequences through $k$-mers and de~Bruijn graphs that capture sample differences directly~\cite{Pevzner_2001,debruijn}. 
+Tools like novoBreak assemble reads that carry tumor-specific $k$-mers~\cite{novobreak}, while colored de~Bruijn graphs represent multiple samples in a single model~\cite{cortex}. 
+However, standard $k$-mers and sparse markers, such as minimizers and syncmers, have notable drawbacks~\cite{roberts,rustmdbg,syncmers}. 
+A single mutation disrupts up to $k$ overlapping $k$-mers, while subsampled markers leave sequence gaps that miss critical variation~\cite{roberts,syncmers,lcpan}. 
+Locally consistent parsing (LCP) avoids these issues by generating variable-length cores that guarantee full sequence coverage~\cite{sv94a,sv94b}. 
+LCP parses shared regions into identical cores that match consistently across reads~\cite{lcpan,gencore}. 
+An isolated error affects only 2.3 cores on average~\cite{lcpan}, and iterative parsing produces longer cores that capture structural context across multiple levels.
+
+\junk{
+All of these tumor--normal callers detect SVs in reads aligned to a single reference genome~\cite{Qin_2025}.
+Because of reference bias~\cite{Ballouz_2019}, germline SVs can be miscalled as somatic SVs~\cite{Qin_2025,refbias}.
+As a solution, personal assemblies~\cite{hifiasm} and pangenome references~\cite{Liao_2023,Garrison_2018} can reduce this bias~\cite{Qin_2025,refbias}, but every read must still be aligned, which is computationally expensive~\cite{Alser_2020}.
+Assembly-based methods instead compare samples through the $k$-mers of their reads and the de Bruijn graphs~\cite{Pevzner_2001,debruijn} built from them.
+For example, novoBreak assembles the aligned short reads containing tumor-specific $k$-mers~\cite{novobreak}, and colored de Bruijn graphs can represent multiple samples in a single graph~\cite{cortex}.
+However, these methods rely on $k$-mers or on sampled subsets of them, such as minimizers~\cite{roberts,rustmdbg} and syncmers~\cite{syncmers}.
+A single base difference changes up to $k$ consecutive $k$-mers, while sampled $k$-mers can also leave bases uncovered~\cite{roberts,syncmers,lcpan}.
+Locally consistent parsing (LCP)~\cite{sv94a,sv94b} avoids fixed lengths and uncovered bases by parsing a sequence into variable-length cores that together cover every base, and it parses identical substrings into identical cores except near their ends~\cite{lcpan,gencore}.
+A sequencing error, therefore, changes only 2.3 cores on average~\cite{lcpan}, and applying LCP repeatedly to its own cores gives longer cores at higher levels.
+}
+
+Here we introduce \tool, which discovers somatic SVs in a personal pangenome built using reads generated with the PacBio HiFi platform.
+This pangenome is similar to a colored de Bruijn graph with LCP cores instead of $k$-mers, that includes one normal sample and one or more tumor samples from the same patient.
+\tool first searches this graph, without any alignment, for candidate sites that are traversed only by tumor reads, and then aligns only short snippets of tumor reads around these sites to the reference genome.
+A classifier then uses features of the graph and of the alignments to flag germline variants and artifacts.
+\tool calls SVs across all tumor samples in a single run; in addition, it leverages SV features shared across tumors to improve individual calling results.
+On the CASTLE tumor--normal cell line pairs~\cite{severus}, \tool had the highest mean F1 score against a consensus of 18 call sets (0.887, compared with 0.858 for Severus).
+While achieving this accuracy, starting from FASTQ files, \tool processed a pair in about 11 minutes on 16 threads, about 24 times faster than mapping the two read sets alone, and it also used less memory and disk space than the mapping.
+Finally, on a simulated patient with 20 tumors, a single joint run was both faster and more accurate than separate runs for each tumor.
+
+\junk{
+\begin{enumerate}
+\item \textbf{Somatic SVs in cancer.}
+  \begin{itemize}
+  \item Definition of SVs; somatic (acquired, in a subset of cells) vs.\ germline (inherited, in all cells)~\cite{cosenza,pcawg}.
+  \item Range of events, from single deletions to chromothripsis~\cite{chromothripsis}.
+  \item Tumors are mixtures of subclones; multiregion sequencing~\cite{ith,mcgranahan,gerlinger}.
+  \item Shared vs.\ private SVs tell how the tumor evolved, so each SV must be called accurately and assigned to its samples.
+  \end{itemize}
+\item \textbf{Long reads for SV detection.}
+  \begin{itemize}
+  \item Short reads fail in repeats; long reads span them~\cite{zook,sedlazeck,logsdon,Ahsan_2023}.
+  \item ONT: longer reads, more errors, many in homopolymers~\cite{Delahaye_2021}. PacBio HiFi: shorter, 99.8\% accurate~\cite{wenger}.
+  \item We use HiFi reads because \tool relies on exact matches between reads.
+  \end{itemize}
+\item \textbf{Bulk vs.\ single cell; tumor-only vs.\ tumor--normal.}
+  \begin{itemize}
+  \item Bulk samples: normal cells and small subclones; sensitivity drops with purity and depth~\cite{nanomonsv,severus}.
+  \item Single cell: resolves clones~\cite{navin} but needs amplification (uneven coverage, allelic dropout)~\cite{gawad}; SVs only with special protocols~\cite{sctrip}.
+  \item In practice: several bulk samples per patient~\cite{gerlinger,mcgranahan}.
+  \item Tumor-only callers leave some germline SVs~\cite{severus,savana}; nanomonsv, SAVANA, and Severus use a matched normal~\cite{nanomonsv,savana,severus}; only Severus accepts several tumor samples.
+  \end{itemize}
+\item \textbf{Reference bias and graph-based alternatives.}
+  \begin{itemize}
+  \item All of these callers first align every read to a reference, which is expensive~\cite{Alser_2020} (more than 4 h for HCC1954 on 16 threads).
+  \item Reference bias: the reference is not the patient's genome, and germline differences are reported as somatic SVs~\cite{Ballouz_2019,Qin_2025}.
+  \item Pangenome graphs~\cite{Liao_2023,Garrison_2018} and donor-specific assemblies~\cite{hifiasm} help~\cite{Qin_2025,refbias}, but miss private variants or add cost.
+  \item Reference-free comparison of samples: de Bruijn graphs~\cite{Pevzner_2001,debruijn}, colored de Bruijn graphs~\cite{cortex}, novoBreak on short reads~\cite{novobreak}. A colored graph of one patient's samples is a personal pangenome.
+  \end{itemize}
+\item \textbf{From $k$-mers to LCP cores.}
+  \begin{itemize}
+  \item $k$-mers: one per base, sensitive to errors, $k$ fixed in advance~\cite{Chikhi_2013}.
+  \item Minimizers and syncmers select a subset~\cite{roberts,syncmers,rustmdbg}, with fixed length and uncovered bases in between.
+  \item Parsing instead of sampling: prefix-free parsing~\cite{pfp}, locally consistent parsing (LCP)~\cite{sv94a,sv94b}.
+  \item LCP cores (lcptools)~\cite{lcpan,gencore}: identical sequences give identical cores, every base is covered, length is set by the level (about 2.3$\times$ per level).
+  \end{itemize}
+\item \textbf{\tool: method.}
+  \begin{itemize}
+  \item One colored graph of LCP cores for one normal and $N$ tumor samples (personal pangenome).
+  \item Candidate sites are pairs of edges traversed together by tumor reads and by no normal read, found before any alignment.
+  \item Only short snippets of tumor reads are aligned (350--1,070 times less sequence); a classifier removes germline variants and artifacts.
+  \item Each SV is reported with the samples that carry it.
+  \end{itemize}
+\item \textbf{\tool: accuracy and efficiency.}
+  \begin{itemize}
+  \item CASTLE panel, 10 other callers on the same reads: highest mean F1 score (0.876 vs.\ 0.858 for Severus).
+  \item Best on COLO829 and HG008, which were not used for training~\cite{colo829,hg008}.
+  \item About 11 min per pair on 16 threads, more than 20 times faster than read mapping alone.
+  \item Simulated case with 20 tumors: joint calling is faster and more accurate than pairwise runs, and the tree is recovered.
+  \end{itemize}
+\end{enumerate}
+}
