@@ -1,0 +1,1191 @@
+panel,cores,pair,tumor_reads,count
+a,Tumor-only cores,HCC1954,2,1875393.0
+a,Tumor-only cores,HCC1954,3,282544.0
+a,Tumor-only cores,HCC1954,4,101127.0
+a,Tumor-only cores,HCC1954,5,48864.0
+a,Tumor-only cores,HCC1954,6,28242.0
+a,Tumor-only cores,HCC1954,7,19008.0
+a,Tumor-only cores,HCC1954,8,15948.0
+a,Tumor-only cores,HCC1954,9,14702.0
+a,Tumor-only cores,HCC1954,10,14023.0
+a,Tumor-only cores,HCC1954,11,14136.0
+a,Tumor-only cores,HCC1954,12,13731.0
+a,Tumor-only cores,HCC1954,13,12637.0
+a,Tumor-only cores,HCC1954,14,11863.0
+a,Tumor-only cores,HCC1954,15,10307.0
+a,Tumor-only cores,HCC1954,16,8713.0
+a,Tumor-only cores,HCC1954,17,7272.0
+a,Tumor-only cores,HCC1954,18,6290.0
+a,Tumor-only cores,HCC1954,19,4984.0
+a,Tumor-only cores,HCC1954,20,4320.0
+a,Tumor-only cores,HCC1954,21,3647.0
+a,Tumor-only cores,HCC1954,22,3111.0
+a,Tumor-only cores,HCC1954,23,2937.0
+a,Tumor-only cores,HCC1954,24,2854.0
+a,Tumor-only cores,HCC1954,25,2734.0
+a,Tumor-only cores,HCC1954,26,2637.0
+a,Tumor-only cores,HCC1954,27,2499.0
+a,Tumor-only cores,HCC1954,28,2191.0
+a,Tumor-only cores,HCC1954,29,1993.0
+a,Tumor-only cores,HCC1954,30,1870.0
+a,Tumor-only cores,HCC1954,31,1839.0
+a,Tumor-only cores,HCC1954,32,1568.0
+a,Tumor-only cores,HCC1954,33,1439.0
+a,Tumor-only cores,HCC1954,34,1323.0
+a,Tumor-only cores,HCC1954,35,1250.0
+a,Tumor-only cores,HCC1954,36,1125.0
+a,Tumor-only cores,HCC1954,37,1129.0
+a,Tumor-only cores,HCC1954,38,1108.0
+a,Tumor-only cores,HCC1954,39,1068.0
+a,Tumor-only cores,HCC1954,40,1043.0
+a,Tumor-only cores,HCC1954,41,1052.0
+a,Tumor-only cores,HCC1954,42,912.0
+a,Tumor-only cores,HCC1954,43,915.0
+a,Tumor-only cores,HCC1954,44,656.0
+a,Tumor-only cores,HCC1954,45,647.0
+a,Tumor-only cores,HCC1954,46,661.0
+a,Tumor-only cores,HCC1954,47,639.0
+a,Tumor-only cores,HCC1954,48,581.0
+a,Tumor-only cores,HCC1954,49,624.0
+a,Tumor-only cores,HCC1954,50,564.0
+a,Tumor-only cores,HCC1954,51,563.0
+a,Tumor-only cores,HCC1954,52,551.0
+a,Tumor-only cores,HCC1954,53,524.0
+a,Tumor-only cores,HCC1954,54,528.0
+a,Tumor-only cores,HCC1954,55,478.0
+a,Tumor-only cores,HCC1954,56,393.0
+a,Tumor-only cores,HCC1954,57,391.0
+a,Tumor-only cores,HCC1954,58,360.0
+a,Tumor-only cores,HCC1954,59,334.0
+a,Tumor-only cores,HCC1954,60,361.0
+a,Tumor-only cores,HCC1954,61,322.0
+a,Tumor-only cores,HCC1954,62,255.0
+a,Tumor-only cores,HCC1954,63,231.0
+a,Tumor-only cores,HCC1954,64,155.0
+a,Tumor-only cores,HCC1954,65,164.0
+a,Tumor-only cores,HCC1954,66,153.0
+a,Tumor-only cores,HCC1954,67,123.0
+a,Tumor-only cores,HCC1954,68,116.0
+a,Tumor-only cores,HCC1954,69,112.0
+a,Tumor-only cores,HCC1954,70,105.0
+a,Tumor-only cores,HCC1954,71,96.0
+a,Tumor-only cores,HCC1954,72,110.0
+a,Tumor-only cores,HCC1954,73,115.0
+a,Tumor-only cores,HCC1954,74,93.0
+a,Tumor-only cores,HCC1954,75,107.0
+a,Tumor-only cores,HCC1954,76,97.0
+a,Tumor-only cores,HCC1954,77,85.0
+a,Tumor-only cores,HCC1954,78,73.0
+a,Tumor-only cores,HCC1954,79,44.0
+a,Tumor-only cores,HCC1954,80,57.0
+a,Tumor-only cores,HCC1954,81,42.0
+a,Tumor-only cores,HCC1954,82,56.0
+a,Tumor-only cores,HCC1954,83,34.0
+a,Tumor-only cores,HCC1954,84,28.0
+a,Tumor-only cores,HCC1954,85,18.0
+a,Tumor-only cores,HCC1954,86,21.0
+a,Tumor-only cores,HCC1954,87,17.0
+a,Tumor-only cores,HCC1954,88,24.0
+a,Tumor-only cores,HCC1954,89,38.0
+a,Tumor-only cores,HCC1954,90,37.0
+a,Tumor-only cores,HCC1954,91,36.0
+a,Tumor-only cores,HCC1954,92,37.0
+a,Tumor-only cores,HCC1954,93,48.0
+a,Tumor-only cores,HCC1954,94,24.0
+a,Tumor-only cores,HCC1954,95,25.0
+a,Tumor-only cores,HCC1954,96,33.0
+a,Tumor-only cores,HCC1954,97,27.0
+a,Tumor-only cores,HCC1954,98,15.0
+a,Tumor-only cores,HCC1954,99,14.0
+a,Tumor-only cores,HCC1954,100,11.0
+a,Tumor-only cores,HCC1954,101,9.0
+a,Tumor-only cores,HCC1954,102,7.0
+a,Tumor-only cores,HCC1954,103,9.0
+a,Tumor-only cores,HCC1954,104,11.0
+a,Tumor-only cores,HCC1954,105,10.0
+a,Tumor-only cores,HCC1954,106,6.0
+a,Tumor-only cores,HCC1954,107,16.0
+a,Tumor-only cores,HCC1954,108,3.0
+a,Tumor-only cores,HCC1954,109,11.0
+a,Tumor-only cores,HCC1954,110,7.0
+a,Tumor-only cores,HCC1954,111,8.0
+a,Tumor-only cores,HCC1954,112,9.0
+a,Tumor-only cores,HCC1954,113,6.0
+a,Tumor-only cores,HCC1954,114,16.0
+a,Tumor-only cores,HCC1954,115,11.0
+a,Tumor-only cores,HCC1954,116,4.0
+a,Tumor-only cores,HCC1954,117,8.0
+a,Tumor-only cores,HCC1954,118,7.0
+a,Tumor-only cores,HCC1954,119,5.0
+a,Tumor-only cores,HCC1954,120,7.0
+a,Tumor-only cores,NCI-H2009,2,1845092.0
+a,Tumor-only cores,NCI-H2009,3,323456.0
+a,Tumor-only cores,NCI-H2009,4,129797.0
+a,Tumor-only cores,NCI-H2009,5,67170.0
+a,Tumor-only cores,NCI-H2009,6,38481.0
+a,Tumor-only cores,NCI-H2009,7,23592.0
+a,Tumor-only cores,NCI-H2009,8,15555.0
+a,Tumor-only cores,NCI-H2009,9,10883.0
+a,Tumor-only cores,NCI-H2009,10,8336.0
+a,Tumor-only cores,NCI-H2009,11,7009.0
+a,Tumor-only cores,NCI-H2009,12,6295.0
+a,Tumor-only cores,NCI-H2009,13,6167.0
+a,Tumor-only cores,NCI-H2009,14,6443.0
+a,Tumor-only cores,NCI-H2009,15,7504.0
+a,Tumor-only cores,NCI-H2009,16,8890.0
+a,Tumor-only cores,NCI-H2009,17,10377.0
+a,Tumor-only cores,NCI-H2009,18,12226.0
+a,Tumor-only cores,NCI-H2009,19,14775.0
+a,Tumor-only cores,NCI-H2009,20,17744.0
+a,Tumor-only cores,NCI-H2009,21,20855.0
+a,Tumor-only cores,NCI-H2009,22,23639.0
+a,Tumor-only cores,NCI-H2009,23,26526.0
+a,Tumor-only cores,NCI-H2009,24,27532.0
+a,Tumor-only cores,NCI-H2009,25,29272.0
+a,Tumor-only cores,NCI-H2009,26,30889.0
+a,Tumor-only cores,NCI-H2009,27,29605.0
+a,Tumor-only cores,NCI-H2009,28,29280.0
+a,Tumor-only cores,NCI-H2009,29,28221.0
+a,Tumor-only cores,NCI-H2009,30,25535.0
+a,Tumor-only cores,NCI-H2009,31,22380.0
+a,Tumor-only cores,NCI-H2009,32,20010.0
+a,Tumor-only cores,NCI-H2009,33,17497.0
+a,Tumor-only cores,NCI-H2009,34,15072.0
+a,Tumor-only cores,NCI-H2009,35,12618.0
+a,Tumor-only cores,NCI-H2009,36,11081.0
+a,Tumor-only cores,NCI-H2009,37,9407.0
+a,Tumor-only cores,NCI-H2009,38,8459.0
+a,Tumor-only cores,NCI-H2009,39,7387.0
+a,Tumor-only cores,NCI-H2009,40,6986.0
+a,Tumor-only cores,NCI-H2009,41,6740.0
+a,Tumor-only cores,NCI-H2009,42,6790.0
+a,Tumor-only cores,NCI-H2009,43,7073.0
+a,Tumor-only cores,NCI-H2009,44,7165.0
+a,Tumor-only cores,NCI-H2009,45,7566.0
+a,Tumor-only cores,NCI-H2009,46,8098.0
+a,Tumor-only cores,NCI-H2009,47,9195.0
+a,Tumor-only cores,NCI-H2009,48,9573.0
+a,Tumor-only cores,NCI-H2009,49,10185.0
+a,Tumor-only cores,NCI-H2009,50,10602.0
+a,Tumor-only cores,NCI-H2009,51,11251.0
+a,Tumor-only cores,NCI-H2009,52,11318.0
+a,Tumor-only cores,NCI-H2009,53,11621.0
+a,Tumor-only cores,NCI-H2009,54,11818.0
+a,Tumor-only cores,NCI-H2009,55,11888.0
+a,Tumor-only cores,NCI-H2009,56,11687.0
+a,Tumor-only cores,NCI-H2009,57,11503.0
+a,Tumor-only cores,NCI-H2009,58,11032.0
+a,Tumor-only cores,NCI-H2009,59,10373.0
+a,Tumor-only cores,NCI-H2009,60,9822.0
+a,Tumor-only cores,NCI-H2009,61,9080.0
+a,Tumor-only cores,NCI-H2009,62,8104.0
+a,Tumor-only cores,NCI-H2009,63,7435.0
+a,Tumor-only cores,NCI-H2009,64,6853.0
+a,Tumor-only cores,NCI-H2009,65,6296.0
+a,Tumor-only cores,NCI-H2009,66,5528.0
+a,Tumor-only cores,NCI-H2009,67,4837.0
+a,Tumor-only cores,NCI-H2009,68,4335.0
+a,Tumor-only cores,NCI-H2009,69,3923.0
+a,Tumor-only cores,NCI-H2009,70,3407.0
+a,Tumor-only cores,NCI-H2009,71,2961.0
+a,Tumor-only cores,NCI-H2009,72,2606.0
+a,Tumor-only cores,NCI-H2009,73,2221.0
+a,Tumor-only cores,NCI-H2009,74,1927.0
+a,Tumor-only cores,NCI-H2009,75,1599.0
+a,Tumor-only cores,NCI-H2009,76,1374.0
+a,Tumor-only cores,NCI-H2009,77,1242.0
+a,Tumor-only cores,NCI-H2009,78,1094.0
+a,Tumor-only cores,NCI-H2009,79,917.0
+a,Tumor-only cores,NCI-H2009,80,821.0
+a,Tumor-only cores,NCI-H2009,81,778.0
+a,Tumor-only cores,NCI-H2009,82,739.0
+a,Tumor-only cores,NCI-H2009,83,651.0
+a,Tumor-only cores,NCI-H2009,84,565.0
+a,Tumor-only cores,NCI-H2009,85,470.0
+a,Tumor-only cores,NCI-H2009,86,445.0
+a,Tumor-only cores,NCI-H2009,87,415.0
+a,Tumor-only cores,NCI-H2009,88,426.0
+a,Tumor-only cores,NCI-H2009,89,436.0
+a,Tumor-only cores,NCI-H2009,90,352.0
+a,Tumor-only cores,NCI-H2009,91,300.0
+a,Tumor-only cores,NCI-H2009,92,284.0
+a,Tumor-only cores,NCI-H2009,93,290.0
+a,Tumor-only cores,NCI-H2009,94,217.0
+a,Tumor-only cores,NCI-H2009,95,240.0
+a,Tumor-only cores,NCI-H2009,96,272.0
+a,Tumor-only cores,NCI-H2009,97,238.0
+a,Tumor-only cores,NCI-H2009,98,187.0
+a,Tumor-only cores,NCI-H2009,99,165.0
+a,Tumor-only cores,NCI-H2009,100,160.0
+a,Tumor-only cores,NCI-H2009,101,155.0
+a,Tumor-only cores,NCI-H2009,102,125.0
+a,Tumor-only cores,NCI-H2009,103,130.0
+a,Tumor-only cores,NCI-H2009,104,141.0
+a,Tumor-only cores,NCI-H2009,105,134.0
+a,Tumor-only cores,NCI-H2009,106,152.0
+a,Tumor-only cores,NCI-H2009,107,149.0
+a,Tumor-only cores,NCI-H2009,108,149.0
+a,Tumor-only cores,NCI-H2009,109,158.0
+a,Tumor-only cores,NCI-H2009,110,149.0
+a,Tumor-only cores,NCI-H2009,111,164.0
+a,Tumor-only cores,NCI-H2009,112,180.0
+a,Tumor-only cores,NCI-H2009,113,167.0
+a,Tumor-only cores,NCI-H2009,114,202.0
+a,Tumor-only cores,NCI-H2009,115,171.0
+a,Tumor-only cores,NCI-H2009,116,179.0
+a,Tumor-only cores,NCI-H2009,117,181.0
+a,Tumor-only cores,NCI-H2009,118,179.0
+a,Tumor-only cores,NCI-H2009,119,197.0
+a,Tumor-only cores,NCI-H2009,120,218.0
+a,Tumor-only cores,HCC1937,2,1563216.0
+a,Tumor-only cores,HCC1937,3,261549.0
+a,Tumor-only cores,HCC1937,4,109456.0
+a,Tumor-only cores,HCC1937,5,58034.0
+a,Tumor-only cores,HCC1937,6,33755.0
+a,Tumor-only cores,HCC1937,7,21511.0
+a,Tumor-only cores,HCC1937,8,14118.0
+a,Tumor-only cores,HCC1937,9,10022.0
+a,Tumor-only cores,HCC1937,10,7344.0
+a,Tumor-only cores,HCC1937,11,6484.0
+a,Tumor-only cores,HCC1937,12,5855.0
+a,Tumor-only cores,HCC1937,13,5712.0
+a,Tumor-only cores,HCC1937,14,5899.0
+a,Tumor-only cores,HCC1937,15,6479.0
+a,Tumor-only cores,HCC1937,16,7322.0
+a,Tumor-only cores,HCC1937,17,8544.0
+a,Tumor-only cores,HCC1937,18,10186.0
+a,Tumor-only cores,HCC1937,19,11953.0
+a,Tumor-only cores,HCC1937,20,13396.0
+a,Tumor-only cores,HCC1937,21,15024.0
+a,Tumor-only cores,HCC1937,22,16402.0
+a,Tumor-only cores,HCC1937,23,17756.0
+a,Tumor-only cores,HCC1937,24,17999.0
+a,Tumor-only cores,HCC1937,25,17613.0
+a,Tumor-only cores,HCC1937,26,17606.0
+a,Tumor-only cores,HCC1937,27,17511.0
+a,Tumor-only cores,HCC1937,28,16336.0
+a,Tumor-only cores,HCC1937,29,14869.0
+a,Tumor-only cores,HCC1937,30,13489.0
+a,Tumor-only cores,HCC1937,31,11496.0
+a,Tumor-only cores,HCC1937,32,9577.0
+a,Tumor-only cores,HCC1937,33,7950.0
+a,Tumor-only cores,HCC1937,34,6539.0
+a,Tumor-only cores,HCC1937,35,5372.0
+a,Tumor-only cores,HCC1937,36,4265.0
+a,Tumor-only cores,HCC1937,37,3594.0
+a,Tumor-only cores,HCC1937,38,2940.0
+a,Tumor-only cores,HCC1937,39,2462.0
+a,Tumor-only cores,HCC1937,40,2112.0
+a,Tumor-only cores,HCC1937,41,2002.0
+a,Tumor-only cores,HCC1937,42,1986.0
+a,Tumor-only cores,HCC1937,43,1873.0
+a,Tumor-only cores,HCC1937,44,1877.0
+a,Tumor-only cores,HCC1937,45,1966.0
+a,Tumor-only cores,HCC1937,46,2073.0
+a,Tumor-only cores,HCC1937,47,2130.0
+a,Tumor-only cores,HCC1937,48,2076.0
+a,Tumor-only cores,HCC1937,49,2167.0
+a,Tumor-only cores,HCC1937,50,2127.0
+a,Tumor-only cores,HCC1937,51,2246.0
+a,Tumor-only cores,HCC1937,52,2081.0
+a,Tumor-only cores,HCC1937,53,2087.0
+a,Tumor-only cores,HCC1937,54,2092.0
+a,Tumor-only cores,HCC1937,55,2034.0
+a,Tumor-only cores,HCC1937,56,1821.0
+a,Tumor-only cores,HCC1937,57,1729.0
+a,Tumor-only cores,HCC1937,58,1658.0
+a,Tumor-only cores,HCC1937,59,1462.0
+a,Tumor-only cores,HCC1937,60,1219.0
+a,Tumor-only cores,HCC1937,61,1122.0
+a,Tumor-only cores,HCC1937,62,964.0
+a,Tumor-only cores,HCC1937,63,884.0
+a,Tumor-only cores,HCC1937,64,703.0
+a,Tumor-only cores,HCC1937,65,554.0
+a,Tumor-only cores,HCC1937,66,426.0
+a,Tumor-only cores,HCC1937,67,383.0
+a,Tumor-only cores,HCC1937,68,311.0
+a,Tumor-only cores,HCC1937,69,310.0
+a,Tumor-only cores,HCC1937,70,225.0
+a,Tumor-only cores,HCC1937,71,204.0
+a,Tumor-only cores,HCC1937,72,169.0
+a,Tumor-only cores,HCC1937,73,160.0
+a,Tumor-only cores,HCC1937,74,120.0
+a,Tumor-only cores,HCC1937,75,109.0
+a,Tumor-only cores,HCC1937,76,77.0
+a,Tumor-only cores,HCC1937,77,68.0
+a,Tumor-only cores,HCC1937,78,87.0
+a,Tumor-only cores,HCC1937,79,59.0
+a,Tumor-only cores,HCC1937,80,63.0
+a,Tumor-only cores,HCC1937,81,56.0
+a,Tumor-only cores,HCC1937,82,55.0
+a,Tumor-only cores,HCC1937,83,57.0
+a,Tumor-only cores,HCC1937,84,58.0
+a,Tumor-only cores,HCC1937,85,58.0
+a,Tumor-only cores,HCC1937,86,62.0
+a,Tumor-only cores,HCC1937,87,30.0
+a,Tumor-only cores,HCC1937,88,39.0
+a,Tumor-only cores,HCC1937,89,25.0
+a,Tumor-only cores,HCC1937,90,13.0
+a,Tumor-only cores,HCC1937,91,21.0
+a,Tumor-only cores,HCC1937,92,23.0
+a,Tumor-only cores,HCC1937,93,26.0
+a,Tumor-only cores,HCC1937,94,13.0
+a,Tumor-only cores,HCC1937,95,11.0
+a,Tumor-only cores,HCC1937,96,11.0
+a,Tumor-only cores,HCC1937,97,13.0
+a,Tumor-only cores,HCC1937,98,7.0
+a,Tumor-only cores,HCC1937,99,20.0
+a,Tumor-only cores,HCC1937,100,18.0
+a,Tumor-only cores,HCC1937,101,19.0
+a,Tumor-only cores,HCC1937,102,15.0
+a,Tumor-only cores,HCC1937,103,11.0
+a,Tumor-only cores,HCC1937,104,14.0
+a,Tumor-only cores,HCC1937,105,18.0
+a,Tumor-only cores,HCC1937,106,10.0
+a,Tumor-only cores,HCC1937,107,10.0
+a,Tumor-only cores,HCC1937,108,5.0
+a,Tumor-only cores,HCC1937,109,4.0
+a,Tumor-only cores,HCC1937,110,2.0
+a,Tumor-only cores,HCC1937,111,2.0
+a,Tumor-only cores,HCC1937,112,3.0
+a,Tumor-only cores,HCC1937,113,3.0
+a,Tumor-only cores,HCC1937,114,3.0
+a,Tumor-only cores,HCC1937,115,2.0
+a,Tumor-only cores,HCC1937,116,2.0
+a,Tumor-only cores,HCC1937,117,5.0
+a,Tumor-only cores,HCC1937,118,1.0
+a,Tumor-only cores,HCC1937,119,0.0
+a,Tumor-only cores,HCC1937,120,0.0
+a,Tumor-only cores,NCI-H1437,2,1457865.0
+a,Tumor-only cores,NCI-H1437,3,219482.0
+a,Tumor-only cores,NCI-H1437,4,81120.0
+a,Tumor-only cores,NCI-H1437,5,38388.0
+a,Tumor-only cores,NCI-H1437,6,20750.0
+a,Tumor-only cores,NCI-H1437,7,12537.0
+a,Tumor-only cores,NCI-H1437,8,8746.0
+a,Tumor-only cores,NCI-H1437,9,7119.0
+a,Tumor-only cores,NCI-H1437,10,6252.0
+a,Tumor-only cores,NCI-H1437,11,5862.0
+a,Tumor-only cores,NCI-H1437,12,5708.0
+a,Tumor-only cores,NCI-H1437,13,6538.0
+a,Tumor-only cores,NCI-H1437,14,7898.0
+a,Tumor-only cores,NCI-H1437,15,9174.0
+a,Tumor-only cores,NCI-H1437,16,10528.0
+a,Tumor-only cores,NCI-H1437,17,12571.0
+a,Tumor-only cores,NCI-H1437,18,14253.0
+a,Tumor-only cores,NCI-H1437,19,15666.0
+a,Tumor-only cores,NCI-H1437,20,15967.0
+a,Tumor-only cores,NCI-H1437,21,16576.0
+a,Tumor-only cores,NCI-H1437,22,16899.0
+a,Tumor-only cores,NCI-H1437,23,15809.0
+a,Tumor-only cores,NCI-H1437,24,14708.0
+a,Tumor-only cores,NCI-H1437,25,13401.0
+a,Tumor-only cores,NCI-H1437,26,11854.0
+a,Tumor-only cores,NCI-H1437,27,9847.0
+a,Tumor-only cores,NCI-H1437,28,8533.0
+a,Tumor-only cores,NCI-H1437,29,7387.0
+a,Tumor-only cores,NCI-H1437,30,5880.0
+a,Tumor-only cores,NCI-H1437,31,5021.0
+a,Tumor-only cores,NCI-H1437,32,4524.0
+a,Tumor-only cores,NCI-H1437,33,4292.0
+a,Tumor-only cores,NCI-H1437,34,4185.0
+a,Tumor-only cores,NCI-H1437,35,4352.0
+a,Tumor-only cores,NCI-H1437,36,4690.0
+a,Tumor-only cores,NCI-H1437,37,4933.0
+a,Tumor-only cores,NCI-H1437,38,5325.0
+a,Tumor-only cores,NCI-H1437,39,5902.0
+a,Tumor-only cores,NCI-H1437,40,6252.0
+a,Tumor-only cores,NCI-H1437,41,6691.0
+a,Tumor-only cores,NCI-H1437,42,6905.0
+a,Tumor-only cores,NCI-H1437,43,7169.0
+a,Tumor-only cores,NCI-H1437,44,7126.0
+a,Tumor-only cores,NCI-H1437,45,6913.0
+a,Tumor-only cores,NCI-H1437,46,6858.0
+a,Tumor-only cores,NCI-H1437,47,6707.0
+a,Tumor-only cores,NCI-H1437,48,6425.0
+a,Tumor-only cores,NCI-H1437,49,6211.0
+a,Tumor-only cores,NCI-H1437,50,5663.0
+a,Tumor-only cores,NCI-H1437,51,4869.0
+a,Tumor-only cores,NCI-H1437,52,4649.0
+a,Tumor-only cores,NCI-H1437,53,4025.0
+a,Tumor-only cores,NCI-H1437,54,3463.0
+a,Tumor-only cores,NCI-H1437,55,3096.0
+a,Tumor-only cores,NCI-H1437,56,2643.0
+a,Tumor-only cores,NCI-H1437,57,2295.0
+a,Tumor-only cores,NCI-H1437,58,1981.0
+a,Tumor-only cores,NCI-H1437,59,1724.0
+a,Tumor-only cores,NCI-H1437,60,1417.0
+a,Tumor-only cores,NCI-H1437,61,1230.0
+a,Tumor-only cores,NCI-H1437,62,1180.0
+a,Tumor-only cores,NCI-H1437,63,994.0
+a,Tumor-only cores,NCI-H1437,64,912.0
+a,Tumor-only cores,NCI-H1437,65,824.0
+a,Tumor-only cores,NCI-H1437,66,814.0
+a,Tumor-only cores,NCI-H1437,67,766.0
+a,Tumor-only cores,NCI-H1437,68,766.0
+a,Tumor-only cores,NCI-H1437,69,693.0
+a,Tumor-only cores,NCI-H1437,70,562.0
+a,Tumor-only cores,NCI-H1437,71,540.0
+a,Tumor-only cores,NCI-H1437,72,532.0
+a,Tumor-only cores,NCI-H1437,73,561.0
+a,Tumor-only cores,NCI-H1437,74,489.0
+a,Tumor-only cores,NCI-H1437,75,523.0
+a,Tumor-only cores,NCI-H1437,76,500.0
+a,Tumor-only cores,NCI-H1437,77,412.0
+a,Tumor-only cores,NCI-H1437,78,407.0
+a,Tumor-only cores,NCI-H1437,79,366.0
+a,Tumor-only cores,NCI-H1437,80,324.0
+a,Tumor-only cores,NCI-H1437,81,324.0
+a,Tumor-only cores,NCI-H1437,82,301.0
+a,Tumor-only cores,NCI-H1437,83,281.0
+a,Tumor-only cores,NCI-H1437,84,239.0
+a,Tumor-only cores,NCI-H1437,85,199.0
+a,Tumor-only cores,NCI-H1437,86,216.0
+a,Tumor-only cores,NCI-H1437,87,197.0
+a,Tumor-only cores,NCI-H1437,88,170.0
+a,Tumor-only cores,NCI-H1437,89,157.0
+a,Tumor-only cores,NCI-H1437,90,139.0
+a,Tumor-only cores,NCI-H1437,91,153.0
+a,Tumor-only cores,NCI-H1437,92,181.0
+a,Tumor-only cores,NCI-H1437,93,130.0
+a,Tumor-only cores,NCI-H1437,94,109.0
+a,Tumor-only cores,NCI-H1437,95,126.0
+a,Tumor-only cores,NCI-H1437,96,105.0
+a,Tumor-only cores,NCI-H1437,97,92.0
+a,Tumor-only cores,NCI-H1437,98,96.0
+a,Tumor-only cores,NCI-H1437,99,85.0
+a,Tumor-only cores,NCI-H1437,100,47.0
+a,Tumor-only cores,NCI-H1437,101,57.0
+a,Tumor-only cores,NCI-H1437,102,56.0
+a,Tumor-only cores,NCI-H1437,103,75.0
+a,Tumor-only cores,NCI-H1437,104,63.0
+a,Tumor-only cores,NCI-H1437,105,66.0
+a,Tumor-only cores,NCI-H1437,106,81.0
+a,Tumor-only cores,NCI-H1437,107,93.0
+a,Tumor-only cores,NCI-H1437,108,101.0
+a,Tumor-only cores,NCI-H1437,109,98.0
+a,Tumor-only cores,NCI-H1437,110,86.0
+a,Tumor-only cores,NCI-H1437,111,92.0
+a,Tumor-only cores,NCI-H1437,112,89.0
+a,Tumor-only cores,NCI-H1437,113,73.0
+a,Tumor-only cores,NCI-H1437,114,85.0
+a,Tumor-only cores,NCI-H1437,115,83.0
+a,Tumor-only cores,NCI-H1437,116,74.0
+a,Tumor-only cores,NCI-H1437,117,105.0
+a,Tumor-only cores,NCI-H1437,118,82.0
+a,Tumor-only cores,NCI-H1437,119,93.0
+a,Tumor-only cores,NCI-H1437,120,74.0
+a,Tumor-only cores,HCC1395,2,1205782.0
+a,Tumor-only cores,HCC1395,3,243172.0
+a,Tumor-only cores,HCC1395,4,114165.0
+a,Tumor-only cores,HCC1395,5,66173.0
+a,Tumor-only cores,HCC1395,6,42673.0
+a,Tumor-only cores,HCC1395,7,28923.0
+a,Tumor-only cores,HCC1395,8,20898.0
+a,Tumor-only cores,HCC1395,9,15482.0
+a,Tumor-only cores,HCC1395,10,12078.0
+a,Tumor-only cores,HCC1395,11,10381.0
+a,Tumor-only cores,HCC1395,12,9725.0
+a,Tumor-only cores,HCC1395,13,10336.0
+a,Tumor-only cores,HCC1395,14,11429.0
+a,Tumor-only cores,HCC1395,15,12742.0
+a,Tumor-only cores,HCC1395,16,14229.0
+a,Tumor-only cores,HCC1395,17,16330.0
+a,Tumor-only cores,HCC1395,18,17812.0
+a,Tumor-only cores,HCC1395,19,19210.0
+a,Tumor-only cores,HCC1395,20,20295.0
+a,Tumor-only cores,HCC1395,21,20120.0
+a,Tumor-only cores,HCC1395,22,20868.0
+a,Tumor-only cores,HCC1395,23,19973.0
+a,Tumor-only cores,HCC1395,24,20323.0
+a,Tumor-only cores,HCC1395,25,18851.0
+a,Tumor-only cores,HCC1395,26,18298.0
+a,Tumor-only cores,HCC1395,27,17456.0
+a,Tumor-only cores,HCC1395,28,16446.0
+a,Tumor-only cores,HCC1395,29,16044.0
+a,Tumor-only cores,HCC1395,30,15799.0
+a,Tumor-only cores,HCC1395,31,15152.0
+a,Tumor-only cores,HCC1395,32,15629.0
+a,Tumor-only cores,HCC1395,33,15798.0
+a,Tumor-only cores,HCC1395,34,15752.0
+a,Tumor-only cores,HCC1395,35,16156.0
+a,Tumor-only cores,HCC1395,36,16343.0
+a,Tumor-only cores,HCC1395,37,17151.0
+a,Tumor-only cores,HCC1395,38,18083.0
+a,Tumor-only cores,HCC1395,39,18473.0
+a,Tumor-only cores,HCC1395,40,19078.0
+a,Tumor-only cores,HCC1395,41,19265.0
+a,Tumor-only cores,HCC1395,42,19314.0
+a,Tumor-only cores,HCC1395,43,18871.0
+a,Tumor-only cores,HCC1395,44,18742.0
+a,Tumor-only cores,HCC1395,45,18571.0
+a,Tumor-only cores,HCC1395,46,18333.0
+a,Tumor-only cores,HCC1395,47,18087.0
+a,Tumor-only cores,HCC1395,48,17584.0
+a,Tumor-only cores,HCC1395,49,16921.0
+a,Tumor-only cores,HCC1395,50,16069.0
+a,Tumor-only cores,HCC1395,51,14907.0
+a,Tumor-only cores,HCC1395,52,14265.0
+a,Tumor-only cores,HCC1395,53,13387.0
+a,Tumor-only cores,HCC1395,54,12147.0
+a,Tumor-only cores,HCC1395,55,11013.0
+a,Tumor-only cores,HCC1395,56,10009.0
+a,Tumor-only cores,HCC1395,57,8890.0
+a,Tumor-only cores,HCC1395,58,8045.0
+a,Tumor-only cores,HCC1395,59,7699.0
+a,Tumor-only cores,HCC1395,60,7178.0
+a,Tumor-only cores,HCC1395,61,6278.0
+a,Tumor-only cores,HCC1395,62,5725.0
+a,Tumor-only cores,HCC1395,63,5329.0
+a,Tumor-only cores,HCC1395,64,4534.0
+a,Tumor-only cores,HCC1395,65,4033.0
+a,Tumor-only cores,HCC1395,66,3730.0
+a,Tumor-only cores,HCC1395,67,3335.0
+a,Tumor-only cores,HCC1395,68,2870.0
+a,Tumor-only cores,HCC1395,69,2629.0
+a,Tumor-only cores,HCC1395,70,2165.0
+a,Tumor-only cores,HCC1395,71,2065.0
+a,Tumor-only cores,HCC1395,72,1738.0
+a,Tumor-only cores,HCC1395,73,1530.0
+a,Tumor-only cores,HCC1395,74,1282.0
+a,Tumor-only cores,HCC1395,75,1269.0
+a,Tumor-only cores,HCC1395,76,1072.0
+a,Tumor-only cores,HCC1395,77,988.0
+a,Tumor-only cores,HCC1395,78,982.0
+a,Tumor-only cores,HCC1395,79,932.0
+a,Tumor-only cores,HCC1395,80,861.0
+a,Tumor-only cores,HCC1395,81,712.0
+a,Tumor-only cores,HCC1395,82,691.0
+a,Tumor-only cores,HCC1395,83,613.0
+a,Tumor-only cores,HCC1395,84,558.0
+a,Tumor-only cores,HCC1395,85,570.0
+a,Tumor-only cores,HCC1395,86,564.0
+a,Tumor-only cores,HCC1395,87,510.0
+a,Tumor-only cores,HCC1395,88,533.0
+a,Tumor-only cores,HCC1395,89,561.0
+a,Tumor-only cores,HCC1395,90,539.0
+a,Tumor-only cores,HCC1395,91,519.0
+a,Tumor-only cores,HCC1395,92,551.0
+a,Tumor-only cores,HCC1395,93,493.0
+a,Tumor-only cores,HCC1395,94,441.0
+a,Tumor-only cores,HCC1395,95,307.0
+a,Tumor-only cores,HCC1395,96,290.0
+a,Tumor-only cores,HCC1395,97,286.0
+a,Tumor-only cores,HCC1395,98,244.0
+a,Tumor-only cores,HCC1395,99,222.0
+a,Tumor-only cores,HCC1395,100,222.0
+a,Tumor-only cores,HCC1395,101,187.0
+a,Tumor-only cores,HCC1395,102,164.0
+a,Tumor-only cores,HCC1395,103,153.0
+a,Tumor-only cores,HCC1395,104,179.0
+a,Tumor-only cores,HCC1395,105,157.0
+a,Tumor-only cores,HCC1395,106,159.0
+a,Tumor-only cores,HCC1395,107,100.0
+a,Tumor-only cores,HCC1395,108,130.0
+a,Tumor-only cores,HCC1395,109,120.0
+a,Tumor-only cores,HCC1395,110,93.0
+a,Tumor-only cores,HCC1395,111,121.0
+a,Tumor-only cores,HCC1395,112,116.0
+a,Tumor-only cores,HCC1395,113,89.0
+a,Tumor-only cores,HCC1395,114,84.0
+a,Tumor-only cores,HCC1395,115,99.0
+a,Tumor-only cores,HCC1395,116,89.0
+a,Tumor-only cores,HCC1395,117,86.0
+a,Tumor-only cores,HCC1395,118,74.0
+a,Tumor-only cores,HCC1395,119,78.0
+a,Tumor-only cores,HCC1395,120,57.0
+b,Cores shared with the normal sample,HCC1954,2,210830.0
+b,Cores shared with the normal sample,HCC1954,3,169603.0
+b,Cores shared with the normal sample,HCC1954,4,144691.0
+b,Cores shared with the normal sample,HCC1954,5,131660.0
+b,Cores shared with the normal sample,HCC1954,6,137572.0
+b,Cores shared with the normal sample,HCC1954,7,162908.0
+b,Cores shared with the normal sample,HCC1954,8,210225.0
+b,Cores shared with the normal sample,HCC1954,9,270909.0
+b,Cores shared with the normal sample,HCC1954,10,345153.0
+b,Cores shared with the normal sample,HCC1954,11,410539.0
+b,Cores shared with the normal sample,HCC1954,12,463382.0
+b,Cores shared with the normal sample,HCC1954,13,489934.0
+b,Cores shared with the normal sample,HCC1954,14,495923.0
+b,Cores shared with the normal sample,HCC1954,15,483609.0
+b,Cores shared with the normal sample,HCC1954,16,464990.0
+b,Cores shared with the normal sample,HCC1954,17,444974.0
+b,Cores shared with the normal sample,HCC1954,18,427707.0
+b,Cores shared with the normal sample,HCC1954,19,420434.0
+b,Cores shared with the normal sample,HCC1954,20,423423.0
+b,Cores shared with the normal sample,HCC1954,21,439010.0
+b,Cores shared with the normal sample,HCC1954,22,464984.0
+b,Cores shared with the normal sample,HCC1954,23,494901.0
+b,Cores shared with the normal sample,HCC1954,24,531285.0
+b,Cores shared with the normal sample,HCC1954,25,562934.0
+b,Cores shared with the normal sample,HCC1954,26,590273.0
+b,Cores shared with the normal sample,HCC1954,27,614019.0
+b,Cores shared with the normal sample,HCC1954,28,631538.0
+b,Cores shared with the normal sample,HCC1954,29,641160.0
+b,Cores shared with the normal sample,HCC1954,30,653399.0
+b,Cores shared with the normal sample,HCC1954,31,661742.0
+b,Cores shared with the normal sample,HCC1954,32,680562.0
+b,Cores shared with the normal sample,HCC1954,33,701141.0
+b,Cores shared with the normal sample,HCC1954,34,730250.0
+b,Cores shared with the normal sample,HCC1954,35,767665.0
+b,Cores shared with the normal sample,HCC1954,36,811645.0
+b,Cores shared with the normal sample,HCC1954,37,864833.0
+b,Cores shared with the normal sample,HCC1954,38,918672.0
+b,Cores shared with the normal sample,HCC1954,39,975298.0
+b,Cores shared with the normal sample,HCC1954,40,1033390.0
+b,Cores shared with the normal sample,HCC1954,41,1089442.0
+b,Cores shared with the normal sample,HCC1954,42,1142813.0
+b,Cores shared with the normal sample,HCC1954,43,1192690.0
+b,Cores shared with the normal sample,HCC1954,44,1238515.0
+b,Cores shared with the normal sample,HCC1954,45,1277636.0
+b,Cores shared with the normal sample,HCC1954,46,1313531.0
+b,Cores shared with the normal sample,HCC1954,47,1347105.0
+b,Cores shared with the normal sample,HCC1954,48,1379526.0
+b,Cores shared with the normal sample,HCC1954,49,1402762.0
+b,Cores shared with the normal sample,HCC1954,50,1421694.0
+b,Cores shared with the normal sample,HCC1954,51,1431189.0
+b,Cores shared with the normal sample,HCC1954,52,1431995.0
+b,Cores shared with the normal sample,HCC1954,53,1428424.0
+b,Cores shared with the normal sample,HCC1954,54,1414333.0
+b,Cores shared with the normal sample,HCC1954,55,1390419.0
+b,Cores shared with the normal sample,HCC1954,56,1364202.0
+b,Cores shared with the normal sample,HCC1954,57,1326351.0
+b,Cores shared with the normal sample,HCC1954,58,1283519.0
+b,Cores shared with the normal sample,HCC1954,59,1237599.0
+b,Cores shared with the normal sample,HCC1954,60,1191198.0
+b,Cores shared with the normal sample,HCC1954,61,1139099.0
+b,Cores shared with the normal sample,HCC1954,62,1084667.0
+b,Cores shared with the normal sample,HCC1954,63,1026687.0
+b,Cores shared with the normal sample,HCC1954,64,972481.0
+b,Cores shared with the normal sample,HCC1954,65,916949.0
+b,Cores shared with the normal sample,HCC1954,66,862733.0
+b,Cores shared with the normal sample,HCC1954,67,810945.0
+b,Cores shared with the normal sample,HCC1954,68,766288.0
+b,Cores shared with the normal sample,HCC1954,69,721589.0
+b,Cores shared with the normal sample,HCC1954,70,678987.0
+b,Cores shared with the normal sample,HCC1954,71,641458.0
+b,Cores shared with the normal sample,HCC1954,72,605216.0
+b,Cores shared with the normal sample,HCC1954,73,571637.0
+b,Cores shared with the normal sample,HCC1954,74,537227.0
+b,Cores shared with the normal sample,HCC1954,75,506877.0
+b,Cores shared with the normal sample,HCC1954,76,476278.0
+b,Cores shared with the normal sample,HCC1954,77,448372.0
+b,Cores shared with the normal sample,HCC1954,78,419070.0
+b,Cores shared with the normal sample,HCC1954,79,393391.0
+b,Cores shared with the normal sample,HCC1954,80,367476.0
+b,Cores shared with the normal sample,HCC1954,81,341347.0
+b,Cores shared with the normal sample,HCC1954,82,319752.0
+b,Cores shared with the normal sample,HCC1954,83,300435.0
+b,Cores shared with the normal sample,HCC1954,84,281151.0
+b,Cores shared with the normal sample,HCC1954,85,264290.0
+b,Cores shared with the normal sample,HCC1954,86,248691.0
+b,Cores shared with the normal sample,HCC1954,87,232903.0
+b,Cores shared with the normal sample,HCC1954,88,219911.0
+b,Cores shared with the normal sample,HCC1954,89,209170.0
+b,Cores shared with the normal sample,HCC1954,90,195820.0
+b,Cores shared with the normal sample,HCC1954,91,184970.0
+b,Cores shared with the normal sample,HCC1954,92,172683.0
+b,Cores shared with the normal sample,HCC1954,93,164151.0
+b,Cores shared with the normal sample,HCC1954,94,153623.0
+b,Cores shared with the normal sample,HCC1954,95,144972.0
+b,Cores shared with the normal sample,HCC1954,96,137715.0
+b,Cores shared with the normal sample,HCC1954,97,130265.0
+b,Cores shared with the normal sample,HCC1954,98,123197.0
+b,Cores shared with the normal sample,HCC1954,99,116844.0
+b,Cores shared with the normal sample,HCC1954,100,110759.0
+b,Cores shared with the normal sample,HCC1954,101,105629.0
+b,Cores shared with the normal sample,HCC1954,102,100191.0
+b,Cores shared with the normal sample,HCC1954,103,95099.0
+b,Cores shared with the normal sample,HCC1954,104,90573.0
+b,Cores shared with the normal sample,HCC1954,105,86572.0
+b,Cores shared with the normal sample,HCC1954,106,81662.0
+b,Cores shared with the normal sample,HCC1954,107,77939.0
+b,Cores shared with the normal sample,HCC1954,108,74169.0
+b,Cores shared with the normal sample,HCC1954,109,70167.0
+b,Cores shared with the normal sample,HCC1954,110,66859.0
+b,Cores shared with the normal sample,HCC1954,111,62662.0
+b,Cores shared with the normal sample,HCC1954,112,59831.0
+b,Cores shared with the normal sample,HCC1954,113,56313.0
+b,Cores shared with the normal sample,HCC1954,114,52654.0
+b,Cores shared with the normal sample,HCC1954,115,50214.0
+b,Cores shared with the normal sample,HCC1954,116,47269.0
+b,Cores shared with the normal sample,HCC1954,117,44732.0
+b,Cores shared with the normal sample,HCC1954,118,42894.0
+b,Cores shared with the normal sample,HCC1954,119,39769.0
+b,Cores shared with the normal sample,HCC1954,120,38513.0
+b,Cores shared with the normal sample,NCI-H2009,2,429297.0
+b,Cores shared with the normal sample,NCI-H2009,3,268984.0
+b,Cores shared with the normal sample,NCI-H2009,4,170235.0
+b,Cores shared with the normal sample,NCI-H2009,5,119837.0
+b,Cores shared with the normal sample,NCI-H2009,6,92300.0
+b,Cores shared with the normal sample,NCI-H2009,7,74612.0
+b,Cores shared with the normal sample,NCI-H2009,8,64421.0
+b,Cores shared with the normal sample,NCI-H2009,9,60299.0
+b,Cores shared with the normal sample,NCI-H2009,10,57611.0
+b,Cores shared with the normal sample,NCI-H2009,11,59065.0
+b,Cores shared with the normal sample,NCI-H2009,12,61867.0
+b,Cores shared with the normal sample,NCI-H2009,13,70894.0
+b,Cores shared with the normal sample,NCI-H2009,14,84035.0
+b,Cores shared with the normal sample,NCI-H2009,15,101772.0
+b,Cores shared with the normal sample,NCI-H2009,16,126061.0
+b,Cores shared with the normal sample,NCI-H2009,17,158943.0
+b,Cores shared with the normal sample,NCI-H2009,18,205571.0
+b,Cores shared with the normal sample,NCI-H2009,19,259560.0
+b,Cores shared with the normal sample,NCI-H2009,20,317688.0
+b,Cores shared with the normal sample,NCI-H2009,21,384609.0
+b,Cores shared with the normal sample,NCI-H2009,22,453196.0
+b,Cores shared with the normal sample,NCI-H2009,23,520879.0
+b,Cores shared with the normal sample,NCI-H2009,24,579999.0
+b,Cores shared with the normal sample,NCI-H2009,25,629286.0
+b,Cores shared with the normal sample,NCI-H2009,26,658262.0
+b,Cores shared with the normal sample,NCI-H2009,27,676387.0
+b,Cores shared with the normal sample,NCI-H2009,28,681150.0
+b,Cores shared with the normal sample,NCI-H2009,29,664564.0
+b,Cores shared with the normal sample,NCI-H2009,30,635606.0
+b,Cores shared with the normal sample,NCI-H2009,31,604674.0
+b,Cores shared with the normal sample,NCI-H2009,32,563638.0
+b,Cores shared with the normal sample,NCI-H2009,33,525573.0
+b,Cores shared with the normal sample,NCI-H2009,34,492983.0
+b,Cores shared with the normal sample,NCI-H2009,35,468578.0
+b,Cores shared with the normal sample,NCI-H2009,36,452749.0
+b,Cores shared with the normal sample,NCI-H2009,37,448333.0
+b,Cores shared with the normal sample,NCI-H2009,38,460506.0
+b,Cores shared with the normal sample,NCI-H2009,39,486849.0
+b,Cores shared with the normal sample,NCI-H2009,40,527401.0
+b,Cores shared with the normal sample,NCI-H2009,41,582836.0
+b,Cores shared with the normal sample,NCI-H2009,42,655598.0
+b,Cores shared with the normal sample,NCI-H2009,43,729589.0
+b,Cores shared with the normal sample,NCI-H2009,44,821633.0
+b,Cores shared with the normal sample,NCI-H2009,45,921359.0
+b,Cores shared with the normal sample,NCI-H2009,46,1024588.0
+b,Cores shared with the normal sample,NCI-H2009,47,1133409.0
+b,Cores shared with the normal sample,NCI-H2009,48,1238087.0
+b,Cores shared with the normal sample,NCI-H2009,49,1338218.0
+b,Cores shared with the normal sample,NCI-H2009,50,1425949.0
+b,Cores shared with the normal sample,NCI-H2009,51,1505731.0
+b,Cores shared with the normal sample,NCI-H2009,52,1560700.0
+b,Cores shared with the normal sample,NCI-H2009,53,1608014.0
+b,Cores shared with the normal sample,NCI-H2009,54,1634839.0
+b,Cores shared with the normal sample,NCI-H2009,55,1645697.0
+b,Cores shared with the normal sample,NCI-H2009,56,1638679.0
+b,Cores shared with the normal sample,NCI-H2009,57,1605971.0
+b,Cores shared with the normal sample,NCI-H2009,58,1556073.0
+b,Cores shared with the normal sample,NCI-H2009,59,1499421.0
+b,Cores shared with the normal sample,NCI-H2009,60,1431553.0
+b,Cores shared with the normal sample,NCI-H2009,61,1350928.0
+b,Cores shared with the normal sample,NCI-H2009,62,1269974.0
+b,Cores shared with the normal sample,NCI-H2009,63,1179039.0
+b,Cores shared with the normal sample,NCI-H2009,64,1093793.0
+b,Cores shared with the normal sample,NCI-H2009,65,1009572.0
+b,Cores shared with the normal sample,NCI-H2009,66,930913.0
+b,Cores shared with the normal sample,NCI-H2009,67,852528.0
+b,Cores shared with the normal sample,NCI-H2009,68,787433.0
+b,Cores shared with the normal sample,NCI-H2009,69,729244.0
+b,Cores shared with the normal sample,NCI-H2009,70,677567.0
+b,Cores shared with the normal sample,NCI-H2009,71,632100.0
+b,Cores shared with the normal sample,NCI-H2009,72,597820.0
+b,Cores shared with the normal sample,NCI-H2009,73,567349.0
+b,Cores shared with the normal sample,NCI-H2009,74,544049.0
+b,Cores shared with the normal sample,NCI-H2009,75,525809.0
+b,Cores shared with the normal sample,NCI-H2009,76,509652.0
+b,Cores shared with the normal sample,NCI-H2009,77,500462.0
+b,Cores shared with the normal sample,NCI-H2009,78,492106.0
+b,Cores shared with the normal sample,NCI-H2009,79,486482.0
+b,Cores shared with the normal sample,NCI-H2009,80,479287.0
+b,Cores shared with the normal sample,NCI-H2009,81,471330.0
+b,Cores shared with the normal sample,NCI-H2009,82,462936.0
+b,Cores shared with the normal sample,NCI-H2009,83,454462.0
+b,Cores shared with the normal sample,NCI-H2009,84,446945.0
+b,Cores shared with the normal sample,NCI-H2009,85,433957.0
+b,Cores shared with the normal sample,NCI-H2009,86,419179.0
+b,Cores shared with the normal sample,NCI-H2009,87,403822.0
+b,Cores shared with the normal sample,NCI-H2009,88,386137.0
+b,Cores shared with the normal sample,NCI-H2009,89,367417.0
+b,Cores shared with the normal sample,NCI-H2009,90,347771.0
+b,Cores shared with the normal sample,NCI-H2009,91,328945.0
+b,Cores shared with the normal sample,NCI-H2009,92,309318.0
+b,Cores shared with the normal sample,NCI-H2009,93,289146.0
+b,Cores shared with the normal sample,NCI-H2009,94,269069.0
+b,Cores shared with the normal sample,NCI-H2009,95,250134.0
+b,Cores shared with the normal sample,NCI-H2009,96,231031.0
+b,Cores shared with the normal sample,NCI-H2009,97,212351.0
+b,Cores shared with the normal sample,NCI-H2009,98,193721.0
+b,Cores shared with the normal sample,NCI-H2009,99,177669.0
+b,Cores shared with the normal sample,NCI-H2009,100,163309.0
+b,Cores shared with the normal sample,NCI-H2009,101,150649.0
+b,Cores shared with the normal sample,NCI-H2009,102,138513.0
+b,Cores shared with the normal sample,NCI-H2009,103,127633.0
+b,Cores shared with the normal sample,NCI-H2009,104,117457.0
+b,Cores shared with the normal sample,NCI-H2009,105,107559.0
+b,Cores shared with the normal sample,NCI-H2009,106,100479.0
+b,Cores shared with the normal sample,NCI-H2009,107,93477.0
+b,Cores shared with the normal sample,NCI-H2009,108,86484.0
+b,Cores shared with the normal sample,NCI-H2009,109,79745.0
+b,Cores shared with the normal sample,NCI-H2009,110,75198.0
+b,Cores shared with the normal sample,NCI-H2009,111,69798.0
+b,Cores shared with the normal sample,NCI-H2009,112,65988.0
+b,Cores shared with the normal sample,NCI-H2009,113,62190.0
+b,Cores shared with the normal sample,NCI-H2009,114,59891.0
+b,Cores shared with the normal sample,NCI-H2009,115,57392.0
+b,Cores shared with the normal sample,NCI-H2009,116,54684.0
+b,Cores shared with the normal sample,NCI-H2009,117,52261.0
+b,Cores shared with the normal sample,NCI-H2009,118,50602.0
+b,Cores shared with the normal sample,NCI-H2009,119,48925.0
+b,Cores shared with the normal sample,NCI-H2009,120,47129.0
+b,Cores shared with the normal sample,HCC1937,2,157816.0
+b,Cores shared with the normal sample,HCC1937,3,121186.0
+b,Cores shared with the normal sample,HCC1937,4,97377.0
+b,Cores shared with the normal sample,HCC1937,5,80755.0
+b,Cores shared with the normal sample,HCC1937,6,71770.0
+b,Cores shared with the normal sample,HCC1937,7,71791.0
+b,Cores shared with the normal sample,HCC1937,8,81027.0
+b,Cores shared with the normal sample,HCC1937,9,100143.0
+b,Cores shared with the normal sample,HCC1937,10,127707.0
+b,Cores shared with the normal sample,HCC1937,11,158353.0
+b,Cores shared with the normal sample,HCC1937,12,196260.0
+b,Cores shared with the normal sample,HCC1937,13,232242.0
+b,Cores shared with the normal sample,HCC1937,14,261695.0
+b,Cores shared with the normal sample,HCC1937,15,289276.0
+b,Cores shared with the normal sample,HCC1937,16,308331.0
+b,Cores shared with the normal sample,HCC1937,17,323498.0
+b,Cores shared with the normal sample,HCC1937,18,338128.0
+b,Cores shared with the normal sample,HCC1937,19,352392.0
+b,Cores shared with the normal sample,HCC1937,20,371032.0
+b,Cores shared with the normal sample,HCC1937,21,399320.0
+b,Cores shared with the normal sample,HCC1937,22,431188.0
+b,Cores shared with the normal sample,HCC1937,23,474009.0
+b,Cores shared with the normal sample,HCC1937,24,515537.0
+b,Cores shared with the normal sample,HCC1937,25,555039.0
+b,Cores shared with the normal sample,HCC1937,26,596846.0
+b,Cores shared with the normal sample,HCC1937,27,634140.0
+b,Cores shared with the normal sample,HCC1937,28,660519.0
+b,Cores shared with the normal sample,HCC1937,29,681479.0
+b,Cores shared with the normal sample,HCC1937,30,699615.0
+b,Cores shared with the normal sample,HCC1937,31,716610.0
+b,Cores shared with the normal sample,HCC1937,32,728843.0
+b,Cores shared with the normal sample,HCC1937,33,742025.0
+b,Cores shared with the normal sample,HCC1937,34,758774.0
+b,Cores shared with the normal sample,HCC1937,35,779898.0
+b,Cores shared with the normal sample,HCC1937,36,806628.0
+b,Cores shared with the normal sample,HCC1937,37,836150.0
+b,Cores shared with the normal sample,HCC1937,38,870639.0
+b,Cores shared with the normal sample,HCC1937,39,908940.0
+b,Cores shared with the normal sample,HCC1937,40,952823.0
+b,Cores shared with the normal sample,HCC1937,41,996702.0
+b,Cores shared with the normal sample,HCC1937,42,1037789.0
+b,Cores shared with the normal sample,HCC1937,43,1075031.0
+b,Cores shared with the normal sample,HCC1937,44,1108951.0
+b,Cores shared with the normal sample,HCC1937,45,1136451.0
+b,Cores shared with the normal sample,HCC1937,46,1159227.0
+b,Cores shared with the normal sample,HCC1937,47,1176541.0
+b,Cores shared with the normal sample,HCC1937,48,1190969.0
+b,Cores shared with the normal sample,HCC1937,49,1201140.0
+b,Cores shared with the normal sample,HCC1937,50,1202184.0
+b,Cores shared with the normal sample,HCC1937,51,1200166.0
+b,Cores shared with the normal sample,HCC1937,52,1192389.0
+b,Cores shared with the normal sample,HCC1937,53,1181433.0
+b,Cores shared with the normal sample,HCC1937,54,1163748.0
+b,Cores shared with the normal sample,HCC1937,55,1142495.0
+b,Cores shared with the normal sample,HCC1937,56,1119065.0
+b,Cores shared with the normal sample,HCC1937,57,1091185.0
+b,Cores shared with the normal sample,HCC1937,58,1055060.0
+b,Cores shared with the normal sample,HCC1937,59,1021096.0
+b,Cores shared with the normal sample,HCC1937,60,983891.0
+b,Cores shared with the normal sample,HCC1937,61,945973.0
+b,Cores shared with the normal sample,HCC1937,62,906431.0
+b,Cores shared with the normal sample,HCC1937,63,865433.0
+b,Cores shared with the normal sample,HCC1937,64,823926.0
+b,Cores shared with the normal sample,HCC1937,65,783812.0
+b,Cores shared with the normal sample,HCC1937,66,743924.0
+b,Cores shared with the normal sample,HCC1937,67,710559.0
+b,Cores shared with the normal sample,HCC1937,68,676832.0
+b,Cores shared with the normal sample,HCC1937,69,646006.0
+b,Cores shared with the normal sample,HCC1937,70,620187.0
+b,Cores shared with the normal sample,HCC1937,71,594846.0
+b,Cores shared with the normal sample,HCC1937,72,575182.0
+b,Cores shared with the normal sample,HCC1937,73,555131.0
+b,Cores shared with the normal sample,HCC1937,74,536339.0
+b,Cores shared with the normal sample,HCC1937,75,519180.0
+b,Cores shared with the normal sample,HCC1937,76,503725.0
+b,Cores shared with the normal sample,HCC1937,77,485996.0
+b,Cores shared with the normal sample,HCC1937,78,473683.0
+b,Cores shared with the normal sample,HCC1937,79,457217.0
+b,Cores shared with the normal sample,HCC1937,80,444422.0
+b,Cores shared with the normal sample,HCC1937,81,431180.0
+b,Cores shared with the normal sample,HCC1937,82,413953.0
+b,Cores shared with the normal sample,HCC1937,83,398023.0
+b,Cores shared with the normal sample,HCC1937,84,380540.0
+b,Cores shared with the normal sample,HCC1937,85,364110.0
+b,Cores shared with the normal sample,HCC1937,86,348320.0
+b,Cores shared with the normal sample,HCC1937,87,332825.0
+b,Cores shared with the normal sample,HCC1937,88,317213.0
+b,Cores shared with the normal sample,HCC1937,89,302027.0
+b,Cores shared with the normal sample,HCC1937,90,285388.0
+b,Cores shared with the normal sample,HCC1937,91,269602.0
+b,Cores shared with the normal sample,HCC1937,92,253319.0
+b,Cores shared with the normal sample,HCC1937,93,236979.0
+b,Cores shared with the normal sample,HCC1937,94,222160.0
+b,Cores shared with the normal sample,HCC1937,95,209608.0
+b,Cores shared with the normal sample,HCC1937,96,196496.0
+b,Cores shared with the normal sample,HCC1937,97,185904.0
+b,Cores shared with the normal sample,HCC1937,98,173940.0
+b,Cores shared with the normal sample,HCC1937,99,163343.0
+b,Cores shared with the normal sample,HCC1937,100,154178.0
+b,Cores shared with the normal sample,HCC1937,101,145544.0
+b,Cores shared with the normal sample,HCC1937,102,138732.0
+b,Cores shared with the normal sample,HCC1937,103,132203.0
+b,Cores shared with the normal sample,HCC1937,104,126412.0
+b,Cores shared with the normal sample,HCC1937,105,121782.0
+b,Cores shared with the normal sample,HCC1937,106,117908.0
+b,Cores shared with the normal sample,HCC1937,107,115054.0
+b,Cores shared with the normal sample,HCC1937,108,111446.0
+b,Cores shared with the normal sample,HCC1937,109,108804.0
+b,Cores shared with the normal sample,HCC1937,110,106936.0
+b,Cores shared with the normal sample,HCC1937,111,105019.0
+b,Cores shared with the normal sample,HCC1937,112,103106.0
+b,Cores shared with the normal sample,HCC1937,113,102630.0
+b,Cores shared with the normal sample,HCC1937,114,101796.0
+b,Cores shared with the normal sample,HCC1937,115,99276.0
+b,Cores shared with the normal sample,HCC1937,116,97091.0
+b,Cores shared with the normal sample,HCC1937,117,94989.0
+b,Cores shared with the normal sample,HCC1937,118,92534.0
+b,Cores shared with the normal sample,HCC1937,119,90019.0
+b,Cores shared with the normal sample,HCC1937,120,88289.0
+b,Cores shared with the normal sample,NCI-H1437,2,208147.0
+b,Cores shared with the normal sample,NCI-H1437,3,156708.0
+b,Cores shared with the normal sample,NCI-H1437,4,126470.0
+b,Cores shared with the normal sample,NCI-H1437,5,110980.0
+b,Cores shared with the normal sample,NCI-H1437,6,105509.0
+b,Cores shared with the normal sample,NCI-H1437,7,99086.0
+b,Cores shared with the normal sample,NCI-H1437,8,97401.0
+b,Cores shared with the normal sample,NCI-H1437,9,95129.0
+b,Cores shared with the normal sample,NCI-H1437,10,90132.0
+b,Cores shared with the normal sample,NCI-H1437,11,89221.0
+b,Cores shared with the normal sample,NCI-H1437,12,93141.0
+b,Cores shared with the normal sample,NCI-H1437,13,106639.0
+b,Cores shared with the normal sample,NCI-H1437,14,125165.0
+b,Cores shared with the normal sample,NCI-H1437,15,154848.0
+b,Cores shared with the normal sample,NCI-H1437,16,187088.0
+b,Cores shared with the normal sample,NCI-H1437,17,222814.0
+b,Cores shared with the normal sample,NCI-H1437,18,259977.0
+b,Cores shared with the normal sample,NCI-H1437,19,290670.0
+b,Cores shared with the normal sample,NCI-H1437,20,317629.0
+b,Cores shared with the normal sample,NCI-H1437,21,335803.0
+b,Cores shared with the normal sample,NCI-H1437,22,343763.0
+b,Cores shared with the normal sample,NCI-H1437,23,340414.0
+b,Cores shared with the normal sample,NCI-H1437,24,332064.0
+b,Cores shared with the normal sample,NCI-H1437,25,321400.0
+b,Cores shared with the normal sample,NCI-H1437,26,311615.0
+b,Cores shared with the normal sample,NCI-H1437,27,305789.0
+b,Cores shared with the normal sample,NCI-H1437,28,305362.0
+b,Cores shared with the normal sample,NCI-H1437,29,314421.0
+b,Cores shared with the normal sample,NCI-H1437,30,337689.0
+b,Cores shared with the normal sample,NCI-H1437,31,376368.0
+b,Cores shared with the normal sample,NCI-H1437,32,430827.0
+b,Cores shared with the normal sample,NCI-H1437,33,498108.0
+b,Cores shared with the normal sample,NCI-H1437,34,580388.0
+b,Cores shared with the normal sample,NCI-H1437,35,676703.0
+b,Cores shared with the normal sample,NCI-H1437,36,781177.0
+b,Cores shared with the normal sample,NCI-H1437,37,891274.0
+b,Cores shared with the normal sample,NCI-H1437,38,1005892.0
+b,Cores shared with the normal sample,NCI-H1437,39,1115521.0
+b,Cores shared with the normal sample,NCI-H1437,40,1220784.0
+b,Cores shared with the normal sample,NCI-H1437,41,1317869.0
+b,Cores shared with the normal sample,NCI-H1437,42,1398292.0
+b,Cores shared with the normal sample,NCI-H1437,43,1461216.0
+b,Cores shared with the normal sample,NCI-H1437,44,1500072.0
+b,Cores shared with the normal sample,NCI-H1437,45,1520814.0
+b,Cores shared with the normal sample,NCI-H1437,46,1518709.0
+b,Cores shared with the normal sample,NCI-H1437,47,1497601.0
+b,Cores shared with the normal sample,NCI-H1437,48,1456928.0
+b,Cores shared with the normal sample,NCI-H1437,49,1408878.0
+b,Cores shared with the normal sample,NCI-H1437,50,1348297.0
+b,Cores shared with the normal sample,NCI-H1437,51,1284183.0
+b,Cores shared with the normal sample,NCI-H1437,52,1214260.0
+b,Cores shared with the normal sample,NCI-H1437,53,1143711.0
+b,Cores shared with the normal sample,NCI-H1437,54,1087718.0
+b,Cores shared with the normal sample,NCI-H1437,55,1033058.0
+b,Cores shared with the normal sample,NCI-H1437,56,984647.0
+b,Cores shared with the normal sample,NCI-H1437,57,949953.0
+b,Cores shared with the normal sample,NCI-H1437,58,923217.0
+b,Cores shared with the normal sample,NCI-H1437,59,905933.0
+b,Cores shared with the normal sample,NCI-H1437,60,897315.0
+b,Cores shared with the normal sample,NCI-H1437,61,893022.0
+b,Cores shared with the normal sample,NCI-H1437,62,895045.0
+b,Cores shared with the normal sample,NCI-H1437,63,899230.0
+b,Cores shared with the normal sample,NCI-H1437,64,906985.0
+b,Cores shared with the normal sample,NCI-H1437,65,910934.0
+b,Cores shared with the normal sample,NCI-H1437,66,914790.0
+b,Cores shared with the normal sample,NCI-H1437,67,911160.0
+b,Cores shared with the normal sample,NCI-H1437,68,904096.0
+b,Cores shared with the normal sample,NCI-H1437,69,893861.0
+b,Cores shared with the normal sample,NCI-H1437,70,875360.0
+b,Cores shared with the normal sample,NCI-H1437,71,855492.0
+b,Cores shared with the normal sample,NCI-H1437,72,833256.0
+b,Cores shared with the normal sample,NCI-H1437,73,805184.0
+b,Cores shared with the normal sample,NCI-H1437,74,776482.0
+b,Cores shared with the normal sample,NCI-H1437,75,747075.0
+b,Cores shared with the normal sample,NCI-H1437,76,716967.0
+b,Cores shared with the normal sample,NCI-H1437,77,683636.0
+b,Cores shared with the normal sample,NCI-H1437,78,649581.0
+b,Cores shared with the normal sample,NCI-H1437,79,619740.0
+b,Cores shared with the normal sample,NCI-H1437,80,589659.0
+b,Cores shared with the normal sample,NCI-H1437,81,559955.0
+b,Cores shared with the normal sample,NCI-H1437,82,528656.0
+b,Cores shared with the normal sample,NCI-H1437,83,499445.0
+b,Cores shared with the normal sample,NCI-H1437,84,471071.0
+b,Cores shared with the normal sample,NCI-H1437,85,444451.0
+b,Cores shared with the normal sample,NCI-H1437,86,420930.0
+b,Cores shared with the normal sample,NCI-H1437,87,397402.0
+b,Cores shared with the normal sample,NCI-H1437,88,375942.0
+b,Cores shared with the normal sample,NCI-H1437,89,354822.0
+b,Cores shared with the normal sample,NCI-H1437,90,336640.0
+b,Cores shared with the normal sample,NCI-H1437,91,316599.0
+b,Cores shared with the normal sample,NCI-H1437,92,298430.0
+b,Cores shared with the normal sample,NCI-H1437,93,282116.0
+b,Cores shared with the normal sample,NCI-H1437,94,267130.0
+b,Cores shared with the normal sample,NCI-H1437,95,250963.0
+b,Cores shared with the normal sample,NCI-H1437,96,234576.0
+b,Cores shared with the normal sample,NCI-H1437,97,220706.0
+b,Cores shared with the normal sample,NCI-H1437,98,207436.0
+b,Cores shared with the normal sample,NCI-H1437,99,194380.0
+b,Cores shared with the normal sample,NCI-H1437,100,182382.0
+b,Cores shared with the normal sample,NCI-H1437,101,171833.0
+b,Cores shared with the normal sample,NCI-H1437,102,161351.0
+b,Cores shared with the normal sample,NCI-H1437,103,151096.0
+b,Cores shared with the normal sample,NCI-H1437,104,141808.0
+b,Cores shared with the normal sample,NCI-H1437,105,133641.0
+b,Cores shared with the normal sample,NCI-H1437,106,125543.0
+b,Cores shared with the normal sample,NCI-H1437,107,117212.0
+b,Cores shared with the normal sample,NCI-H1437,108,110509.0
+b,Cores shared with the normal sample,NCI-H1437,109,103295.0
+b,Cores shared with the normal sample,NCI-H1437,110,97790.0
+b,Cores shared with the normal sample,NCI-H1437,111,92688.0
+b,Cores shared with the normal sample,NCI-H1437,112,88741.0
+b,Cores shared with the normal sample,NCI-H1437,113,83579.0
+b,Cores shared with the normal sample,NCI-H1437,114,79541.0
+b,Cores shared with the normal sample,NCI-H1437,115,75310.0
+b,Cores shared with the normal sample,NCI-H1437,116,71272.0
+b,Cores shared with the normal sample,NCI-H1437,117,67024.0
+b,Cores shared with the normal sample,NCI-H1437,118,63243.0
+b,Cores shared with the normal sample,NCI-H1437,119,59967.0
+b,Cores shared with the normal sample,NCI-H1437,120,55932.0
+b,Cores shared with the normal sample,HCC1395,2,72377.0
+b,Cores shared with the normal sample,HCC1395,3,68793.0
+b,Cores shared with the normal sample,HCC1395,4,68076.0
+b,Cores shared with the normal sample,HCC1395,5,69662.0
+b,Cores shared with the normal sample,HCC1395,6,68550.0
+b,Cores shared with the normal sample,HCC1395,7,70450.0
+b,Cores shared with the normal sample,HCC1395,8,76774.0
+b,Cores shared with the normal sample,HCC1395,9,86320.0
+b,Cores shared with the normal sample,HCC1395,10,100685.0
+b,Cores shared with the normal sample,HCC1395,11,121969.0
+b,Cores shared with the normal sample,HCC1395,12,150738.0
+b,Cores shared with the normal sample,HCC1395,13,184568.0
+b,Cores shared with the normal sample,HCC1395,14,221091.0
+b,Cores shared with the normal sample,HCC1395,15,259402.0
+b,Cores shared with the normal sample,HCC1395,16,297555.0
+b,Cores shared with the normal sample,HCC1395,17,336278.0
+b,Cores shared with the normal sample,HCC1395,18,372481.0
+b,Cores shared with the normal sample,HCC1395,19,404162.0
+b,Cores shared with the normal sample,HCC1395,20,433356.0
+b,Cores shared with the normal sample,HCC1395,21,456391.0
+b,Cores shared with the normal sample,HCC1395,22,474270.0
+b,Cores shared with the normal sample,HCC1395,23,487873.0
+b,Cores shared with the normal sample,HCC1395,24,497900.0
+b,Cores shared with the normal sample,HCC1395,25,511193.0
+b,Cores shared with the normal sample,HCC1395,26,524281.0
+b,Cores shared with the normal sample,HCC1395,27,541986.0
+b,Cores shared with the normal sample,HCC1395,28,568029.0
+b,Cores shared with the normal sample,HCC1395,29,603978.0
+b,Cores shared with the normal sample,HCC1395,30,644547.0
+b,Cores shared with the normal sample,HCC1395,31,697120.0
+b,Cores shared with the normal sample,HCC1395,32,759580.0
+b,Cores shared with the normal sample,HCC1395,33,823723.0
+b,Cores shared with the normal sample,HCC1395,34,889375.0
+b,Cores shared with the normal sample,HCC1395,35,965468.0
+b,Cores shared with the normal sample,HCC1395,36,1040828.0
+b,Cores shared with the normal sample,HCC1395,37,1119395.0
+b,Cores shared with the normal sample,HCC1395,38,1192339.0
+b,Cores shared with the normal sample,HCC1395,39,1257127.0
+b,Cores shared with the normal sample,HCC1395,40,1309415.0
+b,Cores shared with the normal sample,HCC1395,41,1347547.0
+b,Cores shared with the normal sample,HCC1395,42,1375482.0
+b,Cores shared with the normal sample,HCC1395,43,1389612.0
+b,Cores shared with the normal sample,HCC1395,44,1397677.0
+b,Cores shared with the normal sample,HCC1395,45,1382234.0
+b,Cores shared with the normal sample,HCC1395,46,1357093.0
+b,Cores shared with the normal sample,HCC1395,47,1319055.0
+b,Cores shared with the normal sample,HCC1395,48,1276878.0
+b,Cores shared with the normal sample,HCC1395,49,1226173.0
+b,Cores shared with the normal sample,HCC1395,50,1170268.0
+b,Cores shared with the normal sample,HCC1395,51,1118392.0
+b,Cores shared with the normal sample,HCC1395,52,1066438.0
+b,Cores shared with the normal sample,HCC1395,53,1016469.0
+b,Cores shared with the normal sample,HCC1395,54,967961.0
+b,Cores shared with the normal sample,HCC1395,55,921816.0
+b,Cores shared with the normal sample,HCC1395,56,879094.0
+b,Cores shared with the normal sample,HCC1395,57,846265.0
+b,Cores shared with the normal sample,HCC1395,58,812652.0
+b,Cores shared with the normal sample,HCC1395,59,786590.0
+b,Cores shared with the normal sample,HCC1395,60,762963.0
+b,Cores shared with the normal sample,HCC1395,61,742575.0
+b,Cores shared with the normal sample,HCC1395,62,719255.0
+b,Cores shared with the normal sample,HCC1395,63,700331.0
+b,Cores shared with the normal sample,HCC1395,64,683511.0
+b,Cores shared with the normal sample,HCC1395,65,664591.0
+b,Cores shared with the normal sample,HCC1395,66,645473.0
+b,Cores shared with the normal sample,HCC1395,67,630785.0
+b,Cores shared with the normal sample,HCC1395,68,615964.0
+b,Cores shared with the normal sample,HCC1395,69,601503.0
+b,Cores shared with the normal sample,HCC1395,70,587857.0
+b,Cores shared with the normal sample,HCC1395,71,569085.0
+b,Cores shared with the normal sample,HCC1395,72,552273.0
+b,Cores shared with the normal sample,HCC1395,73,533063.0
+b,Cores shared with the normal sample,HCC1395,74,517307.0
+b,Cores shared with the normal sample,HCC1395,75,498976.0
+b,Cores shared with the normal sample,HCC1395,76,484263.0
+b,Cores shared with the normal sample,HCC1395,77,470557.0
+b,Cores shared with the normal sample,HCC1395,78,457389.0
+b,Cores shared with the normal sample,HCC1395,79,442587.0
+b,Cores shared with the normal sample,HCC1395,80,427063.0
+b,Cores shared with the normal sample,HCC1395,81,412739.0
+b,Cores shared with the normal sample,HCC1395,82,396107.0
+b,Cores shared with the normal sample,HCC1395,83,381368.0
+b,Cores shared with the normal sample,HCC1395,84,367477.0
+b,Cores shared with the normal sample,HCC1395,85,353041.0
+b,Cores shared with the normal sample,HCC1395,86,339983.0
+b,Cores shared with the normal sample,HCC1395,87,326264.0
+b,Cores shared with the normal sample,HCC1395,88,313128.0
+b,Cores shared with the normal sample,HCC1395,89,301642.0
+b,Cores shared with the normal sample,HCC1395,90,288081.0
+b,Cores shared with the normal sample,HCC1395,91,275046.0
+b,Cores shared with the normal sample,HCC1395,92,261278.0
+b,Cores shared with the normal sample,HCC1395,93,248439.0
+b,Cores shared with the normal sample,HCC1395,94,237257.0
+b,Cores shared with the normal sample,HCC1395,95,224404.0
+b,Cores shared with the normal sample,HCC1395,96,214440.0
+b,Cores shared with the normal sample,HCC1395,97,202847.0
+b,Cores shared with the normal sample,HCC1395,98,192771.0
+b,Cores shared with the normal sample,HCC1395,99,183084.0
+b,Cores shared with the normal sample,HCC1395,100,173687.0
+b,Cores shared with the normal sample,HCC1395,101,164630.0
+b,Cores shared with the normal sample,HCC1395,102,156610.0
+b,Cores shared with the normal sample,HCC1395,103,148575.0
+b,Cores shared with the normal sample,HCC1395,104,141656.0
+b,Cores shared with the normal sample,HCC1395,105,134027.0
+b,Cores shared with the normal sample,HCC1395,106,127896.0
+b,Cores shared with the normal sample,HCC1395,107,121616.0
+b,Cores shared with the normal sample,HCC1395,108,115589.0
+b,Cores shared with the normal sample,HCC1395,109,110520.0
+b,Cores shared with the normal sample,HCC1395,110,105384.0
+b,Cores shared with the normal sample,HCC1395,111,101786.0
+b,Cores shared with the normal sample,HCC1395,112,97184.0
+b,Cores shared with the normal sample,HCC1395,113,92775.0
+b,Cores shared with the normal sample,HCC1395,114,88763.0
+b,Cores shared with the normal sample,HCC1395,115,84411.0
+b,Cores shared with the normal sample,HCC1395,116,80869.0
+b,Cores shared with the normal sample,HCC1395,117,76591.0
+b,Cores shared with the normal sample,HCC1395,118,73807.0
+b,Cores shared with the normal sample,HCC1395,119,71611.0
+b,Cores shared with the normal sample,HCC1395,120,68197.0

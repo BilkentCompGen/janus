@@ -1,0 +1,13 @@
+\begin{tabular}{lrrrrrrrrrrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{Pairwise runs} & \multicolumn{3}{c}{Joint run, first pass} & \multicolumn{3}{c}{Joint run, clade pass} & \multicolumn{2}{c}{Tree} & \multicolumn{2}{c}{Wall clock (min)} & \multicolumn{2}{c}{Peak RSS (GB)} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}\cmidrule(lr){11-12}\cmidrule(lr){13-14}\cmidrule(lr){15-16}
+Depth n/t & Precision & Recall & F1 & Precision & Recall & F1 & Precision & Recall & F1 & Splits & RF & pairwise & joint & pairwise & joint \\
+\midrule
+20/20 & 0.891 & 0.786 & 0.835 & 0.907 & 0.803 & 0.852 & 0.896 & 0.829 & 0.860 & 17/17 & 0 & 64.9 & 40.4 & 11.0 & 11.4 \\
+20/10 & 0.894 & 0.747 & 0.815 & 0.904 & 0.781 & 0.839 & 0.896 & 0.819 & 0.856 & 17/17 & 0 & 53.4 & 23.5 & 11.0 & 12.8 \\
+20/5 & 0.910 & 0.584 & 0.712 & 0.922 & 0.697 & 0.796 & 0.918 & 0.767 & 0.839 & 17/17 & 0 & 43.7 & 12.8 & 11.0 & 11.9 \\
+10/10 & 0.824 & 0.689 & 0.751 & 0.825 & 0.743 & 0.785 & 0.819 & 0.772 & 0.798 & 17/17 & 0 & 41.8 & 22.6 & 11.0 & 14.0 \\
+5/5 & 0.500 & 0.486 & 0.495 & 0.587 & 0.611 & 0.601 & 0.602 & 0.628 & 0.619 & 17/17 & 0 & 35.9 & 21.5 & 14.3 & 16.1 \\
+\bottomrule
+\end{tabular}

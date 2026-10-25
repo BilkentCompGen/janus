@@ -1,0 +1,493 @@
+panel,series,item,x_min,value,low,high,unit
+a,janus,total,,0.1784083333,,,h
+a,Severus,mapping,,4.3107861111,,,h
+a,Severus,phasing,,0.9336055556,,,h
+a,Severus,caller,,1.1494444444,,,h
+a,Severus,total,,6.3938361111,,,h
+a,Severus,factor over janus,,35.8382144581,,,x
+a,SAVANA,mapping,,4.3107861111,,,h
+a,SAVANA,phasing,,0.9336055556,,,h
+a,SAVANA,caller,,0.4011722222,,,h
+a,SAVANA,total,,5.6455638889,,,h
+a,SAVANA,factor over janus,,31.644059352,,,x
+a,nanomonsv,mapping,,4.3107861111,,,h
+a,nanomonsv,phasing,,0.0,,,h
+a,nanomonsv,caller,,1.1386333333,,,h
+a,nanomonsv,total,,5.4494194444,,,h
+a,nanomonsv,factor over janus,,30.5446463325,,,x
+a,dysgu,mapping,,4.3107861111,,,h
+a,dysgu,phasing,,0.0,,,h
+a,dysgu,caller,,0.0668,,,h
+a,dysgu,total,,4.3775861111,,,h
+a,dysgu,factor over janus,,24.5368925841,,,x
+a,SVision-pro,mapping,,4.3107861111,,,h
+a,SVision-pro,phasing,,0.0,,,h
+a,SVision-pro,caller,,0.4261222222,,,h
+a,SVision-pro,total,,4.7369083333,,,h
+a,SVision-pro,factor over janus,,26.550936522,,,x
+a,cuteSV,mapping,,4.3107861111,,,h
+a,cuteSV,phasing,,0.0,,,h
+a,cuteSV,caller,,0.0315861111,,,h
+a,cuteSV,total,,4.3423722222,,,h
+a,cuteSV,factor over janus,,24.3395145344,,,x
+a,DeBreak,mapping,,4.3107861111,,,h
+a,DeBreak,phasing,,0.0,,,h
+a,DeBreak,caller,,0.1051916667,,,h
+a,DeBreak,total,,4.4159777778,,,h
+a,DeBreak,factor over janus,,24.7520824575,,,x
+a,Sniffles2,mapping,,4.3107861111,,,h
+a,Sniffles2,phasing,,0.0,,,h
+a,Sniffles2,caller,,0.0486222222,,,h
+a,Sniffles2,total,,4.3594083333,,,h
+a,Sniffles2,factor over janus,,24.4350039703,,,x
+a,kled,mapping,,4.3107861111,,,h
+a,kled,phasing,,0.0,,,h
+a,kled,caller,,0.0368111111,,,h
+a,kled,total,,4.3475972222,,,h
+a,kled,factor over janus,,24.3688012829,,,x
+a,SVDSS,mapping,,4.3107861111,,,h
+a,SVDSS,phasing,,0.0,,,h
+a,SVDSS,caller,,2.2823055556,,,h
+a,SVDSS,total,,6.5930916667,,,h
+a,SVDSS,factor over janus,,36.9550656266,,,x
+c,"resident memory, five pairs",pack_n,0.028521694,6.8567486893,5.5727626453,11.0089051549,GB
+c,"resident memory, five pairs",pack_n,0.0611179157,7.6336406468,6.4561928854,11.4393699502,GB
+c,"resident memory, five pairs",pack_n,0.0937141374,7.5973395291,6.4612542938,11.2666995837,GB
+c,"resident memory, five pairs",pack_n,0.1263103591,7.3812019478,6.4099205093,12.0320653707,GB
+c,"resident memory, five pairs",pack_n,0.1589065808,7.4604989865,6.5808634914,11.4926223456,GB
+c,"resident memory, five pairs",pack_n,0.1915028025,7.4851826077,6.5355544282,11.9165292651,GB
+c,"resident memory, five pairs",pack_n,0.2240990242,7.4914287594,6.6502384949,12.2861520205,GB
+c,"resident memory, five pairs",pack_n,0.2566952459,7.1536648364,6.2438194187,12.2055315058,GB
+c,"resident memory, five pairs",pack_n,0.2892914676,7.4606504386,6.6368082428,12.4986263885,GB
+c,"resident memory, five pairs",pack_n,0.3218876893,7.2828615094,5.1484417924,12.1420602531,GB
+c,"resident memory, five pairs",pack_n,0.354483911,7.2094239649,6.3987823769,12.0844518698,GB
+c,"resident memory, five pairs",pack_n,0.3870801327,7.7394726547,7.0787870862,12.1246549912,GB
+c,"resident memory, five pairs",pack_n,0.4196763544,7.7300205409,6.3811788789,12.9757794795,GB
+c,"resident memory, five pairs",pack_n,0.452272576,7.7913094335,6.751055029,13.9844344587,GB
+c,"resident memory, five pairs",pack_n,0.4848687977,7.8103573238,7.0075811302,13.526549123,GB
+c,"resident memory, five pairs",pack_n,0.5174650194,8.6102656831,6.7613816288,13.8168358316,GB
+c,"resident memory, five pairs",pack_n,0.5500612411,6.8600517708,6.7617537283,13.2697495005,GB
+c,"resident memory, five pairs",pack_n,0.5826574628,6.9785588447,4.8985117635,13.789841958,GB
+c,"resident memory, five pairs",pack_n,0.6152536845,8.3318542655,6.7601133794,14.0030708494,GB
+c,"resident memory, five pairs",pack_n,0.6478499062,7.3158018466,6.8089042515,14.3051013604,GB
+c,"resident memory, five pairs",pack_n,0.6804461279,7.3387416005,4.9941806258,14.4020325248,GB
+c,"resident memory, five pairs",pack_n,0.7130423496,7.0654312327,6.5779308026,14.3619828621,GB
+c,"resident memory, five pairs",pack_n,0.7456385713,7.0148447169,6.7063109715,14.163016536,GB
+c,"resident memory, five pairs",pack_n,0.778234793,7.2333395516,6.6781574335,14.1543946483,GB
+c,"resident memory, five pairs",pack_n,0.8108310147,7.1650112874,6.6478718642,14.1951562599,GB
+c,"resident memory, five pairs",pack_n,0.8434272364,7.2048312179,6.5764650278,14.6679394398,GB
+c,"resident memory, five pairs",pack_n,0.8760234581,7.1978745862,6.6149059107,14.4765043508,GB
+c,"resident memory, five pairs",pack_n,0.9086196798,7.3101785319,6.6070720902,14.2702889205,GB
+c,"resident memory, five pairs",pack_n,0.9412159015,7.1951247701,3.4983351349,14.4398801845,GB
+c,"resident memory, five pairs",pack_n,0.9738121232,7.1245629364,3.4680156145,14.2810237283,GB
+c,"resident memory, five pairs",pack_n,1.0064083449,7.190886426,3.4368247986,14.3204268383,GB
+c,"resident memory, five pairs",pack_n,1.0390045666,7.1962247354,3.4658622742,14.0013652803,GB
+c,"resident memory, five pairs",pack_n,1.0716007883,6.8341898631,3.4658622742,13.7323286516,GB
+c,"resident memory, five pairs",pack_n,1.10419701,7.3578713691,3.4468288469,13.6255809593,GB
+c,"resident memory, five pairs",pack_n,1.1367932317,7.2202154067,3.5977303696,13.8905956446,GB
+c,"resident memory, five pairs",pack_n,1.1693894534,7.2086265617,3.5553952469,13.9734361051,GB
+c,"resident memory, five pairs",pack_n,1.2019856751,7.4262634944,3.5600128353,13.8934069162,GB
+c,"resident memory, five pairs",pack_n,1.2345818968,7.3065166618,3.4546630951,10.439594957,GB
+c,"resident memory, five pairs",pack_n,1.2671781185,6.8789393792,3.5736732998,7.2916772944,GB
+c,"resident memory, five pairs",pack_n,1.2997743402,6.8583665484,3.5933363086,8.5436363008,GB
+c,"resident memory, five pairs",pack_n,1.3323705619,7.3389934011,3.7656018308,11.2475299568,GB
+c,"resident memory, five pairs",pack_n,1.3649667836,7.2118786048,3.7420810061,13.7142945341,GB
+c,"resident memory, five pairs",pack_n,1.3975630053,7.2929011333,3.7170062468,14.5414062496,GB
+c,"resident memory, five pairs",pack_t,1.4762296719,5.810180946,3.3001259143,11.5846603452,GB
+c,"resident memory, five pairs",pack_t,1.5087561407,6.8996149245,3.2878826555,10.9368019459,GB
+c,"resident memory, five pairs",pack_t,1.5412826095,6.6489190872,3.2737254266,11.6834456048,GB
+c,"resident memory, five pairs",pack_t,1.5738090782,6.5118753032,3.424946276,11.8017920619,GB
+c,"resident memory, five pairs",pack_t,1.606335547,6.4259490967,3.2787630351,12.0653383366,GB
+c,"resident memory, five pairs",pack_t,1.6388620158,6.4705320188,3.5867524096,12.9581217995,GB
+c,"resident memory, five pairs",pack_t,1.6713884845,6.4984588623,3.3945609202,12.932978505,GB
+c,"resident memory, five pairs",pack_t,1.7039149533,6.4878002296,3.4911202278,12.6125779108,GB
+c,"resident memory, five pairs",pack_t,1.7364414221,6.3943454901,3.4664023918,12.186466576,GB
+c,"resident memory, five pairs",pack_t,1.7689678908,6.4100078691,3.4371890542,11.9508347613,GB
+c,"resident memory, five pairs",pack_t,1.8014943596,6.3627962619,3.5991720483,11.9185927881,GB
+c,"resident memory, five pairs",pack_t,1.8340208284,6.3991081195,3.624256134,12.1419057327,GB
+c,"resident memory, five pairs",pack_t,1.8665472971,6.4328448718,3.600437244,12.4278503269,GB
+c,"resident memory, five pairs",pack_t,1.8990737659,6.4288829155,3.5854115268,12.4273769243,GB
+c,"resident memory, five pairs",pack_t,1.9316002347,6.4711016449,3.5330480725,12.5223825441,GB
+c,"resident memory, five pairs",pack_t,1.9641267034,6.6873298923,3.6181610319,12.6309267801,GB
+c,"resident memory, five pairs",pack_t,1.9966531722,7.4714484339,3.7273126769,12.5566737215,GB
+c,"resident memory, five pairs",pack_t,2.029179641,7.4482091568,3.7819279181,12.5561578299,GB
+c,"resident memory, five pairs",pack_t,2.0617061097,7.413029217,3.8418803848,7.5601316388,GB
+c,"resident memory, five pairs",pack_t,2.0942325785,7.465815317,3.8995064542,7.7110905979,GB
+c,"resident memory, five pairs",pack_t,2.1267590473,7.4597899998,3.8673665661,8.9781342987,GB
+c,"resident memory, five pairs",pack_t,2.159285516,7.525398261,3.8362227187,11.8131247997,GB
+c,"resident memory, five pairs",pack_t,2.1918119848,7.4620573881,3.887241625,14.302373157,GB
+c,"resident memory, five pairs",pack_t,2.2243384536,7.4980880602,3.9649586142,13.1029290492,GB
+c,"resident memory, five pairs",pack_t,2.2568649223,7.3620167209,3.9887025521,7.8237743864,GB
+c,"resident memory, five pairs",pack_t,2.2893913911,6.9707922139,3.8002809824,7.6499445412,GB
+c,"resident memory, five pairs",pack_t,2.3219178599,6.6665673493,3.8099379501,7.7077361366,GB
+c,"resident memory, five pairs",pack_t,2.3544443286,6.5704697068,3.8117085792,7.55336884,GB
+c,"resident memory, five pairs",pack_t,2.3869707974,6.6234595486,6.0802172898,7.5494034106,GB
+c,"resident memory, five pairs",pack_t,2.4194972662,6.6272486704,5.0152127603,7.5916085037,GB
+c,"resident memory, five pairs",pack_t,2.4520237349,7.2127353172,6.5052099015,9.9343875992,GB
+c,"resident memory, five pairs",pack_t,2.4845502037,6.6235155708,5.8303393517,10.3050222104,GB
+c,"resident memory, five pairs",pack_t,2.5170766725,7.5638123437,6.4993126368,10.261151228,GB
+c,"resident memory, five pairs",pack_t,2.5496031412,7.563560245,6.5729069395,10.2842539413,GB
+c,"resident memory, five pairs",pack_t,2.58212961,7.5891592284,6.5415117749,10.3117493198,GB
+c,"resident memory, five pairs",pack_t,2.6146560788,7.5917686325,6.5726540504,10.4445916541,GB
+c,"resident memory, five pairs",pack_t,2.6471825475,6.6682152779,5.3175681612,10.6783946531,GB
+c,"resident memory, five pairs",pack_t,2.6797090163,6.9150416005,6.5871979899,10.5995259291,GB
+c,"resident memory, five pairs",pack_t,2.7122354851,6.7681002781,6.2790000066,7.9868312507,GB
+c,"resident memory, five pairs",pack_t,2.7447619538,7.5651618858,3.6419831629,10.6466540642,GB
+c,"resident memory, five pairs",pack_t,2.7772884226,7.6707708723,3.45079422,10.785980511,GB
+c,"resident memory, five pairs",pack_t,2.8098148914,7.6038105854,3.4523004575,11.0301644981,GB
+c,"resident memory, five pairs",pack_t,2.8423413601,7.6047061077,3.5142833024,11.0819783802,GB
+c,"resident memory, five pairs",pack_t,2.8748678289,6.6608080435,3.5002555847,11.0496062416,GB
+c,"resident memory, five pairs",pack_t,2.9073942977,6.8086429732,3.5002555847,8.2655230513,GB
+c,"resident memory, five pairs",pack_t,2.9399207664,7.5955955717,3.4822104374,10.5600431056,GB
+c,"resident memory, five pairs",pack_t,2.9724472352,7.6013180487,3.510026337,11.5103477176,GB
+c,"resident memory, five pairs",pack_t,3.004973704,7.599841847,3.5212594252,11.4795569693,GB
+c,"resident memory, five pairs",pack_t,3.0375001727,7.6005924026,3.4817657471,11.9754253425,GB
+c,"resident memory, five pairs",pack_t,3.0700266415,6.6768257076,3.4822540283,11.7517981768,GB
+c,"resident memory, five pairs",pack_t,3.1025531103,7.5910201468,3.498372291,12.3090627954,GB
+c,"resident memory, five pairs",pack_t,3.135079579,7.5620014607,3.5011017439,13.1633068372,GB
+c,"resident memory, five pairs",pack_t,3.1676060478,7.5979423523,3.4962059863,14.1278653425,GB
+c,"resident memory, five pairs",pack_t,3.2001325166,7.585764808,3.5477737271,14.3750214468,GB
+c,"resident memory, five pairs",pack_t,3.2326589853,7.5605862656,3.5540046692,14.297005754,GB
+c,"resident memory, five pairs",pack_t,3.2651854541,7.6046710947,3.4727716887,14.1250529296,GB
+c,"resident memory, five pairs",pack_t,3.2977119229,7.6142936824,3.4584870878,14.0469097901,GB
+c,"resident memory, five pairs",pack_t,3.3302383916,7.6261421648,3.4594917297,13.8322535535,GB
+c,"resident memory, five pairs",pack_t,3.3627648604,7.6212736706,3.4594917297,13.6014926249,GB
+c,"resident memory, five pairs",pack_t,3.3952913292,7.6094999709,3.4594917297,13.8086870458,GB
+c,"resident memory, five pairs",pack_t,3.4278177979,7.6071570981,3.4741401672,13.5335459413,GB
+c,"resident memory, five pairs",pack_t,3.4603442667,7.6495041082,3.5118654684,12.7122773606,GB
+c,"resident memory, five pairs",pack_t,3.4928707355,6.8483862568,3.4775893009,9.6164849902,GB
+c,"resident memory, five pairs",pack_t,3.5253972042,7.4113904959,3.4790267944,9.628034031,GB
+c,"resident memory, five pairs",pack_t,3.557923673,6.9361641772,3.7228244969,7.7007658674,GB
+c,"resident memory, five pairs",pack_t,3.5904501418,6.8027935555,3.4494641112,7.7171096972,GB
+c,"resident memory, five pairs",pack_t,3.6229766105,6.781289847,3.5434870961,7.6055686029,GB
+c,"resident memory, five pairs",pack_t,3.6555030793,6.6243783489,3.5131912252,7.5944439482,GB
+c,"resident memory, five pairs",pack_t,3.6880295481,3.7983096657,3.6695891462,7.620284925,GB
+c,"resident memory, five pairs",pack_t,3.7205560168,3.7094712414,3.6428070068,7.5948779854,GB
+c,"resident memory, five pairs",pack_t,3.7530824856,3.7189932494,3.6729373097,7.5797019893,GB
+c,"resident memory, five pairs",pack_t,3.7856089544,3.7549455863,3.6896820068,7.5925878777,GB
+c,"resident memory, five pairs",pack_t,3.8181354231,3.7628639069,3.6913909912,7.5988953998,GB
+c,"resident memory, five pairs",pack_t,3.8506618919,3.789350152,3.6913909912,7.6306923546,GB
+c,"resident memory, five pairs",pack_t,3.8831883607,3.7190487366,3.5705443303,7.6066732274,GB
+c,"resident memory, five pairs",extract_n,3.96395,0.1653771744,0.1637611389,0.1677095398,GB
+c,"resident memory, five pairs",extract_n,3.9966077778,0.1679329976,0.1663398831,0.1686039474,GB
+c,"resident memory, five pairs",extract_n,4.0292655555,0.1684923238,0.1669704731,0.1698193639,GB
+c,"resident memory, five pairs",extract_n,4.0619233333,0.1690447476,0.1679831592,0.1708139198,GB
+c,"resident memory, five pairs",extract_n,4.0945811111,0.1700726991,0.1689773194,0.1707446761,GB
+c,"resident memory, five pairs",extract_n,4.1272388888,0.1703157771,0.1697513504,0.1726508457,GB
+c,"resident memory, five pairs",extract_n,4.1598966666,0.1707637256,0.1700712781,0.172209509,GB
+c,"resident memory, five pairs",extract_n,4.1925544444,0.1717076321,0.1701715637,0.1728546038,GB
+c,"resident memory, five pairs",extract_n,4.2252122221,0.1724523104,0.1702358093,0.1728118225,GB
+c,"resident memory, five pairs",extract_n,4.2578699999,0.1730233376,0.172748473,0.1745492845,GB
+c,"resident memory, five pairs",extract_n,4.2905277777,0.1731100432,0.1729024429,0.1759869995,GB
+c,"resident memory, five pairs",extract_n,4.3231855554,0.1738012226,0.1728448776,0.1754829549,GB
+c,"resident memory, five pairs",extract_n,4.3558433332,0.1740743488,0.1725425388,0.1760107251,GB
+c,"resident memory, five pairs",extract_n,4.388501111,0.174487213,0.1730636356,0.1760513647,GB
+c,"resident memory, five pairs",extract_n,4.4211588887,0.1745490995,0.1738433444,0.1767651505,GB
+c,"resident memory, five pairs",extract_n,4.4538166665,0.1747126255,0.1737230942,0.1762603088,GB
+c,"resident memory, five pairs",extract_n,4.4864744443,0.174613371,0.1737612558,0.1768634082,GB
+c,"resident memory, five pairs",extract_n,4.519132222,0.1747288563,0.1741419168,0.1760621386,GB
+c,"resident memory, five pairs",extract_n,4.5517899998,0.174567537,0.173762576,0.1766147315,GB
+c,"resident memory, five pairs",extract_n,4.5844477776,0.1751783211,0.1735422125,0.1764096932,GB
+c,"resident memory, five pairs",extract_n,4.6171055553,0.1747641273,0.1736977097,0.1764085734,GB
+c,"resident memory, five pairs",extract_n,4.6497633331,0.1747224537,0.1733476907,0.1764399926,GB
+c,"resident memory, five pairs",extract_n,4.6824211109,0.1749945792,0.1733267752,0.1771110803,GB
+c,"resident memory, five pairs",extract_n,4.7150788886,0.1745875715,0.1732872885,0.1769396326,GB
+c,"resident memory, five pairs",extract_n,4.7477366664,0.17451231,0.1734058112,0.1775247631,GB
+c,"resident memory, five pairs",extract_n,4.7803944442,0.174802475,0.173500235,0.1781046509,GB
+c,"resident memory, five pairs",extract_n,4.813052222,0.1747541871,0.1730422791,0.1785237081,GB
+c,"resident memory, five pairs",extract_n,4.8457099997,0.1744378142,0.1733430212,0.1784688098,GB
+c,"resident memory, five pairs",extract_n,4.8783677775,0.1750290369,0.1737383765,0.179124781,GB
+c,"resident memory, five pairs",extract_n,4.9110255553,0.1752551373,0.1737369333,0.1791020923,GB
+c,"resident memory, five pairs",extract_n,4.943683333,0.1752352123,0.1733588455,0.1785542969,GB
+c,"resident memory, five pairs",extract_n,4.9763411108,0.1752659378,0.1733311304,0.178206604,GB
+c,"resident memory, five pairs",extract_n,5.0089988886,0.1750161921,0.1734365521,0.1785808166,GB
+c,"resident memory, five pairs",extract_n,5.0416566663,0.1747342565,0.1736836893,0.1790657239,GB
+c,"resident memory, five pairs",extract_n,5.0743144441,0.1748485002,0.1734115134,0.1793121578,GB
+c,"resident memory, five pairs",extract_n,5.1069722219,0.1746281083,0.1733407974,0.1787692159,GB
+c,"resident memory, five pairs",extract_n,5.1396299996,0.1747144294,0.1737438644,0.1785179919,GB
+c,"resident memory, five pairs",extract_n,5.1722877774,0.1749049564,0.1738190222,0.1787096867,GB
+c,"resident memory, five pairs",extract_n,5.2049455552,0.1751556068,0.1735967499,0.1785325139,GB
+c,"resident memory, five pairs",extract_n,5.2376033329,0.1745489899,0.173495632,0.1782301574,GB
+c,"resident memory, five pairs",extract_n,5.2702611107,0.175115015,0.1734685058,0.1791745341,GB
+c,"resident memory, five pairs",extract_n,5.3029188885,0.1744746075,0.1739073673,0.1795619279,GB
+c,"resident memory, five pairs",extract_n,5.3355766662,0.1748831825,0.1736944348,0.1802974365,GB
+c,"resident memory, five pairs",extract_n,5.368234444,0.1748568193,0.1740125781,0.1802333427,GB
+c,"resident memory, five pairs",extract_n,5.4008922218,0.1753081467,0.1749782802,0.1799347587,GB
+c,"resident memory, five pairs",extract_n,5.4335499995,0.175263298,0.171302697,0.1804218384,GB
+c,"resident memory, five pairs",extract_t,5.4944299995,0.1655683018,0.1627656553,0.1680355624,GB
+c,"resident memory, five pairs",extract_t,5.527444545,0.167506466,0.1665618813,0.1699229609,GB
+c,"resident memory, five pairs",extract_t,5.5604590905,0.1692163211,0.1668411116,0.1713826836,GB
+c,"resident memory, five pairs",extract_t,5.5934736359,0.169928722,0.1675144902,0.171834589,GB
+c,"resident memory, five pairs",extract_t,5.6264881814,0.1699265003,0.1683918901,0.1720572614,GB
+c,"resident memory, five pairs",extract_t,5.6595027269,0.1700490951,0.1684417003,0.1720695074,GB
+c,"resident memory, five pairs",extract_t,5.6925172723,0.1697410275,0.1685754117,0.1723975396,GB
+c,"resident memory, five pairs",extract_t,5.7255318178,0.1706260126,0.1688784512,0.1732148617,GB
+c,"resident memory, five pairs",extract_t,5.7585463633,0.1700950146,0.1692738509,0.1728848336,GB
+c,"resident memory, five pairs",extract_t,5.7915609087,0.1709057939,0.1691205028,0.1732179534,GB
+c,"resident memory, five pairs",extract_t,5.8245754542,0.1712803412,0.1691118053,0.1731946609,GB
+c,"resident memory, five pairs",extract_t,5.8575899997,0.1714839355,0.169930664,0.1732686485,GB
+c,"resident memory, five pairs",extract_t,5.8906045451,0.1718461565,0.1702348328,0.173498514,GB
+c,"resident memory, five pairs",extract_t,5.9236190906,0.172226872,0.170472487,0.1731374741,GB
+c,"resident memory, five pairs",extract_t,5.956633636,0.1721979323,0.1704053705,0.1732320339,GB
+c,"resident memory, five pairs",extract_t,5.9896481815,0.171987211,0.1710735668,0.1736822851,GB
+c,"resident memory, five pairs",extract_t,6.022662727,0.1720692894,0.1712711709,0.1740663351,GB
+c,"resident memory, five pairs",extract_t,6.0556772724,0.1731678009,0.1714353027,0.1743673444,GB
+c,"resident memory, five pairs",extract_t,6.0886918179,0.1733624935,0.1719521443,0.1742649295,GB
+c,"resident memory, five pairs",extract_t,6.1217063634,0.172788887,0.1719243636,0.1741806921,GB
+c,"resident memory, five pairs",extract_t,6.1547209088,0.1732045174,0.1718447266,0.1740090233,GB
+c,"resident memory, five pairs",extract_t,6.1877354543,0.1731690407,0.1722998297,0.1743103102,GB
+c,"resident memory, five pairs",extract_t,6.2207499998,0.1732312775,0.1720536804,0.1743611336,GB
+c,"resident memory, five pairs",extract_t,6.2537645452,0.17349507,0.1721883795,0.1736793903,GB
+c,"resident memory, five pairs",extract_t,6.2867790907,0.1730984557,0.1719411538,0.1744319058,GB
+c,"resident memory, five pairs",extract_t,6.3197936362,0.1743822384,0.1719547175,0.1746724949,GB
+c,"resident memory, five pairs",extract_t,6.3528081816,0.1739355705,0.1721133312,0.1759760407,GB
+c,"resident memory, five pairs",extract_t,6.3858227271,0.1738580355,0.1722138145,0.1751988678,GB
+c,"resident memory, five pairs",extract_t,6.4188372726,0.1739135418,0.1724536549,0.175523081,GB
+c,"resident memory, five pairs",extract_t,6.451851818,0.1740436104,0.1721523743,0.1750786606,GB
+c,"resident memory, five pairs",extract_t,6.4848663635,0.1742450068,0.1722658497,0.1760215416,GB
+c,"resident memory, five pairs",extract_t,6.5178809089,0.1743007374,0.1727716009,0.1763468184,GB
+c,"resident memory, five pairs",extract_t,6.5508954544,0.1749119091,0.1722527244,0.1758325695,GB
+c,"resident memory, five pairs",extract_t,6.5839099999,0.1751040935,0.1720343628,0.1764775636,GB
+c,"resident memory, five pairs",extract_t,6.6169245453,0.1745071548,0.17247593,0.1781093484,GB
+c,"resident memory, five pairs",extract_t,6.6499390908,0.1747189999,0.1727062489,0.1778620139,GB
+c,"resident memory, five pairs",extract_t,6.6829536363,0.1742501926,0.1726113503,0.1776080783,GB
+c,"resident memory, five pairs",extract_t,6.7159681817,0.1743933201,0.1725217923,0.177964583,GB
+c,"resident memory, five pairs",extract_t,6.7489827272,0.1742039204,0.1721103044,0.1778158514,GB
+c,"resident memory, five pairs",extract_t,6.7819972727,0.1746209908,0.1721585444,0.1777054177,GB
+c,"resident memory, five pairs",extract_t,6.8150118181,0.1743144989,0.1725731728,0.1775424405,GB
+c,"resident memory, five pairs",extract_t,6.8480263636,0.1741645241,0.1721495666,0.1780430332,GB
+c,"resident memory, five pairs",extract_t,6.8810409091,0.174363842,0.1734488331,0.1789457134,GB
+c,"resident memory, five pairs",extract_t,6.9140554545,0.1744594574,0.1738111878,0.1792062933,GB
+c,"resident memory, five pairs",extract_t,6.94707,0.174432478,0.1734657288,0.7226029784,GB
+c,"resident memory, five pairs",count_n,6.9858157878,5.7633628845,4.6811393113,6.1704902649,GB
+c,"resident memory, five pairs",count_n,7.0197456056,5.7635040856,4.6817903061,6.1710116177,GB
+c,"resident memory, five pairs",count_n,7.0536754234,5.7633757049,4.6819597118,6.171268819,GB
+c,"resident memory, five pairs",count_n,7.0876052412,5.7633003876,4.6819370758,6.1718058456,GB
+c,"resident memory, five pairs",count_n,7.121535059,5.7639630181,4.6819164093,6.171642131,GB
+c,"resident memory, five pairs",count_n,7.1554648768,5.7642393967,4.6821512856,6.1716665184,GB
+c,"resident memory, five pairs",count_n,7.1893946946,5.7639915085,4.6823731899,6.1719386005,GB
+c,"resident memory, five pairs",count_n,7.2233245124,5.7639832199,4.6823602734,6.172090781,GB
+c,"resident memory, five pairs",count_n,7.2572543302,5.7639092285,4.7125793195,6.1719228443,GB
+c,"resident memory, five pairs",count_n,7.291184148,5.6725259176,4.9329697792,6.172012891,GB
+c,"resident memory, five pairs",count_n,7.3251139658,5.8575860013,5.5232981241,6.5343196081,GB
+c,"resident memory, five pairs",count_n,7.3590437836,6.1165405752,3.127461151,6.5930910921,GB
+c,"resident memory, five pairs",count_n,7.3929736014,1.9775009155,1.3191452026,6.8653144836,GB
+c,"resident memory, five pairs",count_t,7.4100602681,5.5960731506,5.4502905925,5.8628578186,GB
+c,"resident memory, five pairs",count_t,7.444477117,5.7792687416,5.5226195449,5.8630466499,GB
+c,"resident memory, five pairs",count_t,7.4788939658,5.7797064903,5.5232169525,5.8641612922,GB
+c,"resident memory, five pairs",count_t,7.5133108147,5.7797651039,5.523141552,5.8626832444,GB
+c,"resident memory, five pairs",count_t,7.5477276635,5.7795763824,5.5229452007,5.863753701,GB
+c,"resident memory, five pairs",count_t,7.5821445124,5.7800995163,5.523144482,5.8635110741,GB
+c,"resident memory, five pairs",count_t,7.6165613613,5.7800123215,5.5233378315,5.8630447388,GB
+c,"resident memory, five pairs",count_t,7.6509782101,5.7800934097,5.5238352642,5.8635250412,GB
+c,"resident memory, five pairs",count_t,7.685395059,5.7800790314,5.5235979862,5.8638883286,GB
+c,"resident memory, five pairs",count_t,7.7198119079,5.819196688,5.5322821632,5.9345045756,GB
+c,"resident memory, five pairs",count_t,7.7542287567,6.1450627686,5.6532354221,6.3515144089,GB
+c,"resident memory, five pairs",count_t,7.7886456056,6.3326442495,5.1599394189,6.8894996643,GB
+c,"resident memory, five pairs",count_t,7.8230624545,6.6214256287,1.5258865356,6.9234466553,GB
+c,"resident memory, five pairs",graph,7.835159004,3.3464012146,3.3213882446,3.7062530518,GB
+c,"resident memory, five pairs",graph,7.8770670517,3.7209944694,3.4348603887,3.9954293814,GB
+c,"resident memory, five pairs",graph,7.9189750994,3.4482081937,3.1798840438,3.5727625206,GB
+c,"resident memory, five pairs",graph,7.9608831471,4.4501422348,3.9799280785,4.6452293396,GB
+c,"resident memory, five pairs",graph,8.0027911948,2.1331672668,1.2385239435,4.6452293396,GB
+c,"resident memory, five pairs",prune,8.0186711948,3.8509559631,2.6535759171,4.3158187866,GB
+c,"resident memory, five pairs",prune,8.051704962,4.6396215232,4.4639520588,5.2888432527,GB
+c,"resident memory, five pairs",prune,8.0847387291,6.7498405207,5.8214394409,7.20053424,GB
+c,"resident memory, five pairs",prune,8.1177724963,6.9648903987,6.5468366414,7.3288821264,GB
+c,"resident memory, five pairs",prune,8.1508062635,7.3082722837,6.5802984203,7.6651614028,GB
+c,"resident memory, five pairs",prune,8.1838400307,7.7447707198,6.7031551332,7.9725024021,GB
+c,"resident memory, five pairs",prune,8.2168737979,8.1966296894,6.8852732921,8.2672162742,GB
+c,"resident memory, five pairs",prune,8.249907565,8.5295889669,7.0206617121,8.6604931034,GB
+c,"resident memory, five pairs",prune,8.2829413322,8.9025670659,7.1612158784,9.1742402614,GB
+c,"resident memory, five pairs",prune,8.3159750994,9.0074769592,7.3291535326,9.5020060399,GB
+c,"resident memory, five pairs",prune,8.3490088666,9.0272507331,7.4981671892,9.6013518289,GB
+c,"resident memory, five pairs",prune,8.3820426337,9.0506959407,7.5145161882,9.6185765359,GB
+c,"resident memory, five pairs",prune,8.4150764009,9.1007998468,7.5330697908,9.6353204583,GB
+c,"resident memory, five pairs",prune,8.4481101681,9.1199744142,7.5495374999,9.6518226881,GB
+c,"resident memory, five pairs",prune,8.4811439353,9.1381253048,7.5701241485,9.6676085416,GB
+c,"resident memory, five pairs",prune,8.5141777024,9.1747658075,7.5855113994,9.6838568413,GB
+c,"resident memory, five pairs",prune,8.5472114696,9.1102468031,7.6080283569,9.7100461631,GB
+c,"resident memory, five pairs",prune,8.5802452368,8.282962552,7.6267508078,9.502042385,GB
+c,"resident memory, five pairs",prune,8.613279004,6.3874615848,1.7992364993,8.3273075065,GB
+c,"resident memory, five pairs",select,8.6324433333,3.0093269348,2.7894897461,3.0797538757,GB
+c,"resident memory, five pairs",select,8.6685855556,4.2431411988,3.2286371611,4.721125985,GB
+c,"resident memory, five pairs",select,8.7047277778,5.4310874545,4.9012390338,5.6071399773,GB
+c,"resident memory, five pairs",select,8.74087,5.5406272243,5.5148827515,5.650188789,GB
+c,"resident memory, five pairs",select,8.7770122222,5.5433688566,5.5160849813,5.6606697643,GB
+c,"resident memory, five pairs",select,8.8131544444,5.5462502115,5.5174016952,5.6764156859,GB
+c,"resident memory, five pairs",select,8.8492966667,5.5492584961,5.5183381119,5.6946387941,GB
+c,"resident memory, five pairs",select,8.8854388889,5.5742200489,5.5194186401,5.7087810903,GB
+c,"resident memory, five pairs",select,8.9215811111,5.5835701771,5.521107849,5.7103901449,GB
+c,"resident memory, five pairs",select,8.9577233333,5.5601921082,0.2757110596,5.6159248352,GB
+c,"resident memory, five pairs",place,8.9659733333,1.5276489258,1.2373352051,1.9361991882,GB
+c,"resident memory, five pairs",place,8.9895466667,2.4735528351,1.8842654359,2.8049545657,GB
+c,"resident memory, five pairs",place,9.01312,3.3158531189,2.2700790579,3.5087700687,GB
+c,"resident memory, five pairs",place,9.0366933333,2.9933891296,0.4619789124,3.7644119263,GB
+c,"resident memory, five pairs",local,9.0579508658,1.303317574,0.4779561314,2.023865344,GB
+c,"resident memory, five pairs",local,9.0906971265,2.6762743193,0.9129548781,7.2204193036,GB
+c,"resident memory, five pairs",local,9.1234433871,6.5050004351,1.5586175248,10.0783020688,GB
+c,"resident memory, five pairs",local,9.1561896478,7.8898173388,4.846997875,10.1412129996,GB
+c,"resident memory, five pairs",local,9.1889359084,8.3804671621,6.2195014993,10.4325138642,GB
+c,"resident memory, five pairs",local,9.2216821691,7.2562734009,6.9028361098,10.486470306,GB
+c,"resident memory, five pairs",local,9.2544284297,7.9114668165,6.9466191902,10.6390521992,GB
+c,"resident memory, five pairs",local,9.2871746904,8.1585588876,7.0824610004,10.1577513682,GB
+c,"resident memory, five pairs",local,9.319920951,8.1918042569,7.206356322,10.4560661754,GB
+c,"resident memory, five pairs",local,9.3526672117,8.0429659841,7.2785320254,11.2784683366,GB
+c,"resident memory, five pairs",local,9.3854134723,8.5823286242,7.2818157186,10.9337606606,GB
+c,"resident memory, five pairs",local,9.418159733,8.5831317154,7.2829896613,10.7305083821,GB
+c,"resident memory, five pairs",local,9.4509059936,8.3648429963,7.0792407475,11.4755812136,GB
+c,"resident memory, five pairs",local,9.4836522543,8.4153541767,7.0997250381,10.9160452628,GB
+c,"resident memory, five pairs",local,9.5163985149,8.4667145314,7.393337139,11.4824353567,GB
+c,"resident memory, five pairs",local,9.5491447756,8.4751875446,7.0702891182,11.6958581853,GB
+c,"resident memory, five pairs",local,9.5818910362,8.3708709729,6.7683800428,11.7033157349,GB
+c,"resident memory, five pairs",local,9.6146372969,8.1312093463,6.8205387318,11.3456034095,GB
+c,"resident memory, five pairs",local,9.6473835575,7.4416726173,6.8601469525,11.4711162576,GB
+c,"resident memory, five pairs",local,9.6801298181,7.7242719951,7.1091138116,10.075925541,GB
+c,"resident memory, five pairs",local,9.7128760788,7.8878808217,7.3086021953,9.9875747769,GB
+c,"resident memory, five pairs",local,9.7456223394,8.1897839412,7.4163200157,10.2246595346,GB
+c,"resident memory, five pairs",local,9.7783686001,8.4386174624,7.6148255561,10.0227800111,GB
+c,"resident memory, five pairs",local,9.8111148607,8.492528879,7.5543777303,11.0411256274,GB
+c,"resident memory, five pairs",local,9.8438611214,9.0092610391,7.7049278206,10.3572998045,GB
+c,"resident memory, five pairs",local,9.876607382,9.0503856697,7.7738275054,10.9100622726,GB
+c,"resident memory, five pairs",local,9.9093536427,9.0840423362,7.7543499344,11.0473186167,GB
+c,"resident memory, five pairs",local,9.9420999033,8.9614874464,7.3500112361,11.2846407383,GB
+c,"resident memory, five pairs",local,9.974846164,8.4638379216,7.3570372853,11.2063499239,GB
+c,"resident memory, five pairs",local,10.0075924246,8.4463768005,5.4446213267,11.2542085576,GB
+c,"resident memory, five pairs",gaps,10.0310290913,2.9777565002,1.1300964355,3.3075714111,GB
+c,"resident memory, five pairs",gaps,10.0748587016,4.4834416093,3.4008544815,4.8520482899,GB
+c,"resident memory, five pairs",gaps,10.1186883119,7.9667255344,6.5496422523,8.2599341644,GB
+c,"resident memory, five pairs",gaps,10.1625179222,10.6568306794,9.4864645472,10.7191794346,GB
+c,"resident memory, five pairs",gaps,10.2063475325,10.7636566162,0.0051345825,10.8654556274,GB
+c,"resident memory, five pairs",call,10.2200266667,3.0255432129,2.4853553772,3.0906608104,GB
+c,"resident memory, five pairs",call,10.2544038095,3.0897827439,2.8824116527,4.9589910688,GB
+c,"resident memory, five pairs",call,10.2887809524,3.1350168702,3.0966977734,3.1619415897,GB
+c,"resident memory, five pairs",call,10.3231580952,3.1209650597,3.0983230011,3.1651071385,GB
+c,"resident memory, five pairs",call,10.3575352381,3.121752802,3.0989881251,3.1680974037,GB
+c,"resident memory, five pairs",call,10.391912381,3.1229030026,3.1000311357,3.1707074136,GB
+c,"resident memory, five pairs",call,10.4262895238,3.1245903989,3.10068768,3.1752715814,GB
+c,"resident memory, five pairs",call,10.4606666667,3.126132965,3.1021686554,3.1825300983,GB
+c,"resident memory, five pairs",call,10.4950438095,3.1298804105,3.1039822706,3.1976081982,GB
+c,"resident memory, five pairs",call,10.5294209524,3.1364780369,3.1058697719,3.2023115987,GB
+c,"resident memory, five pairs",call,10.5637980952,3.1389508818,3.1076882568,3.206966967,GB
+c,"resident memory, five pairs",call,10.5981752381,3.1412437763,3.1093268978,3.2095623325,GB
+c,"resident memory, five pairs",call,10.632552381,3.1454701121,3.1109332886,3.2124583572,GB
+c,"resident memory, five pairs",call,10.6669295238,3.1451494096,2.873364535,3.1975593567,GB
+c,"resident memory, five pairs",call,10.7013066667,3.1466827393,0.1861076355,3.1975593567,GB
+c,"minimap2 mapping HCC1954, peak",,,19.32289505,,,GB
+b,janus,Packed reads,,88.4075342355,,,GB
+b,janus,Core positions,,16.149126393,,,GB
+b,janus,Others,,4.8167903308,,,GB
+b,janus,Total,,109.3734509593,,,GB
+b,BAM,normal,,75.0308777884,,,GB
+b,BAM,tumor,,76.844114303,,,GB
+b,BAM,Total,,151.8749920914,,,GB
+c,HCC1954,Packing,,3.9166666667,,,min
+c,HCC1954,Core extraction,,3.044,,,min
+c,HCC1954,Counting,,0.8813333333,,,min
+c,HCC1954,Graph and pruning,,0.7826666667,,,min
+c,HCC1954,Selection,,0.3388333333,,,min
+c,HCC1954,Placement,,0.0736666667,,,min
+c,HCC1954,minimap2,,1.166,,,min
+c,HCC1954,Calling,,0.5013333333,,,min
+c,HCC1954,Total,,10.7045,,,min
+c,NCI-H2009,Packing,,4.7333333333,,,min
+c,NCI-H2009,Core extraction,,3.1513333333,,,min
+c,NCI-H2009,Counting,,0.8543333333,,,min
+c,NCI-H2009,Graph and pruning,,0.924,,,min
+c,NCI-H2009,Selection,,0.3681666667,,,min
+c,NCI-H2009,Placement,,0.0971666667,,,min
+c,NCI-H2009,minimap2,,2.5176666667,,,min
+c,NCI-H2009,Calling,,0.5575,,,min
+c,NCI-H2009,Total,,13.2035,,,min
+c,HCC1937,Packing,,4.1,,,min
+c,HCC1937,Core extraction,,2.7403333333,,,min
+c,HCC1937,Counting,,0.809,,,min
+c,HCC1937,Graph and pruning,,0.794,,,min
+c,HCC1937,Selection,,0.3116666667,,,min
+c,HCC1937,Placement,,0.0696666667,,,min
+c,HCC1937,minimap2,,0.6838333333,,,min
+c,HCC1937,Calling,,0.426,,,min
+c,HCC1937,Total,,9.9345,,,min
+c,NCI-H1437,Packing,,3.9333333333,,,min
+c,NCI-H1437,Core extraction,,3.1938333333,,,min
+c,NCI-H1437,Counting,,0.9055,,,min
+c,NCI-H1437,Graph and pruning,,0.8455,,,min
+c,NCI-H1437,Selection,,0.3405,,,min
+c,NCI-H1437,Placement,,0.071,,,min
+c,NCI-H1437,minimap2,,1.4903333333,,,min
+c,NCI-H1437,Calling,,0.502,,,min
+c,NCI-H1437,Total,,11.282,,,min
+c,HCC1395,Packing,,2.3333333333,,,min
+c,HCC1395,Core extraction,,2.3486666667,,,min
+c,HCC1395,Counting,,0.639,,,min
+c,HCC1395,Graph and pruning,,0.713,,,min
+c,HCC1395,Selection,,0.3106666667,,,min
+c,HCC1395,Placement,,0.0826666667,,,min
+c,HCC1395,minimap2,,1.1718333333,,,min
+c,HCC1395,Calling,,0.3948333333,,,min
+c,HCC1395,Total,,7.994,,,min
+c,mean of five pairs,Packing,,3.8033333333,,,min
+c,mean of five pairs,Core extraction,,2.8956333333,,,min
+c,mean of five pairs,Counting,,0.8178333333,,,min
+c,mean of five pairs,Graph and pruning,,0.8118333333,,,min
+c,mean of five pairs,Selection,,0.3339666667,,,min
+c,mean of five pairs,Placement,,0.0788333333,,,min
+c,mean of five pairs,minimap2,,1.4059333333,,,min
+c,mean of five pairs,Calling,,0.4763333333,,,min
+c,mean of five pairs,Total,,10.6237,,,min
+d,HCC1954,"minimap2, both read sets",,391.466266245,,,Gbp
+d,HCC1954,"janus, snippets",,0.391871603,,,Gbp
+d,HCC1954,ratio,,998.9656388677,,,x
+d,NCI-H2009,"minimap2, both read sets",,413.026925055,,,Gbp
+d,NCI-H2009,"janus, snippets",,1.017894657,,,Gbp
+d,NCI-H2009,ratio,,405.7658837431,,,x
+d,HCC1937,"minimap2, both read sets",,359.027682847,,,Gbp
+d,HCC1937,"janus, snippets",,0.335274207,,,Gbp
+d,HCC1937,ratio,,1070.8479070297,,,x
+d,NCI-H1437,"minimap2, both read sets",,420.324650799,,,Gbp
+d,NCI-H1437,"janus, snippets",,0.485640462,,,Gbp
+d,NCI-H1437,ratio,,865.5058292878,,,x
+d,HCC1395,"minimap2, both read sets",,308.895756219,,,Gbp
+d,HCC1395,"janus, snippets",,0.631462932,,,Gbp
+d,HCC1395,ratio,,489.1748043557,,,x
+a,janus,total,,2.2206194444,,,h
+a,Severus,mapping,,55.0312277778,,,h
+a,Severus,phasing,,9.2625833333,,,h
+a,Severus,caller,,10.2445333333,,,h
+a,Severus,total,,74.5383444444,,,h
+a,SAVANA,mapping,,55.0312277778,,,h
+a,SAVANA,phasing,,9.2625833333,,,h
+a,SAVANA,caller,,2.0745138889,,,h
+a,SAVANA,total,,66.368325,,,h
+a,nanomonsv,mapping,,55.0312277778,,,h
+a,nanomonsv,phasing,,0,,,h
+a,nanomonsv,caller,,8.8599805556,,,h
+a,nanomonsv,total,,63.8912083333,,,h
+a,dysgu,mapping,,55.0312277778,,,h
+a,dysgu,phasing,,0,,,h
+a,dysgu,caller,,0.3439166667,,,h
+a,dysgu,total,,55.3751444444,,,h
+a,SVision-pro,mapping,,55.0312277778,,,h
+a,SVision-pro,phasing,,0,,,h
+a,SVision-pro,caller,,3.3337805556,,,h
+a,SVision-pro,total,,58.3650083333,,,h
+a,cuteSV,mapping,,55.0312277778,,,h
+a,cuteSV,phasing,,0,,,h
+a,cuteSV,caller,,0.4095166667,,,h
+a,cuteSV,total,,55.4407444444,,,h
+a,DeBreak,mapping,,55.0312277778,,,h
+a,DeBreak,phasing,,0,,,h
+a,DeBreak,caller,,2.2836861111,,,h
+a,DeBreak,total,,57.3149138889,,,h
+a,Sniffles2,mapping,,55.0312277778,,,h
+a,Sniffles2,phasing,,0,,,h
+a,Sniffles2,caller,,0.5402805556,,,h
+a,Sniffles2,total,,55.5715083333,,,h
+a,kled,mapping,,55.0312277778,,,h
+a,kled,phasing,,0,,,h
+a,kled,caller,,0.270425,,,h
+a,kled,total,,55.3016527778,,,h
+a,SVDSS,mapping,,55.0312277778,,,h
+a,SVDSS,phasing,,0,,,h
+a,SVDSS,caller,,25.6377861111,,,h
+a,SVDSS,total,,80.6690138889,,,h

@@ -1,0 +1,65 @@
+feature_group,features,pair,f1_drop
+Type and size,5,HCC1954,0.0083052296
+Type and size,5,NCI-H2009,0.0057091694
+Type and size,5,HCC1937,0.0040431242
+Type and size,5,NCI-H1437,-0.0003002423
+Type and size,5,HCC1395,0.0088985555
+Type and size,5,HG008,0.0123990177
+Type and size,5,COLO829,0.0187827881
+Reference context and depth,3,HCC1954,0.0256437699
+Reference context and depth,3,NCI-H2009,0.0089297122
+Reference context and depth,3,HCC1937,-0.0033579393
+Reference context and depth,3,NCI-H1437,0.0115088908
+Reference context and depth,3,HCC1395,0.0178693843
+Reference context and depth,3,HG008,0.003449064
+Reference context and depth,3,COLO829,0.0158012758
+"Tumor reads, anchors next to the event",3,HCC1954,0.0137381886
+"Tumor reads, anchors next to the event",3,NCI-H2009,0.0195638842
+"Tumor reads, anchors next to the event",3,HCC1937,0.0179466297
+"Tumor reads, anchors next to the event",3,NCI-H1437,0.0477754843
+"Tumor reads, anchors next to the event",3,HCC1395,0.0303643211
+"Tumor reads, anchors next to the event",3,HG008,0.0147695337
+"Tumor reads, anchors next to the event",3,COLO829,0.0517940554
+Graph,7,HCC1954,0.0497414703
+Graph,7,NCI-H2009,0.0212393605
+Graph,7,HCC1937,0.0166575295
+Graph,7,NCI-H1437,0.0634153219
+Graph,7,HCC1395,0.0392890413
+Graph,7,HG008,0.0607048817
+Graph,7,COLO829,0.1398502535
+"Normal reads, anchors of the site",16,HCC1954,0.0219072124
+"Normal reads, anchors of the site",16,NCI-H2009,0.1858548121
+"Normal reads, anchors of the site",16,HCC1937,0.0440927468
+"Normal reads, anchors of the site",16,NCI-H1437,0.0971552233
+"Normal reads, anchors of the site",16,HCC1395,0.0604200832
+"Normal reads, anchors of the site",16,HG008,0.0886211158
+"Normal reads, anchors of the site",16,COLO829,0.1118420089
+"Tumor reads, anchors of the site",6,HCC1954,0.0418268052
+"Tumor reads, anchors of the site",6,NCI-H2009,0.0856755377
+"Tumor reads, anchors of the site",6,HCC1937,0.0438855622
+"Tumor reads, anchors of the site",6,NCI-H1437,0.1709447707
+"Tumor reads, anchors of the site",6,HCC1395,0.0821444055
+"Tumor reads, anchors of the site",6,HG008,0.1464683672
+"Tumor reads, anchors of the site",6,COLO829,0.1141974592
+"Alignment (mapping quality, divergence)",2,HCC1954,0.1040910569
+"Alignment (mapping quality, divergence)",2,NCI-H2009,0.2315287178
+"Alignment (mapping quality, divergence)",2,HCC1937,0.0999358668
+"Alignment (mapping quality, divergence)",2,NCI-H1437,0.1808511742
+"Alignment (mapping quality, divergence)",2,HCC1395,0.1026240451
+"Alignment (mapping quality, divergence)",2,HG008,0.156333698
+"Alignment (mapping quality, divergence)",2,COLO829,0.2224470039
+"Normal reads, anchors next to the event",12,HCC1954,0.2797509258
+"Normal reads, anchors next to the event",12,NCI-H2009,0.4327577363
+"Normal reads, anchors next to the event",12,HCC1937,0.3114387187
+"Normal reads, anchors next to the event",12,NCI-H1437,0.5092971468
+"Normal reads, anchors next to the event",12,HCC1395,0.2254258098
+"Normal reads, anchors next to the event",12,HG008,0.596498071
+"Normal reads, anchors next to the event",12,COLO829,0.6694207242
+Type and size,5,mean of seven pairs,0.0082625203
+Reference context and depth,3,mean of seven pairs,0.0114063082
+"Tumor reads, anchors next to the event",3,mean of seven pairs,0.0279931567
+Graph,7,mean of seven pairs,0.0558425512
+"Normal reads, anchors of the site",16,mean of seven pairs,0.0871276004
+"Tumor reads, anchors of the site",6,mean of seven pairs,0.0978775582
+"Alignment (mapping quality, divergence)",2,mean of seven pairs,0.1568302233
+"Normal reads, anchors next to the event",12,mean of seven pairs,0.4320841618

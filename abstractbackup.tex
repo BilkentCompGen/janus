@@ -1,0 +1,13 @@
+\begin{abstract}
+Somatic structural variants (SVs) are the predominant class of driver mutation in most cancer types.
+Carried only by a subclone, many have a low variant allele frequency, so some studies sequence several samples per patient.
+However, current tumor--normal callers need every read of every sample aligned to a single reference genome, so they are computationally expensive and prone to reference bias.
+Here we introduce \tool{}, which discovers somatic SVs in a personal pangenome, a colored de Bruijn-like graph of locally consistent parsing (LCP) cores built from a patient's normal and tumor PacBio HiFi reads.
+\tool{} first searches this graph, without any alignment, for candidate sites that only tumor reads traverse, and then aligns only short snippets of tumor reads around these sites.
+On five CASTLE tumor--normal pairs, \tool{} had the highest mean F1 score against a consensus of 18 call sets (0.881, compared with 0.858 for the next-best caller).
+Its lead was largest at the lowest depth and purity (mean F1 score 0.476 versus 0.361 at 5$\times$ and 0.679 versus 0.520 at 20\% purity, each against the next-best caller in that setting).
+End to end, \tool{} processed a pair in about 11 minutes on 16 threads, about 24 times faster than mapping the two read sets alone.
+For 20 simulated tumors of one patient, a joint run was faster and more accurate than 20 pairwise runs, with the largest accuracy gain at the lowest tumor depth.
+Therefore, by calling a patient's samples jointly and losing less accuracy at lower depth and purity, \tool{} can make multi-sample studies more efficient and accurate.
+\tool{} is available at \url{https://github.com/Muti-Kara/janus}.
+\end{abstract}
