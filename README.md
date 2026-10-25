@@ -56,7 +56,7 @@ With one tumor the run is pairwise; with several it is joint, calling all tumors
 
 ## Results
 
-On five tumor/normal cell line pairs of the CASTLE panel, scored against the consensus of 18 call sets, janus has a mean F1 score of 0.887; the next best caller, Severus, has 0.858. The lead grows at low depth (0.489 against 0.362 at 5×) and low purity (0.683 against 0.520 at 20%). On COLO829 and HG008, which were not used for training, janus has the highest F1 score of all HiFi callers.
+On five tumor/normal cell line pairs of the CASTLE panel, scored against the consensus of 18 call sets, janus has a mean F1 score of 0.887; the next best caller, Severus, has 0.858. The lead grows at low depth (0.489 against 0.362 at 5×) and low purity (0.683 against 0.520 at 20%). On COLO829 and HG008, which were not used for training, janus has the highest F1 score of all HiFi callers (0.864 and 0.896).
 
 <p align="center"><img src="docs/accuracy.png" width="720"></p>
 
