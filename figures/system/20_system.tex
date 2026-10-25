@@ -1,0 +1,416 @@
+\documentclass[tikz,border=0.5pt]{standalone}
+\input{style}
+\renewcommand{\fontlabel}{\sffamily\fontsize{7.79}{9.35}\selectfont}
+\renewcommand{\fontsmall}{\sffamily\fontsize{8.9}{10}\selectfont}
+\renewcommand{\fontbadge}{\sffamily\bfseries\fontsize{7.79}{8.9}\selectfont}
+\renewcommand{\fontstage}{\sffamily\bfseries\fontsize{10.58}{11}\selectfont}
+\begin{document}
+\begin{tikzpicture}[x=1mm,y=1mm,
+    sn/.style={snode},
+    tn/.style={tnode},
+    an/.style={gnode, draw=ink, fill=ink},
+    gone/.style={gnode, draw=#1!55!paper, fill=#1fill, dash pattern=on 0.9pt off 0.7pt},
+    se/.style={gedge, draw=ink2},
+    te/.style={gedge, draw=tumor},
+    deadedge/.style={line width=\lw, draw=#1!55!paper, dash pattern=on 0pt off 1.5pt},
+    trace/.style={line width=0.75pt, draw=#1, dash pattern=on 1.5pt off 0.9pt, -{Stealth[length=1.3mm]}},
+    glow/.style={line width=4.6mm, draw=tumor!14!paper, line cap=round, line join=round},
+    guideline/.style={draw=guide, line width=0.45pt, dash pattern=on 1pt off 1pt},
+    lab/.style={labelfont, text=ink2},
+    panel/.style={stagefont, text=ink, anchor=north west, inner sep=0pt},
+    cu/.style={line width=1.25pt, line cap=round},
+    zoombox/.style={draw=ink2, line width=0.45pt},
+    zoomline/.style={draw=guide, line width=0.4pt},
+    dot/.style={circle, inner sep=0pt, minimum size=#1},
+    rn/.style={gnode, draw=ink2, fill=paper},
+    stem/.style={draw=ink2, line width=0.6pt},
+    atick/.style={draw=ink, line width=0.8pt, line cap=butt},
+    faint/.style={line width=0.9pt, draw=#1!40!paper},
+    rspan/.style={line width=1.3pt, draw=#1},
+    cnode/.style={gnode, draw=#1, fill=paper},
+    cedge/.style={-{Stealth[length=1.1mm]}, line width=0.6pt, draw=#1, shorten <=1.6mm, shorten >=1.6mm},
+    bracket/.style={draw=ink2, line width=0.5pt},
+    band/.style={fill=grid, rounded corners=0.6mm},
+    tsplit/.style={circle, draw=ink2, fill=paper, line width=0.6pt, minimum size=1.7mm, inner sep=0pt},
+    tbranch/.style={draw=ink2, line width=0.6pt},
+    leaf/.style={minimum size=1.4mm, inner sep=0pt, draw=none},
+    leaf0/.style={leaf, fill=muted},
+    leaf1/.style={leaf, fill=passgreen},
+    callbadge/.style={rounded corners=0.8mm, line width=0.8pt, minimum width=10.5mm, minimum height=3.8mm, inner sep=0pt, badgefont},
+    pass/.style={callbadge, draw=passgreen, fill=passgreen!30!paper},
+    low/.style={callbadge, draw=muted, fill=paper},
+    dupl/.style={callbadge, draw=muted, fill=none},
+    cell0/.style={draw=guide, fill=paper, line width=0.5pt},
+    celln/.style={draw=normal, fill=normalfill, line width=0.5pt},
+    cellt/.style={draw=tumor!60!paper, fill=tumorfill, line width=0.5pt},
+    celltown/.style={draw=tumor, fill=tumor!70!paper, line width=0.5pt},
+  ]
+\newcommand\counts[5]{%
+  \begin{scope}[shift={#1}]
+    \draw[#2] (-5.8,-0.9) rectangle ++(2.0,1.8);
+    \draw[#3] (-3.4,-0.9) rectangle ++(2.0,1.8);
+    \draw[#4] (-1.0,-0.9) rectangle ++(2.0,1.8);
+    \node[lab, inner sep=0pt] at (2.4,0) {$\cdot\!\cdot$};
+    \draw[#5] (3.8,-0.9) rectangle ++(2.0,1.8);
+  \end{scope}}
+\newcommand\cut[1]{\draw[muted, line width=0.75pt] ($(#1)+(-1.9,-1.9)$) -- ($(#1)+(1.9,1.9)$);}
+\newcommand\comb[7]{%
+  \pgfmathsetmacro\half{abs(#5-#3)}%
+  \pgfmathsetmacro\sa{sin(#5-#3) > 0 ? 1 : -1}%
+  \draw[trace=#1, rounded corners=1.4mm] ($(#2)+(#3:#7)+({#3+\sa*90}:#6)$) -- ($(#2)+(#5:{#6/sin(\half)})$) -- ($(#2)+(#4:#7)+({#4-\sa*90}:#6)$);}
+\newcommand\gcomb[6]{%
+  \pgfmathsetmacro\half{abs(#4-#2)}%
+  \pgfmathsetmacro\sa{sin(#4-#2) > 0 ? 1 : -1}%
+  \draw[glow] ($(#1)+(#2:#6)+({#2+\sa*90}:#5)$) -- ($(#1)+(#4:{#5/sin(\half)})$) -- ($(#1)+(#3:#6)+({#3-\sa*90}:#5)$);}
+\newcommand\rd[5]{%
+  \ifnum#5=1
+    \fill[#1] (#2,#4-0.65) -- (#3-1,#4-0.65) -- (#3,#4) -- (#3-1,#4+0.65) -- (#2,#4+0.65) -- cycle;
+  \else
+    \fill[#1] (#2+1,#4-0.65) -- (#3,#4-0.65) -- (#3,#4+0.65) -- (#2+1,#4+0.65) -- (#2,#4) -- cycle;
+  \fi}
+\newcommand{\tree}[5]{%
+  \begin{scope}[shift={#1}, scale=0.9]
+    \coordinate (tr) at (0,0); \coordinate (ta) at (-2.6,-3.4); \coordinate (tb) at (2.6,-3.4);
+    \draw[tbranch] (tr) -- (ta) (tr) -- (tb) (ta) -- (-3.8,-6.8) (ta) -- (-1.4,-6.8) (tb) -- (1.4,-6.8) (tb) -- (3.8,-6.8);
+    \foreach \tp in {tr,ta,tb} \node[tsplit] at (\tp) {};
+    \node[#2] at (-3.8,-6.8) {}; \node[#3] at (-1.4,-6.8) {};
+    \node[#4] at (1.4,-6.8) {};  \node[#5] at (3.8,-6.8) {};
+  \end{scope}}
+
+\begin{scope}[shift={(0,181.1)}]
+  \node[panel] at (0,35.5) {a};
+  \node[lab, text=normal, anchor=west] at (0.6,29.3) {normal};
+  \node[lab, text=tumor, anchor=west] at (0.6,22.7) {tumor 1};
+  \node[lab, text=tumor, anchor=west] at (0.6,16.1) {tumor 2};
+  \node[lab, text=tumor, anchor=west] at (0.6,6.9) {tumor $N$};
+  \node[lab, text=tumor] at (21.5,11.9) {$\vdots$};
+  \fill[band] (19.6,20.4) rectangle (23.4,25.0);
+  \fill[band] (19.6,4.6) rectangle (23.4,9.2);
+  \foreach \xa/\xb/\yy/\dr in {12.5/26.5/30.45/1, 16.5/31/28.15/0} {\rd{normal}{\xa}{\xb}{\yy}{\dr}}
+  \foreach \xa/\xb/\yy/\dr in {13.5/28/17.25/0, 15.5/30.5/14.95/1} {\rd{tumor}{\xa}{\xb}{\yy}{\dr}}
+  \foreach \xa/\xb/\yy/\dr in {13/29/23.85/1, 15/31/21.55/0, 12.5/27.5/8.05/0, 16/30.5/5.75/1} {
+    \rd{tumor}{\xa}{\xb}{\yy}{\dr}
+    \fill[tumorfill] (20.1,\yy-0.4) rectangle (22.9,\yy+0.4);
+  }
+
+  \def\sx{42} \def\sp{3.2}
+  \foreach \r/\lt in {0/A, 1/C, 2/G, 3/T} {
+    \draw[grid, line width=0.5pt] (\sx-1.8,{4.6+\r*2.4}) -- ({\sx+27*\sp+1.8},{4.6+\r*2.4});
+    \node[lab, text=muted] at (\sx-3.6,{4.6+\r*2.4}) {\lt};
+  }
+  \foreach \lt/\r [count=\i from 0] in {A/0, T/3, C/1, G/2, T/3, G/2, C/1, T/3, C/1, A/0, T/3, G/2, T/3, A/0, T/3, A/0, T/3, G/2, C/1, A/0, C/1, G/2, C/1, A/0, C/1, G/2, A/0, T/3}
+    \node[lab, text=ink, inner sep=0.4pt] (q\i) at ({\sx+\i*\sp},{4.6+\r*2.4}) {\lt};
+  \begin{scope}[on background layer]
+    \foreach \i in {2,6,9,11,13,15,19,23,26} \fill[sharedfill] (q\i.center) circle (1.25);
+  \end{scope}
+  \foreach \i in {4,21} \draw[ink2, line width=0.5pt] (q\i.center) circle (1.25);
+  \draw[muted, line width=0.5pt, dash pattern=on 0.8pt off 0.7pt] (q7.center) circle (1.25);
+  \foreach \i [evaluate=\i as \j using int(\i+1)] in {0,...,26} \draw[guide, line width=0.45pt, shorten <=1.15mm, shorten >=1.15mm] (q\i.center) -- (q\j.center);
+  \foreach \cs/\ce/\cr in {1/3/0, 3/5/1, 5/7/0, 8/10/1, 10/12/0, 12/14/1, 14/16/0, 16/18/1, 18/20/0, 20/22/1, 22/24/0, 25/27/1}
+    \draw[cu, draw=shared] ({\sx+\cs*\sp-1.2},{14.3+\cr*1.2}) -- ({\sx+\ce*\sp+1.2},{14.3+\cr*1.2});
+  \foreach \c/\lb [count=\k from 2] in {4/7, 6/1, 9/4, 11/7, 13/6, 15/12, 17/2, 19/6, 21/7, 23/6, 26/3}
+    \coordinate (u\k) at ({\sx+\c*\sp},{18.4+\lb*0.36});
+  \foreach \k [evaluate=\k as \kn using int(\k+1)] in {2,...,11} \draw[guide, line width=0.45pt] (u\k) -- (u\kn);
+  \foreach \k in {3,6,8} \fill[sharedfill] (u\k) circle (1.0);
+  \draw[ink2, line width=0.5pt, fill=paper] (u10) circle (1.0);
+  \foreach \k in {2,...,12} \fill[ink2] (u\k) circle (0.4);
+  \foreach \cs/\ce/\cr in {1/10/0, 8/16/1, 12/20/2, 16/24/0}
+    \draw[cu, draw=shared] ({\sx+\cs*\sp-1.2},{24.6+\cr*1.2}) -- ({\sx+\ce*\sp+1.2},{24.6+\cr*1.2});
+  \draw[cu, draw=shared] (\sx-1.2,31.4) -- ({\sx+27*\sp+1.2},31.4);
+  \draw[cu, draw=shared, dash pattern=on 0pt off 2pt] (\sx-5,31.4) -- (\sx-2.6,31.4) ({\sx+27*\sp+2.6},31.4) -- ({\sx+27*\sp+5},31.4);
+  \foreach \lv/\yy in {1/14.9, 2/25.8, 5/31.4} \node[lab, anchor=east] at (\sx-5.6,\yy) {\lv};
+  \node[lab, anchor=east] at (\sx-5.7,29.0) {$\vdots$};
+
+  \foreach \k in {0,...,6} \node[sn] (g\k) at ({139+\k*6.6},17) {};
+  \node[tn] (h1) at (155.5,26) {}; \node[tn] (h2) at (165.4,26) {};
+  \draw[se, shorten <=0pt] (134.5,17) -- (g0);
+  \foreach \k [evaluate=\k as \kn using int(\k+1)] in {0,...,5} \draw[se] (g\k) -- (g\kn);
+  \draw[se, shorten >=0pt] (g6) -- (183,17);
+  \draw[te] (g2) -- (h1); \draw[te] (h1) -- (h2); \draw[te] (h2) -- (g5);
+  \draw[zoomline] (h1.north) -- (155.5,30.3);
+  \draw[zoomline] (g1.south) -- (145.6,11.7);
+  \counts{(155.5,31.4)}{cell0}{cellt}{cell0}{cellt}
+  \counts{(145.6,10.6)}{celln}{cellt}{cellt}{cellt}
+  \foreach \k/\lb/\col in {0/n/normal, 1/1/tumor, 2/2/tumor, 4/$N$/tumor} \node[lab, text=\col] at ({155.5-4.8+\k*2.4},34.2) {\lb};
+\end{scope}
+
+\begin{scope}[shift={(0,68.5)}]
+  \node[panel] at (0,116.5) {b};
+  \def\yb{96}
+  \node[sn] (s0) at (18,\yb) {};
+  \node[gone=normal] (b1) at (27,\yb+8) {};  \node[gone=normal] (b2) at (36,\yb+8) {};
+  \node[gone=tumor] (b3) at (27,\yb-8) {};   \node[gone=tumor] (b4) at (36,\yb-8) {};
+  \node[sn] (s0b) at (45,\yb) {};
+  \node[an] (L3) at (56,\yb) {};
+  \node[an] (L2) at (65,\yb) {};
+  \node[an] (L1) at (74,\yb) {};
+  \node[sn] (s1) at (84,\yb) {};
+  \node[sn] (T) at (95,\yb+13) {};
+  \node[sn] (C) at (112,\yb-4) {};
+  \node[sn] (P) at ($(C)+(240:21)$) {};
+  \node[sn] (Q) at ($(C)+(300:21)$) {};
+  \node[sn] (s5) at (130,\yb) {};
+  \node[tn] (N) at (118,\yb+7) {};
+  \node[an] (R1) at (141,\yb) {};
+  \node[an] (R2) at (150,\yb) {};
+  \node[an] (R3) at (159,\yb) {};
+  \node[sn] (r4) at (170,\yb) {};
+  \node[gone=tumor] (t1) at (157,\yb+9) {}; \node[gone=tumor] (t2) at (165,\yb+16) {};
+  \begin{scope}[on background layer]
+    \gcomb{T}{229.76}{345.4}{107.6}{2.4}{10}
+    \gcomb{s5}{149.7}{360}{74.85}{2.4}{10}
+  \end{scope}
+  \draw[se, shorten <=0pt] (5,\yb) -- (s0);
+  \draw[deadedge=normal] (s0) -- (b1);  \draw[deadedge=normal] (b1) -- (b2);  \draw[deadedge=normal] (b2) -- (s0b);
+  \draw[deadedge=tumor] (s0) -- (b3);   \draw[deadedge=tumor] (b3) -- (b4);   \draw[deadedge=tumor] (b4) -- (s0b);
+  \foreach \n in {b1,b2,b3,b4,t1,t2} {\cut{\n}}
+  \foreach \xa/\xb in {s0b/L3, L3/L2, L2/L1, L1/s1, s1/T, T/C, C/P, P/Q, Q/C, C/s5, s5/R1, R1/R2, R2/R3, R3/r4} \draw[se] (\xa) -- (\xb);
+  \draw[te] (T) -- (N); \draw[te] (N) -- (s5);
+  \draw[se, shorten >=0pt] (r4) -- (183,\yb);
+  \draw[deadedge=tumor] (R2) -- (t1);  \draw[deadedge=tumor] (t1) -- (t2);
+  \comb{normal}{C}{135}{240}{187.5}{1.8}{12}
+  \comb{tumor}{C}{135}{240}{187.5}{3.0}{12}
+  \comb{normal}{C}{300}{240}{270}{1.8}{8}
+  \comb{tumor}{C}{300}{240}{270}{3.0}{8}
+  \comb{normal}{C}{300}{372.5}{336.25}{1.8}{12}
+  \comb{tumor}{C}{300}{372.5}{336.25}{3.0}{12}
+  \foreach \col/\off in {normal/1.8, tumor/3.0}
+    \draw[trace=\col, rounded corners=1.4mm] ($(P)+(60:8)+(-30:\off)$) -- ($(P)+(30:{2*\off})$) -- ($(Q)+(150:{2*\off})$) -- ($(Q)+(120:8)+(210:\off)$);
+  \comb{tumor}{T}{229.76}{345.4}{107.6}{2.4}{10}
+  \comb{tumor}{s5}{149.7}{360}{74.85}{2.4}{10}
+  \node[lab] at ($(C)+(270:11.6)$) {$\times k$};
+  \foreach \n/\lb in {L3/L$_3$, L2/L$_2$, L1/L$_1$, R1/R$_1$, R2/R$_2$, R3/R$_3$} \node[lab, text=ink, below=1.2mm of \n] {\lb};
+  \def\ys{59} \def\yi{67} \def\hs{8} \def\wl{52}
+  \draw[ink2, line width=0.5pt] (42,\ys) -- (183,\ys);
+  \foreach \n in {s0b, L3, L2, L1, s1, s5, R1, R2, R3, r4} \draw[guideline] (\n.south) -- (\n |- 0,\ys);
+  \draw[guideline] (118,71.5) -- (118,\ys);
+  \foreach \xx/\ft/\isan in {45/1/0, 56/1/1, 65/0.9/1, 74/1/1, 84/0.08/0, 118/0/0, 130/0/0, 141/1/1, 150/1/1, 159/0.85/1, 170/1/0} {
+    \pgfmathsetmacro\wt{(\xx < 84 ? max(0, 1-(84-\xx)/\wl) : (\xx > 118 ? max(0, 1-(\xx-118)/\wl) : 1))}
+    \pgfmathsetmacro\scr{\ft*\wt}
+    \draw[stem] (\xx,\ys) -- (\xx,{\ys+\hs*\scr});
+    \ifnum\isan=1
+      \node[an, minimum size=2.3mm] at (\xx,{\ys+\hs*\scr}) {};
+    \else
+      \node[rn, minimum size=2.1mm] at (\xx,{\ys+\hs*\scr}) {};
+    \fi
+  }
+  \begin{scope}[shift={(3,\yi)}]
+    \draw[ink2, line width=0.5pt] (0,0) -- (13,0) (0,0) -- (0,8.5);
+    \draw[ink, line width=0.8pt] (0,0) -- (4.5,7) -- (9,7);
+    \draw[ink, line width=0.8pt, dash pattern=on 1pt off 1pt] (9,7) -- (9,0);
+    \draw[ink, line width=0.8pt] (9,0) -- (13,0);
+    \foreach \xx in {4.5, 9} \draw[ink2, line width=0.5pt] (\xx,0) -- (\xx,-0.8);
+    \node[lab, anchor=north] at (4.5,-0.6) {1};
+    \node[lab, anchor=north] at (9,-0.6) {2};
+    \foreach \xx/\yy in {4.6/7, 5.2/7, 6.4/7, 7.1/7, 0.45/0.7} \node[dot=1.3mm, fill=ink2] at (\xx,\yy) {};
+    \node[dot=1.3mm, fill=ink2] at (11,0) {};
+    \node[dot=1.3mm, fill=tumorfill, draw=tumor, line width=0.5pt] at (0,0) {};
+    \node[lab] at (6.5,10.3) {fit};
+  \end{scope}
+  \node[smallfont, text=ink2] at (19.5,{\yi+3.5}) {$\times$};
+  \begin{scope}[shift={(22.5,\yi)}]
+    \draw[ink2, line width=0.5pt] (0,0) -- (13,0) (0,0) -- (0,8.5);
+    \draw[ink, line width=0.8pt] (0,7) -- (12,0);
+    \draw[ink2, line width=0.5pt] (12,0) -- (12,-0.8);
+    \node[lab, anchor=north] at (0,-0.6) {0};
+    \node[lab, anchor=north] at (12,-0.6) {15 kb};
+    \node[lab] at (6.5,10.3) {weight};
+  \end{scope}
+  \node[smallfont, text=ink2] at (39,{\yi+3.5}) {$=$};
+
+  \begin{scope}[on background layer]
+    \fill[band] (24.8,40.6) rectangle (27.2,53.1);
+    \fill[band] (60.8,40.6) rectangle (63.2,53.1);
+  \end{scope}
+  \foreach \xx/\lb in {14/L$_3$, 20/L$_2$, 26/L$_1$, 62/R$_1$, 68/R$_2$, 74/R$_3$} \node[lab, text=ink] at (\xx,55.2) {\lb};
+  \draw[piece] (11,48.5-1.4) rectangle (77,48.5+1.4);
+  \foreach \xa/\xb/\yy in {8/94/51.8, 5/83/48.5, 2/78/45.2, 11/92/41.9} {
+    \draw[read, draw=tumor] (\xa,\yy) -- (\xb,\yy);
+    \foreach \xx in {14,20,26,62,68,74} \draw[atick] (\xx,\yy-0.75) -- (\xx,\yy+0.75);
+  }
+  \draw[line width=0.6pt, draw=tumor!55!paper, dash pattern=on 1.2pt off 1pt] (84.5,48.5) -- (114.5,48.5);
+  \def\sc{0.75}
+  \fill[ribbon] (116,47.1) -- (140.75,47.1) -- (134.75,41.9) -- (110,41.9) -- cycle;
+  \fill[ribbon] (140.75,47.1) -- (165.5,47.1) -- (171.5,41.9) -- (146.75,41.9) -- cycle;
+  \draw[ref] (110,40.1) rectangle (171.5,41.9);
+  \fill[tumor] (134.75,40.1) rectangle (146.75,41.9);
+  \draw[ref, fill=none] (110,40.1) rectangle (171.5,41.9);
+  \node[lab, anchor=east] at (108.5,41) {ref};
+  \draw[piece] (116,47.1) rectangle (165.5,49.9);
+  \draw[read, draw=tumor] (116.8,48.5) -- (164.7,48.5);
+  \foreach \xx in {3,9,15,51,57,63} \draw[atick] ({116+\sc*\xx},47.5) -- ({116+\sc*\xx},49.5);
+  \node[badgefont, text=svDEL, anchor=west] at (174,41) {DEL};
+\end{scope}
+
+\begin{scope}[shift={(0,67.5)}]
+  \node[panel] at (0,39.5) {c};
+  \tikzset{conn/.style={draw=ink2, line width=0.5pt, -{Stealth[length=1.1mm]}}}
+  \node[sn] (j0) at (7,28.2) {}; \node[sn] (j1) at (16,28.2) {}; \node[sn] (j2) at (27,28.2) {}; \node[sn] (j3) at (36,28.2) {};
+  \node[tn] (jt) at (21.5,34.2) {};
+  \begin{scope}[on background layer]
+    \draw[glow, line width=4.2mm] (j1.center) -- (jt.center) -- (j2.center);
+  \end{scope}
+  \draw[se, shorten <=0pt] (2.5,28.2) -- (j0); \draw[se] (j0) -- (j1); \draw[se] (j1) -- (j2); \draw[se] (j2) -- (j3);
+  \draw[se, shorten >=0pt] (j3) -- (40.5,28.2);
+  \draw[te] (j1) -- (jt); \draw[te] (jt) -- (j2);
+  \node[lab] at (21.5,22.6) {one site};
+  \draw[zoomline] (jt.east) -- (27.6,34.2);
+  \counts{(33.8,34.2)}{cell0}{cellt}{cellt}{cell0}
+  \draw[flow] (43.5,29.2) -- (50.5,29.2);
+  \foreach \lx/\nm in {66/tumor 1, 95/tumor 2, 124/tumor 3, 168/tumor $N$} \node[lab, text=tumor] at (\lx,36.6) {\nm};
+  \node[lab, text=tumor] at (146,36.6) {$\cdots$};
+  \foreach \lx in {66, 95, 124} \fill[band] (\lx-1.9,25.6) rectangle (\lx+1.9,32.8);
+  \foreach \lx/\ya/\yb/\yc in {66/31.4/29.2/27.0, 95/31.4/29.2/27.0} {
+    \foreach \xa/\xb/\yy/\dr in {-9.5/8/\ya/1, -7/10/\yb/0, -10/6.5/\yc/1} {
+      \rd{tumor}{\lx+\xa}{\lx+\xb}{\yy}{\dr}
+      \fill[tumorfill] (\lx-1.4,\yy-0.4) rectangle (\lx+1.4,\yy+0.4);
+    }
+  }
+  \rd{tumor}{124-8}{124+9.5}{29.2}{1}
+  \fill[tumorfill] (124-1.4,29.2-0.4) rectangle (124+1.4,29.2+0.4);
+  \draw[guideline] (168-9,29.2) -- (168+9,29.2);
+  \foreach \lx in {66, 95} {
+    \draw[conn] (\lx,24.9) -- (\lx,23.0);
+    \fill[ribbon] (\lx-8,20.2) -- (\lx,20.2) -- (\lx-2,16.6) -- (\lx-10,16.6) -- cycle;
+    \fill[ribbon] (\lx,20.2) -- (\lx+8,20.2) -- (\lx+10,16.6) -- (\lx+2,16.6) -- cycle;
+    \draw[ref] (\lx-10,15.3) rectangle (\lx+10,16.6);
+    \fill[tumor] (\lx-2,15.3) rectangle (\lx+2,16.6);
+    \draw[ref, fill=none] (\lx-10,15.3) rectangle (\lx+10,16.6);
+    \draw[piece] (\lx-8,20.2) rectangle (\lx+8,22.4);
+    \draw[read, draw=tumor, line width=1.1pt] (\lx-7.4,21.3) -- (\lx+7.4,21.3);
+    \foreach \xx in {-5.6,-3.8,3.8,5.6} \draw[atick, line width=0.6pt] (\lx+\xx,20.6) -- (\lx+\xx,22.0);
+    \draw[conn] (\lx,14.6) -- (\lx,11.2);
+  }
+  \draw[conn, dash pattern=on 1.2pt off 1pt] (124,24.9) -- (124,11.2);
+  \node[lab, anchor=west] at (125.4,18.9) {reads match};
+  \node[lab, anchor=west] at (0.6,6.3) {VCF};
+  \node[lab, anchor=west] at (9,8.3) {record of tumor 1};
+  \node[lab, anchor=west] at (9,4.3) {record of tumor 2};
+  \foreach \ry/\own in {8.3/66, 4.3/95} {
+    \node[badgefont, text=svDEL] at (48.6,\ry) {DEL};
+    \foreach \lx in {66, 95, 124} {
+      \ifnum\lx=\own
+        \draw[celltown] (\lx-10.5,\ry-1.7) rectangle (\lx+10.5,\ry+1.7);
+      \else
+        \draw[cellt] (\lx-10.5,\ry-1.7) rectangle (\lx+10.5,\ry+1.7);
+      \fi
+    }
+    \draw[cell0] (168-10.5,\ry-1.7) rectangle (168+10.5,\ry+1.7);
+    \node[lab] at (146,\ry) {$\cdots$};
+  }
+\end{scope}
+
+\begin{scope}[shift={(0,21.0)}]
+  \node[panel] at (0,44.8) {d};
+  \tikzset{vring/.style={draw=ink2, line width=0.6pt}, conn/.style={draw=ink2, line width=0.5pt, -{Stealth[length=1.1mm]}},
+           card/.style={draw=guide, fill=paper, line width=0.5pt, rounded corners=0.8mm}}
+  \def\vr{6}
+  \begin{scope}[shift={(10,39.5)}]
+    \tikzset{mini/.style={circle, inner sep=0pt, minimum size=1.7mm, line width=0.6pt}}
+    \draw[line width=0.7pt, draw=ink2] (-2.4,-0.9) -- (2.4,-0.9);
+    \draw[line width=0.7pt, draw=tumor] (-2.4,-0.9) -- (0,1.6) -- (2.4,-0.9);
+    \node[mini, draw=ink, fill=ink] at (-2.4,-0.9) {};
+    \node[mini, draw=ink, fill=ink] at (2.4,-0.9) {};
+    \node[mini, draw=tumor, fill=tumorfill] at (0,1.6) {};
+    \draw[vring] (0,0) circle (4.25);
+  \end{scope}
+  \begin{scope}[shift={(10,27.4)}]
+    \begin{scope}
+      \clip (0,0) circle (\vr);
+      \begin{scope}[scale=0.8]
+        \fill[band] (-4.4,-4.6) rectangle (-3.2,4.7);
+        \fill[band] (0,0.8) rectangle (1.2,4.7);
+        \fill[band] (3.6,-4.6) rectangle (4.8,-0.4);
+        \draw[piece] (-5.4,4.1-0.9) rectangle (2.2,4.1+0.9);
+        \foreach \xa/\xb/\yy/\xr/\col in {-9/4/4.1/0.6/tumor, -8/6/1.7/0.6/tumor, -9/9/-1.6/4.2/normal, -7/8/-4/4.2/normal} {
+          \draw[read, draw=\col] (\xa,\yy) -- (\xb,\yy);
+          \draw[atick] (-3.8,\yy-0.6) -- (-3.8,\yy+0.6);
+          \draw[atick] (\xr,\yy-0.6) -- (\xr,\yy+0.6);
+        }
+        \draw[{Stealth[length=0.9mm]}-{Stealth[length=0.9mm]}, line width=0.5pt, draw=svDEL] (0.8,-6) -- (4,-6);
+      \end{scope}
+    \end{scope}
+    \draw[vring] (0,0) circle (\vr);
+  \end{scope}
+  \begin{scope}[shift={(10,11)}]
+    \begin{scope}
+      \clip (0,0) circle (\vr);
+      \fill[ribbon] (-3.4,1.7) -- (0,1.7) -- (-1.6,-0.7) -- (-5,-0.7) -- cycle;
+      \fill[ribbon] (0,1.7) -- (3.4,1.7) -- (5,-0.7) -- (1.6,-0.7) -- cycle;
+      \draw[ref] (-5,-1.7) rectangle (5,-0.7);
+      \fill[tumor] (-1.6,-1.7) rectangle (1.6,-0.7);
+      \draw[ref, fill=none] (-5,-1.7) rectangle (5,-0.7);
+      \draw[piece] (-3.4,1.7) rectangle (3.4,3.5);
+      \draw[read, draw=tumor] (-2.9,2.6) -- (2.9,2.6);
+      \foreach \xx in {-2.4,2.4} \draw[atick] (\xx,2.05) -- (\xx,3.15);
+    \end{scope}
+    \node[badgefont, text=svDEL] at (0,-3.6) {DEL};
+    \draw[vring] (0,0) circle (\vr);
+  \end{scope}
+  \def\fx{30}
+  \foreach \row/\col/\n/\lb in {39.25/ggraph/2/Graph context, 34.5/tumor/6/Tumor read distribution, 29.75/normal/12/Normal read distribution, 25/gconsist/5/Consistency,
+                                20.25/gmeasure/20/Event measured in reads, 15.5/galign/2/Alignment, 10.75/gref/2/Reference context, 6/passgreen/5/Type and size, 1.25/ink2/2/Constant, -3.5/stCount/5/Count distribution of the sample} {
+    \foreach \i in {1,...,\n} \fill[\col!80!paper] ({\fx+(\i-1)*1.1},{\row-0.95}) rectangle ++(0.85,1.9);
+    \node[lab, text=ink, anchor=base west] at (\fx+22.8,\row-0.98) {\lb};
+  }
+  \foreach \cy/\ty/\rr in {39.5/39.25/4.25, 39.5/34.5/4.25, 27.4/34.5/6, 27.4/29.75/6, 27.4/25/6, 27.4/20.6/6, 11/15.5/6, 11/10.75/6, 11/6/6} {
+    \pgfmathsetmacro\ang{atan2(\ty-\cy,\fx-1.2-10)}
+    \draw[conn] ($(10,\cy)+(\ang:\rr+0.6)$) -- (\fx-1.2,\ty);
+  }
+  \begin{scope}[shift={(10,-3.5)}]
+    \foreach \hx/\hh in {-2.6/2.6, -1.7/1.5, -0.8/0.7, 0.1/0.9, 1.0/1.6, 1.9/1.2, 2.8/0.5} \fill[stCount!80!paper] (\hx-0.38,-1.9) rectangle (\hx+0.38,-1.9+\hh);
+    \draw[line width=0.5pt, draw=ink2] (-3.3,-1.9) -- (3.3,-1.9);
+    \draw[vring] (0,0) circle (4.25);
+  \end{scope}
+  \draw[conn] (14.85,-3.5) -- (\fx-1.2,-3.5);
+  \pgfmathsetmacro\dang{atan2(19.7-11,\fx-1.2-10)}
+  \draw[conn, line width=0.4pt, dash pattern=on 1.2pt off 1pt] ($(10,11)+(\dang:6.6)$) -- (\fx-1.2,19.7);
+  \begin{scope}[shift={(13.6,2)}]
+  \draw[flow] (70.3,20.2) -- (74.3,20.2);
+  \foreach \k in {3,2,1} {
+    \begin{scope}[shift={({76+\k*3.8},{12.6+\k*2.9})}]
+      \draw[card] (0,0) rectangle (12.5,10.5);
+      \begin{scope}[opacity=0.4]
+        \tree{(6.25,8.8)}{leaf0}{leaf1}{leaf1}{leaf0}
+      \end{scope}
+    \end{scope}
+  }
+  \begin{scope}[shift={(76,12.6)}]
+    \draw[card] (0,0) rectangle (12.5,10.5);
+    \tree{(6.25,8.8)}{leaf0}{leaf1}{leaf0}{leaf1}
+  \end{scope}
+  \foreach \k in {0,1,2,3} \draw[guide, line width=0.45pt] ({88.5+\k*3.8},{17.85+\k*2.9}) -- (103.6,20.2);
+  \node[stagefont, text=ink, scale=1.2] at (106.2,20.2) {$\mathbf{\Sigma}$};
+  \draw[flow] (109.2,20.2) -- (115.2,20.2);
+  \node[lab, anchor=south, align=center] at (109.3,22.6) {cut per\\minimum};
+  \begin{scope}[shift={(139,37.2)}, gheld/.style={draw=ink, fill=paper, line width=0.5pt}, gfold/.style={fill=ink2!45!paper}]
+    \foreach \rr/\ry in {1/0, 2/3.2, 3/5.5, 4/7.8, 5/10.1, 6/12.4, 7/15.6, 8/17.9, 9/20.2, 10/22.5, 11/24.8}
+      \foreach \k in {1,...,5} {
+        \ifnum\k=1 \def\st{gheld}\else\def\st{gfold}\fi
+        \path[\st] ({(\k-1)*2.4},{-\ry}) rectangle ++(1.9,-1.9);
+      }
+    \node[lab, anchor=west] at (12.4,-0.95) {full};
+    \draw[bracket] (12.1,-3.2) -- (12.4,-3.2) -- (12.4,-12.3-1.9) -- (12.1,-12.3-1.9);
+    \node[lab, anchor=west, align=left] at (12.8,-8.7) {depth\\5--30$\times$};
+    \draw[bracket] (12.1,-15.6) -- (12.4,-15.6) -- (12.4,-24.8-1.9) -- (12.1,-24.8-1.9);
+    \node[lab, anchor=west, align=left] at (12.8,-21.2) {purity\\20--80\%};
+    \node[lab, anchor=south] at (5.75,0.6) {training pairs};
+    \draw[{Stealth[length=1.2mm]}-, line width=0.5pt, draw=ink2] (0.95,-27.2) -- (0.95,-29.4) node[lab, anchor=north] {held out};
+  \end{scope}
+  \draw[flow, line width=0.7pt] (138.2,35.2) -| (95,32.6);
+  \node[pass] at (122.5,26.4) {PASS};
+  \node[low] at (122.5,20.2) {LOW};
+  \coordinate (dupl) at (122.5,14);
+  \begin{scope}
+    \clip[rounded corners=0.8mm] ($(dupl)+(-5.25,-1.9)$) rectangle ($(dupl)+(5.25,1.9)$);
+    \foreach \dd in {-14,-13,...,6} \draw[hatch, line width=0.5pt] ($(dupl)+(\dd,-2)$) -- ++(8,4);
+  \end{scope}
+  \node[dupl] at (dupl) {DUPL};
+  \end{scope}
+\end{scope}
+% panel frames (disabled at the user's request, 2026-10-23)
+% \begin{scope}[on background layer]
+%   \foreach \ya/\yb in {190.3/225.7, 109.4/189.5, 68.7/108.5, 12.25/67.3} \draw[draw=frame, line width=0.6pt, rounded corners=1.5mm] (-2,\ya) rectangle (185,\yb);
+% \end{scope}
+\end{tikzpicture}
+\end{document}
