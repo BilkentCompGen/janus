@@ -17,9 +17,10 @@ hg38)
     if [ ! -s hg38_parmask.fa.fai ]; then
         [ -s hg38.fa.gz ] || curl -sSfL -o hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz
         python3 - <<'EOF'
-import gzip
+import gzip, re
 PAR = [(10001, 2781479), (56887903, 57217415)]
-out = open("hg38_parmask.fa.tmp", "w"); name = None; seq = []
+MAIN = [f"chr{c}" for c in list(range(1, 23)) + ["X", "Y", "M"]]
+seqs = {}; name = None; seq = []
 def flush():
     if name is None or name.endswith("_alt"): return
     s = "".join(seq).upper()
@@ -27,11 +28,18 @@ def flush():
         s = list(s)
         for a, b in PAR: s[a - 1:b] = "N" * (b - a + 1)
         s = "".join(s)
-    out.write(">" + name + "\n" + "\n".join(s[i:i + 60] for i in range(0, len(s), 60)) + "\n")
+    seqs[name] = s
 for l in gzip.open("hg38.fa.gz", "rt"):
     if l[0] == ">": flush(); name = l[1:].split()[0]; seq = []
     else: seq.append(l.strip())
-flush(); out.close()
+flush()
+# the primary chromosomes in order, then the unplaced and unlocalized contigs by their GenBank accession (chrUn_GL000195v1 -> GL000195.1)
+acc = {n: "{}.{}".format(*re.search(r"((?:GL|KI)\d+)v(\d+)", n).groups()) for n in seqs if n not in MAIN}
+out = open("hg38_parmask.fa.tmp", "w")
+for n in MAIN + sorted(acc, key=acc.get):
+    s = seqs[n]; head = f"{n} {'MT' if n == 'chrM' else n[3:]}" if n in MAIN else f"{acc[n]} {acc[n]}"
+    out.write(">" + head + "\n" + "\n".join(s[i:i + 60] for i in range(0, len(s), 60)) + "\n")
+out.close()
 EOF
         mv hg38_parmask.fa.tmp hg38_parmask.fa && samtools faidx hg38_parmask.fa
     fi
