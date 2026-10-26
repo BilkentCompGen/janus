@@ -24,7 +24,8 @@ SRC := $(wildcard src/*.cpp)
 OBJ := $(SRC:src/%.cpp=$(BUILD)/%.o) $(BUILD)/lcp_batch.o
 LCPOBJ := $(BUILD)/lcptools/core.o $(BUILD)/lcptools/lps.o $(BUILD)/lcptools/encoding.o
 PY := .venv-bench/bin/python
-TEX := docker run --rm --log-driver none -u "$$(id -u):$$(id -g)" -e HOME=/tmp latex-tikz
+# $(call TEX,dir) runs a command in the latex-tikz image with dir mounted as the working directory
+TEX = docker run --rm --log-driver none -u "$$(id -u):$$(id -g)" -e HOME=/tmp -v $(1):/w -w /w latex-tikz
 
 all: $(BUILD)/janus
 
@@ -111,10 +112,10 @@ bench-supp:
 figures:
 	docker image inspect latex-tikz > /dev/null 2>&1 || docker build -q -t latex-tikz bench/callers/images/latex-tikz
 	docker image inspect janus-bench/phangorn > /dev/null 2>&1 || docker build -q -t janus-bench/phangorn bench/callers/images/phangorn
-	$(TEX) -v $(CURDIR)/paper/figures/system:/w -w /w sh -c "pdflatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp 20_system.tex > /dev/null && cp /tmp/20_system.pdf /w/" && cp paper/figures/system/20_system.pdf paper/figures/fig_system.pdf
+	$(call TEX,$(CURDIR)/paper/figures/system) sh -c "pdflatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp 20_system.tex > /dev/null && cp /tmp/20_system.pdf /w/" && cp paper/figures/system/20_system.pdf paper/figures/fig_system.pdf
 	$(PY) bench/figures.py > bench/figures.log
 
 paper: figures
-	$(TEX) -v $(CURDIR)/paper:/w -w /w sh -c "pdflatex -interaction=nonstopmode main.tex > /dev/null; bibtex main > /dev/null; pdflatex -interaction=nonstopmode main.tex > /dev/null; pdflatex -interaction=nonstopmode main.tex | grep -E '^!|undefined'"
+	$(call TEX,$(CURDIR)/paper) sh -c "pdflatex -interaction=nonstopmode main.tex > /dev/null; bibtex main > /dev/null; pdflatex -interaction=nonstopmode main.tex > /dev/null; pdflatex -interaction=nonstopmode main.tex | { ! grep -E '^!|undefined'; }"
 
 .PHONY: all run ref datasets simulation bench-setup bench-full bench-competitors bench-consensus bench-coverage bench-simulation bench-runtime bench-supp figures paper
