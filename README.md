@@ -81,4 +81,4 @@ On a simulated patient with 20 tumors at 5× and a 20× normal, one joint run ra
 
 ## License
 
-MIT; see `LICENSE`.
+BSD 3-Clause; see `LICENSE`.
