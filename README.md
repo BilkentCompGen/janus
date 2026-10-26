@@ -78,3 +78,7 @@ On a simulated patient with 20 tumors at 5× and a 20× normal, one joint run ra
 | `paper/` | the manuscript, its figures and tables |
 
 `make datasets`, `make simulation`, `make bench-setup`, `make bench-<step>` and `make figures` reproduce the paper; see the top of the `Makefile`.
+
+## License
+
+MIT; see `LICENSE`.
